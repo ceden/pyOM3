@@ -16,12 +16,21 @@ from   functools                         import partial
 class boundary(decomposition_mpi,decomposition_jax):
 
 
-      def __init__(self,parameter = {},n_pes_x = 1,n_pes_y = 1):  
+      def __init__(self,parameter = {},n_pes_x = 1,n_pes_y = 1, halo_points = 1):  
          """
          Add domain decomposition to initialisation.
          """
-         super().__init__(parameter, n_pes_x, n_pes_y) 
-         self.halo = 1    
+         super().__init__(parameter) 
+          
+         self.halo = halo_points             # number of halo points at each side
+         nx,ny,nz = self.nx,self.ny,self.nz  # from input, nx,ny,nz is shape without halo points 
+         # calculate shape with halo points -> Nx,Ny,Nz
+         if OM.jax:
+             Nx, Ny, Nz = nx + 2*self.halo*n_pes_x, ny + 2*self.halo*n_pes_y, nz + 2*self.halo
+         else: 
+             Nx, Ny, Nz = nx + 2*self.halo, ny + 2*self.halo, nz + 2*self.halo 
+         self.Nx, self.Ny, self.Nz = Nx, Ny, Nz
+ 
          if OM.jax: self.domain_decomposition_jax(n_pes_x,n_pes_y) 
          else:      self.domain_decomposition_mpi(n_pes_x,n_pes_y)
          return
@@ -99,7 +108,7 @@ class boundary(decomposition_mpi,decomposition_jax):
           bc_value = 0
               
           if self.n_pes_y > 1:   
-        
+             
              south = self.my_pe + self.n_pes_x * (self.n_pes_y-1) if self.my_blk_y == 1            else  \
                      self.my_pe - self.n_pes_x  
              north = self.my_pe - self.n_pes_x * (self.n_pes_y-1) if self.my_blk_y == self.n_pes_y else \
@@ -107,16 +116,15 @@ class boundary(decomposition_mpi,decomposition_jax):
         
              buf = OM.np.empty( (self.Nz if len(a.shape)==3 else 1,self.Nx), OM.prec)
             
-             if self.periodic_in_y or self.my_blk_y > 1: 
+             if self.periodic_in_y or self.my_blk_y > 1:                 
                 OM.send(  a[(z,1,slice(None))] ,south, 49)                
-             if self.periodic_in_y or self.my_blk_y < self.n_pes_y:   
+             if self.periodic_in_y or self.my_blk_y < self.n_pes_y:                    
                 a = OM.modify_array(a, (z,-1,slice(None)),  OM.recv(buf,north, 49) )
              else: 
-                a = OM.modify_array(a, (z,-1,slice(None)) , bc_value )
-               
-             if self.periodic_in_y or self.my_blk_y < self.n_pes_y:  
+                a = OM.modify_array(a, (z,-1,slice(None)) , bc_value )               
+             if self.periodic_in_y or self.my_blk_y < self.n_pes_y:                  
                 OM.send( a[(z,-2,slice(None))], north, 153)
-             if self.periodic_in_y or self.my_blk_y > 1:    
+             if self.periodic_in_y or self.my_blk_y > 1:                  
                 a = OM.modify_array(a, (z,0,slice(None)),  OM.recv(buf, south, 153)   ) 
              else:
                 a = OM.modify_array(a, (z,0,slice(None)) , bc_value )

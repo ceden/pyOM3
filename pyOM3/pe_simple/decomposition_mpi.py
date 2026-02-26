@@ -9,7 +9,7 @@
 import pyOM3           as OM
 from   pyOM3.pe_simple import setup
 from   functools       import partial
-import numpy           as np__
+import numpy           as np_
 
 
 class decomposition_mpi(setup):
@@ -37,8 +37,8 @@ class decomposition_mpi(setup):
              self.n_pes_x, self.n_pes_y =  1,1
              return 
         
-          self.my_blk_x = np__.mod(self.my_pe,         n_pes_x)+1      # pe rank in x direction, starts with 0
-          self.my_blk_y = np__.mod(self.my_pe//n_pes_x,n_pes_y)+1      # pe rank in y direction
+          self.my_blk_x = np_.mod(self.my_pe,         n_pes_x)+1      # pe rank in x direction, starts with 1
+          self.my_blk_y = np_.mod(self.my_pe//n_pes_x,n_pes_y)+1      # pe rank in y direction, ends with n_pes_y
         
           for pe in range(1):#self.n_pes):
               if pe == self.my_pe: print('PE#',pe,': my_blk_x = ',self.my_blk_x,' my_blk_y = ',self.my_blk_y)
@@ -46,8 +46,8 @@ class decomposition_mpi(setup):
           nx, ny = self.Nx - 2*self.halo, self.Ny - 2*self.halo  # actual grid points of total domain without boundary cells
           x_blk, y_blk  = (nx-1)//n_pes_x + 1 ,  (ny-1)//n_pes_y + 1 # grid points of each block
           # indices from fortran versions, also useful here
-          xs_pe, xe_pe = (self.my_blk_x-1)*x_blk + self.halo , np__.minimum(self.my_blk_x*x_blk,nx) 
-          ys_pe, ye_pe = (self.my_blk_y-1)*y_blk + self.halo , np__.minimum(self.my_blk_y*y_blk,ny)
+          xs_pe, xe_pe = (self.my_blk_x-1)*x_blk + self.halo , np_.minimum(self.my_blk_x*x_blk,nx) 
+          ys_pe, ye_pe = (self.my_blk_y-1)*y_blk + self.halo , np_.minimum(self.my_blk_y*y_blk,ny)
           x_blk, y_blk = xe_pe-xs_pe+1 , ye_pe-ys_pe+1        #last block might have been truncated    
                         
           for pe in range(1):#self.n_pes):

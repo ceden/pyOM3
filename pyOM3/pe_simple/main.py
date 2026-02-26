@@ -12,11 +12,11 @@ from   functools                 import partial
 class main(boundary):
 
     
-      def __init__(self,parameter = {}, n_pes_x = 1, n_pes_y = 1 ):  
+      def __init__(self,parameter = {}, n_pes_x = 1, n_pes_y = 1, halo_points = 1 ):  
          """
          add some constants and methods to initialisation.
          """
-         super().__init__(parameter, n_pes_x, n_pes_y)
+         super().__init__(parameter, n_pes_x, n_pes_y, halo_points = halo_points)
          self.grav ,  self.rho_0  = 9.81, 1024.     
          self.allocate_workspace()        
          self.set_mean_pressure()
@@ -51,7 +51,9 @@ class main(boundary):
           def zeros_4D(i,Nz,Ny,Nx):
               return OM.np.zeros((i,Nz,Ny,Nx), OM.prec ) 
 
-          Nx,Ny,Nz = self.Nx,self.Ny,self.Nz 
+          Nx, Ny, Nz = self.Nx, self.Ny, self.Nz 
+
+          # allocate model variables with halo points
           self.u , self.du = zeros_3D(Nz,Ny,Nx) , zeros_4D(3,Nz,Ny,Nx)
           self.v , self.dv = zeros_3D(Nz,Ny,Nx) , zeros_4D(3,Nz,Ny,Nx)     
           self.w   = zeros_3D(Nz,Ny,Nx)
@@ -80,15 +82,25 @@ class main(boundary):
           It is assumed that kbot is already defined.
           kbot=k denotes bottom is below k-th model level.
           """
-          # some constrains on input field kbot 
-          self.kbot = self.apply_bc(self.kbot)          
-          if not self.periodic_in_y: 
-              self.kbot = OM.modify_array(self.kbot, (slice( None,self.halo),slice(None)) ,0, out_sharding = self.sharding_2D )       
-              self.kbot = OM.modify_array(self.kbot, (slice(-self.halo,None),slice(None)) ,0, out_sharding = self.sharding_2D )
-          if not self.periodic_in_x: 
-              self.kbot = OM.modify_array(self.kbot, (self(None),slice( None,self.halo)) ,0, out_sharding = self.sharding_2D )
-              self.kbot = OM.modify_array(self.kbot, (self(None),slice(-self.halo,None)) ,0, out_sharding = self.sharding_2D )
-              
+          # close input field kbot at side walls
+          self.kbot = self.apply_bc(self.kbot)    
+          if OM.jax:
+             if not self.periodic_in_y: 
+                self.kbot = OM.modify_array(self.kbot, (slice( None,self.halo),slice(None)) ,0, out_sharding = self.sharding_2D )       
+                self.kbot = OM.modify_array(self.kbot, (slice(-self.halo,None),slice(None)) ,0, out_sharding = self.sharding_2D )
+             if not self.periodic_in_x: 
+                self.kbot = OM.modify_array(self.kbot, (self(None),slice( None,self.halo)) ,0, out_sharding = self.sharding_2D )
+                self.kbot = OM.modify_array(self.kbot, (self(None),slice(-self.halo,None)) ,0, out_sharding = self.sharding_2D )
+          else:
+             if not self.periodic_in_y and self.my_blk_y == 1:
+                self.kbot = OM.modify_array(self.kbot, (slice( None,self.halo),slice(None)) ,0)
+             if not self.periodic_in_y and self.my_blk_y == self.n_pes_y:
+                self.kbot = OM.modify_array(self.kbot, (slice(-self.halo,None),slice(None)) ,0)
+             if not self.periodic_in_x and self.my_blk_x == 1:
+                self.kbot = OM.modify_array(self.kbot, (self(None),slice( None,self.halo)) ,0)
+             if not self.periodic_in_x and self.my_blk_x == self.n_pes_x:    
+                self.kbot = OM.modify_array(self.kbot, (self(None),slice(-self.halo,None)) ,0 )
+                
           # mask on T grid                     
           for k in range(self.halo,self.Nz-self.halo):  
              where =  OM.np.logical_and(self.kbot != 0, self.kbot <= k)

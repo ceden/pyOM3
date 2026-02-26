@@ -40,7 +40,7 @@ class momentum(main):
           dv_ += - maskV*(           coriolis_t    [None,:,:] *           ( u + self.rollx(u,1) ) +
                           self.rolly(coriolis_t,-1)[None,:,:] * self.rolly( u + self.rollx(u,1) ,-1) )*0.25
           
-          p_h = self.hydrostatic_pressure(rho,p_h,maskT)
+          p_h = self.hydrostatic_pressure(rho,p_h,maskT) 
           
           du_ +=  - (self.rollx(p_h,-1) - p_h)/self.dx*maskU
           dv_ +=  - (self.rolly(p_h,-1) - p_h)/self.dy*maskV  

@@ -22,9 +22,10 @@ class pressure(main,solver):
           fpx = OM.np.sum( u*maskU, axis=0 )*self.dz/self.dt 
           fpy = OM.np.sum( v*maskV, axis=0 )*self.dz/self.dt 
           fpx, fpy = self.apply_bc(fpx), self.apply_bc(fpy)
-          fc = ( (fpx - self.rollx(fpx,1))/self.dx + (fpy - self.rolly(fpy,1))/self.dy )*maskT[self.Nz-2,:,:]
+          fc = ( (fpx - self.rollx(fpx,1))/self.dx + (fpy - self.rolly(fpy,1))/self.dy )*maskT[self.Nz-2*self.halo,:,:]
+          
           if self.implicit_free_surface: 
-              fc += - p_s[taum1,:,:]/(self.grav*self.dt**2)*maskT[self.Nz-2,:,:] 
+              fc += - p_s[taum1,:,:]/(self.grav*self.dt**2)*maskT[self.Nz-2*self.halo,:,:] 
           sol =  2*p_s[taum1,:,:] - p_s[taum2,:,:]
 
           #solve for surface pressure, different choices for solver (does not matter much). 
@@ -46,7 +47,7 @@ class pressure(main,solver):
     
       @partial(OM.jaxjit, static_argnums=0)
       def make_coeff_surf_press(self,cf,hu,hv,maskT):
-          maskM = maskT[self.Nz-2,:,:]
+          maskM = maskT[self.Nz-2*self.halo,:,:]
           a = slice(None)
           mp = maskM * self.rollx(maskM,-1) # i+1
           mm = maskM * self.rollx(maskM, 1) 

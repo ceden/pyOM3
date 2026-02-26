@@ -13,7 +13,7 @@ import numpy     as np__
 class setup():
 
     
-      def __init__(self,parameter = {},n_pes_x = 1,n_pes_y = 1):   
+      def __init__(self,parameter = {}):   
          """  
          Add parameter to instance, dictionary parameter contains 
          various model parameters. No checks.
