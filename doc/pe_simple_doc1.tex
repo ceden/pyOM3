@@ -1,1 +1,216 @@
+\documentclass[12pt]{article}
+\usepackage{lineno}
+%\usepackage{ametsoc}
+\usepackage{natbib}
+\usepackage{a4wide}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex,colorlinks, citecolor=black,linkcolor=black,urlcolor=black]{hyperref}
+\definecolor{darkgreen}{rgb}{0.1,0.4,0.1}
+\definecolor{darkblue}{rgb}{0.1,0.1,0.3}
+
+
+
+\newif\ifdetail
+\global\detailfalse
+%\global\detailtrue
+
+\def\bem#1{\colorbox{green}{\em #1}}
+
+\newcommand{\beq}  { \begin{eqnarray} }
+\newcommand{\eeq}  { \end{eqnarray}}
+\newcommand{\beeq}  { \begin{eqnarray*} }
+\newcommand{\eeeq}  { \end{eqnarray*}}
+\newcommand{\eq }  [1]{Eq.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\eqs }  [1]{Eqs.~(\ref{#1})}
+\newcommand{\sect}  [1]{Sec.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\fig}  [1]{Fig.~\ref{#1}}   % Fig. #1
+\renewcommand{\v}[1]{{\mbox{\boldmath$ #1 $}}}  % Vektor durch Fettdruck
+\newcommand{\m}    [1]{{\bf  #1 }}              % Matrix in sans serif
+\newcommand{\gz}[1] {{{d #1} \over {dz}}}
+\newcommand{\pt}[1]{{\partial_t #1}}
+\newcommand{\ptt}[1]{{\partial_{tt} #1}}
+\newcommand{\pttt}[1]{{\partial_{ttt} #1}}
+\newcommand{\pttx}[1]{{{\partial^3 #1} \over {\partial t^2 \partial x}}}
+\newcommand{\ptty}[1]{{{\partial^3 #1} \over {\partial t^2 \partial y}}}
+\newcommand{\ptx}[1]{{{\partial^2 #1} \over {\partial t \partial x}}}
+\newcommand{\pty}[1]{{{\partial^2 #1} \over {\partial t \partial y}}}
+\newcommand{\pz}[1]{{\partial_z #1}}
+\newcommand{\pzz}[1]{{\partial_{zz} #1}}
+\newcommand{\px}[1]{{\partial_x #1}}
+\newcommand{\py}[1]{{\partial_y #1}}
+\newcommand{\pxi}[1]{{\partial_i #1}}
+\newcommand{\pxj}[1]{{\partial_j #1}}
+\newcommand{\pxk}[1]{{\partial_k #1}}
+\newcommand{\pb}[1]{{{\partial #1} \over {\partial b}}}
+%\newcommand{\pxy}[1]{{{\partial^2 #1} \over {\partial x \partial y}}}
+\newcommand{\pxy}[1]{\partial_{xy} #1}
+\newcommand{\pyy}[1]{\partial_{yy} #1}
+\newcommand{\pxx}[1]{\partial_{xx} #1}
+\newcommand{\kx}{{\bf k} \times}
+\newcommand{\dt}[1]{{{d #1} \over {d t}}}
+\newcommand{\Dt}[1]{{{D #1} \over {D t}}}
+\newcommand{\Div}[1]{ \nabla \cdot #1 }
+\renewcommand{\div}[1]{ \nabla_{yz} \cdot #1 }
+\newcommand{\Bar}[1]{ \overline{ #1} }
+\newcommand{\rvec} [1]{
+    \raisebox{-1.5ex}{$\stackrel{\textstyle #1}{\neg}$} }% rotierter Vektor
+\newcommand{\nablq}   {\rvec\nabla}                    % rotated nabla operator
+\newcommand{\Vec}[1]{\left(\begin{array}{c} #1 \end{array}\right) }
+%\renewcommand{\mho}{\mathcal{W}}
+\newcommand{\pn}[1]{{{\partial #1} \over {\partial n}}}
+\newcommand{\pnn}[1]{{{\partial #1} \over {\partial m}}}
+\newcommand{\ps}[1]{{{\partial #1} \over {\partial s}}}
+\newcommand{\p}{{\partial}}
+\newcommand{\vn}{{\v \nabla}}
+\newcommand{\lk}{\left(}
+\newcommand{\rk}{\right)}
+
+\newcommand{\tl}{\tilde}
+
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+
+\newcommand{\ep}{\epsilon}
+
+\begin{document}
+
+ \section*{The simple Primitive equation model}
+
+Consider the Boussinesq equations in hydrostatic approximation
+\beq \label{eq1}
+  \pt{\v u } +   f \rvec{\v u}  +   \vn p =   - \v u \cdot \vn \v u - w \pz{} \v u +  \v F( \v u)~~,~~
+    \pt{b}   =  - \v u \cdot \vn b  - w \pz{} b +  M b
+     \eeq
+  with the diagnostic relations     $\pz p =b$ and $\vn \cdot \v u + \pz w =0$.
+  Vectors are two-dimensional and $\rvec{\v u} $ denotes  anticlockwise
+ rotation by $90^o$. 
+  Pressure is scaled with background density $\rho_0$ and thermodynamics have been
+  simplified to a buoyancy equation.
+  $\v F$  and $M$ are the friction and mixing operators.
+   At the free surface $z=\eta$, we also have the
+      condition 
+      \beq \pt p_s  = -   g \vn \cdot  \int_{-H}^\eta \v u dz 
+       \eeq
+  with $p_s = p|_{z=\eta} =  g \eta$.
+  Alternatively, we use a rigid lid with $w=0$ at $z=0$
+  and $p_s = p|_{z=0}$.
+We split full pressure $p$ into hydrostatic part and surface pressure.
+\beq
+p = p_h(z) + p_s ~,~
+p_h =  \int_{-h}^z b  dz'
+\eeq
+where  $p_s$ is to be determined by the external mode solvers.
+
+
+
+\subsection*{Simple implicit external solver for rigid lid}
+
+Velocity and buoyancy and pressure are all co-located in time in this scheme.
+The buoyancy equation is integrated as
+\beq
+  b^{n+1}- b^n = \Delta t \lk  \Bar{\delta b}^{n+1/2} + M (b^{n})    \rk 
+\eeq
+with the advective buoyancy tendency
+\beq
+\delta b^n =  \vn \cdot \v u^{n} b^n + \p_z w^{n} b^n ~~,~~
+\Bar{ \delta b}^{n+1/2} = A \delta b^n + B \delta b^{n-1} + C \delta b^{n-2}
+ \eeq
+ interpolated with the Adam-Bashforth (AB3) scheme  to time level $n+1/2$.
+ Mixing is treated with an Euler forward step, or maybe implicit in case of vertical mixing.
+ 
+An intermediate velocity $\v u^*$ is calculated from
+\beq
+\v u^* -\v  u^n = \Delta t \lk    \Bar{\delta \v u}^{n+1/2}   + \v F (\v u^{n}) \rk 
+\eeq  
+with the momentum tendency $\delta \v u$ excluding the surface pressure gradient and friction
+\beq
+ \delta \v u^n =  - f \rvec{\v u}^n - \vn  p_h^n  - \v u^n \cdot \vn \v u^n - w^n \pz{} \v u^n 
+\eeq
+These tendencies are extrapolated with AB3  to time level $n+1/2$ 
+\beq
+\Bar{ \delta \v u}^{n+1/2} = A \delta \v u^n + B \delta \v u^{n-1} + C \delta \v u^{n-2}
+\eeq
+Friction is treated with an Euler forward step.
+From the vertically integrated continuity equation follows the condition
+\beq
+\vn \cdot  \int_{-h}^0  \v u^*  =  \Delta t  \vn \cdot h \vn p_s^{n+1}
+\eeq
+which is solved with some iterative method for $p_s^{n+1}$. The intermediate velocity is  then
+corrected as
+\beq
+ \v u^{n+1} = \v u^* - \Delta t \vn p_s^{n+1}
+\eeq
+It is possible to include an implicit free surface in the time stepping.
+Vertical velocity is calculated from continuity
+\beq
+ w^{n+1} = -  \int_{-h}^z \vn \cdot \v u^{n+1}
+\eeq
+This scheme is also used as default in the MITgcm.
+
+\subsection*{Simple split-explicit external mode solver}
+
+
+   
+Velocity is known in this scheme at $t=n+1/2$, while $b$ and $p$ at level $n$.
+The momentum equation is discretised as
+\beq
+\v u^* -\v  u^{n-1/2} = \Delta t \lk - f  \Bar{\rvec{\v u}}^n+   \Bar{\delta \v u}^{n}  - \vn  p_h^n - \vn p_s^n+ \v F (\v u^{n-1/2}) \rk 
+\eeq  
+with the intermediate velocity $\v u^*$ and 
+AB3 extrapolation of Coriolis force and advection terms tendencies
+\beq
+ \Bar{\rvec{\v u}}^n =  A \rvec{\v u}^{n-1/2} + B \rvec{\v u}^{n-3/2} + C \rvec{\v u}^{n-5/2}
+~~,~~ \Bar{ \delta \v u}^{n} = A \delta \v u^{n-1/2} + B \delta \v u^{n-3/2} + C \delta \v u^{n-5/2}
+\eeq
+and
+\beq
+ \delta \v u^{n-1/2} =     - \v u^{n-1/2} \cdot \vn \v u^{n-1/2} - w^{n-1/2} \pz{} \v u^{n-1/2}
+\eeq
+For the hydrostatic and surface pressure $p_h+p_s$ no extrapolation is made, since they are at level $n$ anyways, 
+and friction is treated with Euler forward.
+
+Now the momentum tendencies are vertically integrated but without
+surface pressure and Coriolis contributions.
+\beq
+ \v R^n = \int_{-h}^0  \lk  \Bar{\delta \v u}^{n}  - \vn  p_h^n+ \v F(\v u^{n-1/2}) \rk dz 
+\eeq
+The external mode is integrated with sub-cycling over $m=1, ...M$ from $n$ to $n+1$ with
+a simple, dissipative  scheme proposed by Demange et al (2019) using the forcing $\v R^n$
+\beq
+\v U^{n+(m+1)/M} - \v U^{n+m/M} &=& \Delta t/M \lk - f  \rvec{\Bar{\v U}}^{n+(m+1/2)/M} -  h \vn p_s^{n+m/M} + 
+ \v R^n  \rk
+ \\
+ p_s^{n+(m+1)/M} - p_s^{n+m/M} &=& - g \Delta t/M \lk  (1+\theta)  \vn \cdot \v U^{n+(m+1)/M} 
+ - \theta   \vn \cdot \v U^{n+m/M}
+ \rk
+\eeq
+with the transport $\v U^n = \int_{-h}^0 \v u^n dz$, and $\Bar{\v U}^{n+(m+1/2)/M}$ interpolated
+with AB2.   Demange et al (2019)  found  $\theta=0.14$ to be the best choice in terms of phase error and damping.
+The new external mode is given by
+\beq
+\v U^{n+1}=\frac{1}{M} \sum_{m=1}^{M} \v U^{n+m/M}  + \frac{\theta}{M} \lk  \v U^{n+1} - \v U^n  \rk 
+\eeq
+After the sub-cycling,  the barotropic part of the intermediate velocity is corrected 
+\beq
+  \v u^{n+1/2} = \v u^* -1/h \lk  \int_{-h}^0 \v u^* dz - \v U^{n+1} \rk 
+\eeq
+The buoyancy equation is integrated using $\v u^{n+1/2}$ and $w^{n+1/2} = - \int_{-h}^z \vn \cdot \v u^{n+1/2}$
+as
+\beq
+  b^{n+1}- b^n = \Delta t \lk  \delta b^{n+1/2} + M (b^{n})    \rk 
+\eeq
+with the buoyancy tendency
+\beq
+\delta b^n =  \vn \cdot \v u^{n+1/2} b^n + \p_z w^{n+1/2} b^n
+ \eeq
+ interpolated with AB3 to time level $n+1/2$.
+ This scheme is one option in FESOM2.
+  
+\end{document}
+
 
