@@ -1,5 +1,6 @@
-python Ocean Model 3.0
+python Ocean Model (pyOM3)
 
-Python ocean model with domain decompositon using Jax sharding or MPI.
+Ocean model based on python with domain decompositon using Jax sharding or MPI.
+Based on pyOM2.
 
 Currently only a simple Cartesian Primitive Equation model as proof of concept is supported.
