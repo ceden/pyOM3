@@ -25,13 +25,18 @@ class main(boundary):
     
       def set_mean_pressure(self):
           """
-          set mean pressure or depth levels for equation of state 
-          TODO: p0 needs to be 3D
+          set mean pressure or depth levels for equation of state.
           """
+          @partial(OM.jaxjit)
+          def _move_it(z,a):
+              return OM.modify_array( a , (slice(None),slice(None),slice(None)),z[:,None,None])
+              
           if   self.eq_of_state == 0 or self.eq_of_state == 1:  
              self.p0 = None
           elif self.eq_of_state == 100:
-
+               """
+               ideal gas atmosphere is a bit tricky...
+               """
                zt = OM.np.arange(self.Nz-2*self.halo,dtype=OM.prec)*self.dz -self.dz/2
                zw = zt + self.dz/2
                #zt = zt + zw(2) 
@@ -40,11 +45,10 @@ class main(boundary):
                zw += zw[1]
                for n in range(self.halo):
                  zt = OM.np.append( zt[0]-self.dz,zt )
-                 zt = OM.np.append( zt, zt[-1]+self.dz )
-               self.p0 = OM.modify_array( OM.np.zeros_like(self.u), (slice(None),slice(None),slice(None)),zt[:,None,None])
-               
-               
+                 zt = OM.np.append( zt, zt[-1]+self.dz )                   
+               self.p0 = _move_it(zt, OM.np.zeros_like(self.u) )                              
           else:
+             # not yet implemented 
              raise pyOM3Error 
           return
 

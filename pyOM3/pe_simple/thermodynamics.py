@@ -13,7 +13,7 @@ class thermodynamics(main):
 
    
       @partial(OM.jaxjit, static_argnums=0)
-      def update_thermodynamics_AB3(self,A,B,C,tau,taum1,taum2,temp,salt,dtemp,dsalt,maskT): 
+      def update_thermodynamics_AB3(self,A,B,C,tau,taum1,taum2,temp,salt,dtemp,dsalt,p0,maskT): 
           """
           Update temperature and salinity using their tendencies.
           """      
@@ -22,7 +22,7 @@ class thermodynamics(main):
           if self.eq_of_state > 0 and self.eq_of_state != 100:
              salt += self.dt*(A*dsalt[tau,:,:,:] + B*dsalt[taum1,:,:,:] + C*dsalt[taum2,:,:,:])*maskT 
              salt = self.apply_bc(salt) 
-          rho = get_rho(salt,temp,self.p0,self.eq_of_state)    
+          rho = get_rho(salt,temp,p0,self.eq_of_state)    
           return temp,salt,rho
 
         

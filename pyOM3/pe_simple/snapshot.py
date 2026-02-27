@@ -194,7 +194,7 @@ class snap_raw(model):
              d =  self.snap_file_name + '/pe=%i/n=%i/'%(self.my_pe,n)  
              os.mkdir(d)   
              OM.np.save(d+'t.npy', t) 
-             for var in ('u','v','w','temp','salt','p_s'):                                   
+             for var in ('u','v','w','temp','salt','p_h','p_s'):                                   
                     data = getattr(self,var)
                     if var == 'p_s' and not self.explicit_free_surface: data = self.p_s[tau,:,:] 
                     if hasattr(data,'addressable_shards'):   

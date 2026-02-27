@@ -140,7 +140,8 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
                 self.salt = self.biharmonic_horizontal(self.salt,self.Khbi,self.maskT)   
 
           self.temp, self.salt, self.rho = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
-                                                                         self.temp,self.salt,self.dtemp,self.dsalt,self.maskT)          
+                                                                          self.temp,self.salt,self.dtemp,self.dsalt,
+                                                                          self.p0,self.maskT)          
           return
 
 
@@ -180,8 +181,9 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
                                                                                  tau,taum1,taum2)
           self.w = self.vertical_velocity(self.u,self.v,self.w,self.maskW) 
                          
-          self.temp, self.salt, self.rho = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
-                                                                         self.temp,self.salt,self.dtemp,self.dsalt,self.maskT)
+          self.temp, self.salt,self.rho = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
+                                                                         self.temp,self.salt,self.dtemp,self.dsalt,
+                                                                         self.p0,self.maskT)
           return
 
     
