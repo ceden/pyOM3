@@ -28,8 +28,22 @@ class main(boundary):
           set mean pressure or depth levels for equation of state 
           TODO: p0 needs to be 3D
           """
-          if self.eq_of_state == 0:  
+          if   self.eq_of_state == 0 or self.eq_of_state == 1:  
              self.p0 = None
+          elif self.eq_of_state == 100:
+
+               zt = OM.np.arange(self.Nz-2*self.halo,dtype=OM.prec)*self.dz -self.dz/2
+               zw = zt + self.dz/2
+               #zt = zt + zw(2) 
+               #zw = zw + zw(2)  # p=0 at zw(0) for atmosphere setup which is upside down
+               zt += zw[1]
+               zw += zw[1]
+               for n in range(self.halo):
+                 zt = OM.np.append( zt[0]-self.dz,zt )
+                 zt = OM.np.append( zt, zt[-1]+self.dz )
+               self.p0 = OM.modify_array( OM.np.zeros_like(self.u), (slice(None),slice(None),slice(None)),zt[:,None,None])
+               
+               
           else:
              raise pyOM3Error 
           return
@@ -84,23 +98,18 @@ class main(boundary):
           """
           # close input field kbot at side walls
           self.kbot = self.apply_bc(self.kbot)    
-          if OM.jax:
-             if not self.periodic_in_y: 
-                self.kbot = OM.modify_array(self.kbot, (slice( None,self.halo),slice(None)) ,0, out_sharding = self.sharding_2D )       
+          
+          if not self.periodic_in_y: 
+             if OM.jax or self.my_blk_y == 1:
+                self.kbot = OM.modify_array(self.kbot, (slice( None,self.halo),slice(None)) ,0, out_sharding = self.sharding_2D )  
+             if OM.jax or self.my_blk_y == self.n_pes_y:    
                 self.kbot = OM.modify_array(self.kbot, (slice(-self.halo,None),slice(None)) ,0, out_sharding = self.sharding_2D )
-             if not self.periodic_in_x: 
+          if not self.periodic_in_x: 
+             if OM.jax or self.my_blk_x == 1:
                 self.kbot = OM.modify_array(self.kbot, (self(None),slice( None,self.halo)) ,0, out_sharding = self.sharding_2D )
+             if OM.jax or self.my_blk_x == self.n_pes_x:   
                 self.kbot = OM.modify_array(self.kbot, (self(None),slice(-self.halo,None)) ,0, out_sharding = self.sharding_2D )
-          else:
-             if not self.periodic_in_y and self.my_blk_y == 1:
-                self.kbot = OM.modify_array(self.kbot, (slice( None,self.halo),slice(None)) ,0)
-             if not self.periodic_in_y and self.my_blk_y == self.n_pes_y:
-                self.kbot = OM.modify_array(self.kbot, (slice(-self.halo,None),slice(None)) ,0)
-             if not self.periodic_in_x and self.my_blk_x == 1:
-                self.kbot = OM.modify_array(self.kbot, (self(None),slice( None,self.halo)) ,0)
-             if not self.periodic_in_x and self.my_blk_x == self.n_pes_x:    
-                self.kbot = OM.modify_array(self.kbot, (self(None),slice(-self.halo,None)) ,0 )
-                
+               
           # mask on T grid                     
           for k in range(self.halo,self.Nz-self.halo):  
              where =  OM.np.logical_and(self.kbot != 0, self.kbot <= k)

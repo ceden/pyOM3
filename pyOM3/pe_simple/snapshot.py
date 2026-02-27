@@ -186,8 +186,9 @@ class snap_raw(model):
           if n==0 or np__.mod(n,int(self.snapint/self.dt))==0.: # writing to file
               
              if self.my_pe==0 and not self.show_each_time_step: print_text() 
-             if self.my_pe==0: print(" --> writing to raw output to ",self.snap_file_name)  
-             if hasattr(self,'congr_itts'):  print(" total itts in solver ",self.tot_congr_itts)
+             if self.my_pe==0: 
+                  print(" --> writing to raw output to ",self.snap_file_name)  
+                  if hasattr(self,'congr_itts'):  print(" total itts in solver ",self.tot_congr_itts)
              self.tot_congr_itts = 0
               
              d =  self.snap_file_name + '/pe=%i/n=%i/'%(self.my_pe,n)  
