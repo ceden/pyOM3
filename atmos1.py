@@ -55,7 +55,8 @@ class jax_model(snap_nc4): # inheret here from snap_raw instead for raw output
           z_full = jnp.arange(nz,dtype=jnp.float64)*dz +dz/2
 
           self.u , self.v, self.temp = self.unpad(self.u), self.unpad(self.v), self.unpad(self.temp)
-          for shard in self.u.addressable_shards:                                                              
+          uz = jnp.zeros_like(self.u)
+          for shard in self.u.addressable_shards:    
               s = shard.index
               z,y,x = z_full[s[0]]  , y_full[s[1]] , x_full[s[2]]                  
               Z,Y,X = jnp.meshgrid(z,y,x, indexing='ij')
@@ -72,30 +73,31 @@ class jax_model(snap_nc4): # inheret here from snap_raw instead for raw output
               N2 = jnp.where( Z<fxb, N_strato**2, N_tropo**2)
               theta = jnp.zeros_like(u)  
 
-              theta = OM.modify_array(theta, (-1,slice(None),slice(None)) , 300, out_sharding = self.sharding_3D )
+              theta = OM.modify_array(theta, (-1,slice(None),slice(None)) , 300)
               for k in range(nz-2,-1,-1):
                 exner = cp*(Z[k+1,:,:]/p_C)**kappa # Exner function 
                 _add = theta[k+1,:,:] +  N2[k,:,:]*kappa*exner*theta[k+1,:,:]**2/Z[k+1,:,:]/self.grav**2*self.dz
-                theta = OM.modify_array(theta, (k,slice(None),slice(None)) , _add , out_sharding = self.sharding_3D) 
-              
-              uz = (self.rollz(u,-1)-self.rollz(u,1))/(2*dz)
-              uz = OM.modify_array( uz,  (-1,slice(None),slice(None)) , (u[-1,:,:]-u[-2,:,:])/dz, out_sharding = self.sharding_3D )
-              uz = OM.modify_array( uz,  ( 0,slice(None),slice(None)) , (u[ 1,:,:]-u[ 0,:,:])/dz, out_sharding = self.sharding_3D)
-                
-              fxa = f0*Z**(1.-kappa)/(kappa*cp/p_C**kappa)  
-
-              @self.shard_map_arr_3D
-              def _sumit(a):  return jnp.cumsum(a,axis=1)
+                theta = OM.modify_array(theta, (k,slice(None),slice(None)) , _add ) 
                   
-              Ty = _sumit(uz*dy*fxa)
-              theta +=  Ty  + 0.05*jnp.cos(jnp.pi*Z/p_C) * jnp.sin(2*2*jnp.pi*X/Lx)
+              theta +=  0.05*jnp.cos(jnp.pi*Z/p_C) * jnp.sin(2*2*jnp.pi*X/Lx)
               
+              _uz = jnp.zeros_like(u)  
+              _uz = OM.modify_array( _uz,  (slice(1,-1),slice(None),slice(None)) , (u[2:,:,:]-u[:-2,:,:])/(2*dz) )
+              _uz = OM.modify_array( _uz,  (-1,slice(None),slice(None))          , (u[-1,:,:]-u[-2,:,:])/dz )
+              _uz = OM.modify_array( _uz,  ( 0,slice(None),slice(None))          , (u[ 1,:,:]-u[ 0,:,:])/dz)
+              fxa = f0*Z**(1.-kappa)/(kappa*cp/p_C**kappa) 
+              _uz = _uz*dy*fxa 
+                            
               v = jnp.zeros_like(u)  
                             
               self.u = OM.modify_array(self.u, s, u, out_sharding = self.sharding_3D)    
               self.v = OM.modify_array(self.v, s, v, out_sharding = self.sharding_3D)
               self.temp = OM.modify_array(self.temp, s, theta, out_sharding = self.sharding_3D)     
+              uz = OM.modify_array(uz, s, _uz, out_sharding = self.sharding_3D)   
+
               
+          self.temp += jnp.cumsum(uz,axis=1)
+          
           self.u , self.v, self.temp = self.pad(self.u), self.pad(self.v), self.pad(self.temp)    
           self.u, self.v  = self.apply_bc(  self.u) , self.apply_bc(  self.v)
           self.w    = self.vertical_velocity(self.u,self.v,self.w,self.maskW) 
