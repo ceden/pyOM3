@@ -12,11 +12,11 @@ from   functools                 import partial
 class main(boundary):
 
     
-      def __init__(self,parameter = {}, n_pes_x = 1, n_pes_y = 1, halo_points = 1 ):  
+      def __init__(self,parameter = {}, n_pes_x = 1, n_pes_y = 1, halo_points = 1, comm_in = None ):  
          """
          add some constants and methods to initialisation.
          """
-         super().__init__(parameter, n_pes_x, n_pes_y, halo_points = halo_points)
+         super().__init__(parameter, n_pes_x, n_pes_y, halo_points = halo_points, comm_in = comm_in)
          self.grav ,  self.rho_0  = 9.81, 1024.     
          self.allocate_workspace()        
          self.set_mean_pressure()
@@ -105,14 +105,18 @@ class main(boundary):
           
           if not self.periodic_in_y: 
              if OM.jax or self.my_blk_y == 1:
-                self.kbot = OM.modify_array(self.kbot, (slice( None,self.halo),slice(None)) ,0, out_sharding = self.sharding_2D )  
+                self.kbot = OM.modify_array(self.kbot, (slice( None,self.halo),slice(None)) ,0, 
+                                            out_sharding = self.sharding_2D )  
              if OM.jax or self.my_blk_y == self.n_pes_y:    
-                self.kbot = OM.modify_array(self.kbot, (slice(-self.halo,None),slice(None)) ,0, out_sharding = self.sharding_2D )
+                self.kbot = OM.modify_array(self.kbot, (slice(-self.halo,None),slice(None)) ,0, 
+                                            out_sharding = self.sharding_2D )
           if not self.periodic_in_x: 
              if OM.jax or self.my_blk_x == 1:
-                self.kbot = OM.modify_array(self.kbot, (self(None),slice( None,self.halo)) ,0, out_sharding = self.sharding_2D )
+                self.kbot = OM.modify_array(self.kbot, (slice(None),slice( None,self.halo)) ,0, 
+                                            out_sharding = self.sharding_2D )
              if OM.jax or self.my_blk_x == self.n_pes_x:   
-                self.kbot = OM.modify_array(self.kbot, (self(None),slice(-self.halo,None)) ,0, out_sharding = self.sharding_2D )
+                self.kbot = OM.modify_array(self.kbot, (slice(None),slice(-self.halo,None)) ,0, 
+                                            out_sharding = self.sharding_2D )
                
           # mask on T grid                     
           for k in range(self.halo,self.Nz-self.halo):  
@@ -131,7 +135,8 @@ class main(boundary):
 
           # open free surface in maskW
           if self.implicit_free_surface or self.explicit_free_surface:
-              self.maskW = OM.modify_array(self.maskW,(-self.halo-1,slice(None),slice(None)),self.maskW[-self.halo-2,:,:])
+              self.maskW = OM.modify_array(self.maskW,(-self.halo-1,slice(None),slice(None)),
+                                           self.maskW[-self.halo-2,:,:])
               
           # total depth for pressure solver
           self.hu = OM.np.sum(self.maskU[self.halo:-self.halo,:,:]*self.dz,axis=0)

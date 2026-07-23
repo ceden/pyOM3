@@ -16,10 +16,11 @@ def modify_array(arr, where, value, out_sharding = None):
         if out_sharding_present_in_set and out_sharding:
                 return arr.at[where].set(value  , out_sharding = out_sharding  )
         else:   return arr.at[where].set(value) 
-    res = arr.copy()
-    res[where] = value
-    return res
-
+    #res = arr.copy() # do not do that
+    #res[where] = value
+    #return res
+    arr[where] = value
+    return arr
 
 def add_to_array(arr, where, value, out_sharding = None):
     """
@@ -30,10 +31,11 @@ def add_to_array(arr, where, value, out_sharding = None):
            return arr.at[where].add(value , out_sharding = out_sharding  ) 
         else:    
            return arr.at[where].add(value  )
-    res = arr.copy()
-    res[where] += value
-    return res
-
+    #res = arr.copy() # do not do that
+    #res[where] += value
+    #return res
+    arr[where] += value
+    return arr
 
 def jaxjit(fun: callable, *args, **kwargs) -> callable: 
     """ 
@@ -173,13 +175,16 @@ else:
 
 
 if jax:  
-   n_procs, n_devs, devs, my_proc = jax.process_count() , jax.device_count(), jax.devices(), jax.process_index()
+   n_procs, n_devs, devs, my_proc = jax.process_count() , \
+                 jax.device_count(), jax.devices(), jax.process_index()
    if my_proc == 0: 
       print('found ',n_procs,' processes and ',n_devs,' devices ')
       print('Device list :',devs)
         
-   if out_sharding_present_in_set and my_proc == 0: print("found keyword out_sharding in .at[].set())")
-   elif my_proc == 0:                               print("found no keyword out_sharding in .at[].set())") 
+   if out_sharding_present_in_set and my_proc == 0: 
+        print("found keyword out_sharding in .at[].set())")
+   elif my_proc == 0:                               
+        print("found no keyword out_sharding in .at[].set())") 
             
 else:
    n_procs, n_devs, devs, my_proc = 1, 1, None, 0 

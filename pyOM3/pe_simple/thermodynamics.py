@@ -82,9 +82,9 @@ class thermodynamics(main):
           fn = - (v * (self.rolly(var,-1) + var) * 0.5 - OM.np.abs(v) * ((1.0 - cr) + uCFL * cr) * rj * 0.5)*maskV
           
           uCFL = OM.np.abs(w * self.dt / self.dz)          
-          rj  = self.apply_bc( (self.rollz(var,-1)-var)*maskW )
+          rj  = (self.rollz(var,-1)-var)*maskW 
           rjm = self.rollz(rj, 1) 
-          rjp = self.rollz(rj,-1)                     
+          rjp = self.rollz(rj,-1)                   
           cr = _limiter( OM.np.where(w > 0.0, rjm, rjp) / OM.np.where(OM.np.abs(rj) < eps, eps, rj)  )          
           ft = - (w * (self.rollz(var,-1) + var) * 0.5 - OM.np.abs(w) * ((1.0 - cr) + uCFL * cr) * rj * 0.5)*maskW
               

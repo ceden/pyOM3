@@ -11,12 +11,13 @@ from   pyOM3.pe_simple.pressure       import pressure
 from   pyOM3.pe_simple.free_surface   import free_surface
 
 from   pyOM3.pe_simple.damping        import damping
+from   pyOM3.pe_simple.implicit_vmix  import implicit_vmix
 from   pyOM3.density                  import get_rho
 import numpy                          as np__
 from   functools                      import partial
 
 
-class model(thermodynamics,momentum,pressure,free_surface,damping):
+class model(thermodynamics,momentum,pressure,free_surface,damping,implicit_vmix):
 
       
       def set_coriolis(self,f0):
@@ -24,7 +25,8 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
           Set Coriolis frequency on T grid.
           Overload this method with different choices
           """
-          self.coriolis_t = OM.modify_array(self.coriolis_t,(slice(None),slice(None)), f0, out_sharding = self.sharding_2D )
+          self.coriolis_t = OM.modify_array(self.coriolis_t,(slice(None),slice(None)), 
+                                            f0, out_sharding = self.sharding_2D )
           return
 
       
@@ -33,7 +35,8 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
           Set topography. kbot=k denotes bottom is below k-th model level.
           Overload this method with different choices.
           """
-          self.kbot = OM.modify_array(self.kbot,(slice(None),slice(None)), self.halo , out_sharding = self.sharding_2D  )           
+          self.kbot = OM.modify_array(self.kbot,(slice(None),slice(None)), self.halo , 
+                                      out_sharding = self.sharding_2D  )           
           return
 
 
@@ -62,12 +65,12 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
           self.salt = self.apply_bc( self.pad(  OM.jax.device_put( _salt , self.sharding_3D)  ) )#*self.maskT
           self.rho  = get_rho(self.salt,self.temp,self.p0,self.eq_of_state)
           if self.implicit_free_surface:
-             p_s = self.pad(  OM.jax.device_put( _p_s , self.sharding_2D)  ) #*self.maskT[-self.halo-1,:,:]   
+             p_s = self.pad(  OM.jax.device_put( _p_s , self.sharding_2D)  )  
              self.p_s   = OM.modify_array(self.p_s ,(0,slice(None),slice(None)), self.apply_bc(p_s)  )   
              self.p_s   = OM.modify_array(self.p_s ,(1,slice(None),slice(None)), self.p_s[0,:,:])
              self.p_s   = OM.modify_array(self.p_s ,(2,slice(None),slice(None)), self.p_s[0,:,:]) 
           if self.explicit_free_surface:   
-             self.p_s = self.apply_bc( self.pad(  OM.jax.device_put( _p_s , self.sharding_2D)  )  ) #*self.maskT[-self.halo-1,:,:]   
+             self.p_s = self.apply_bc( self.pad(  OM.jax.device_put( _p_s , self.sharding_2D)  )  )
           return 
 
     
@@ -89,19 +92,20 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
           self.rho  = get_rho(self.salt,self.temp,self.p0,self.eq_of_state)
           ex = (slice(self.ys_pe-1,self.ye_pe),slice(self.xs_pe-1,self.xe_pe))          
           if self.implicit_free_surface:
-             self.p_s   = OM.modify_array(self.p_s ,(0,b,b), _p_s[ex])    #*self.maskT[-self.halo-1,:,:] 
+             self.p_s   = OM.modify_array(self.p_s ,(0,b,b), _p_s[ex])   
              self.p_s   = OM.modify_array(self.p_s ,(0,a,a), self.apply_bc( self.p_s[0,:,:])  )  
              self.p_s   = OM.modify_array(self.p_s ,(1,a,a), self.p_s[0,:,:])
              self.p_s   = OM.modify_array(self.p_s ,(2,a,a), self.p_s[0,:,:])
           if self.explicit_free_surface:
-             self.p_s   = self.apply_bc(  OM.modify_array(self.p_s ,(b,b), _p_s[ex])   )   #*self.maskT[-self.halo-1,:,:]             
+             self.p_s   = self.apply_bc(  OM.modify_array(self.p_s ,(b,b), _p_s[ex])   )  
           return
     
     
-      def prepare_for_run(self):
+      def prepare_for_run(self):          
           """
           Call everything which is needed for the main time stepping loop
           """
+          self.check_vmix_stability()   # explicit-scheme coefficient guard
           self.make_topo_masks()
           self.cf = self.make_coeff_surf_press(self.cf,self.hu,self.hv,self.maskT)
           return
@@ -112,12 +116,16 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
           A single time step for the split-explicit method after Demange et al (2019).
           Chosen with self.explicit_free_surface = True
           """
-          self.du, self.dv,self.du_cor,self.dv_cor,self.p_h = self.momentum_tendency_expl(self.u,self.v,self.w,
-                                                                                          self.du,self.dv,self.du_cor,self.dv_cor,
-                                                                                          self.rho,
-                                                                                          self.maskU,self.maskV,self.maskW,self.maskT,
-                                                                                          self.coriolis_t,tau)
+          if getattr(self,'enable_tke',False): self.set_tke_diffusivities()
+          self.du, self.dv,self.du_cor,self.dv_cor,self.p_h = \
+                         self.momentum_tendency_expl(self.u,self.v,self.w, self.du,self.dv,
+                                                     self.du_cor,self.dv_cor,self.rho, 
+                                                     self.maskU,self.maskV,self.maskW,self.maskT,
+                                                     self.coriolis_t,tau)
           
+          # allow for user defined momentum forcing, added to du[tau],dv[tau]
+          if hasattr(self,'set_forcing'): self.set_forcing(tau)
+
           self.u, self.v,  self.p_s = self.solve_expl_surface(self.u,self.v,
                                                               self.du,self.dv,self.du_cor,self.dv_cor,
                                                               self.p_h,self.p_s,
@@ -132,6 +140,7 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
 
           if hasattr(self,'Khbi'):  
              self.temp = self.biharmonic_horizontal(self.temp,self.Khbi,self.maskT)
+
              
           if self.eq_of_state > 0 and self.eq_of_state != 100:
              self.dsalt = self.tracer_advection(self.salt,self.dsalt,self.u,self.v,self.w,
@@ -139,9 +148,17 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
              if hasattr(self,'Khbi'):  
                 self.salt = self.biharmonic_horizontal(self.salt,self.Khbi,self.maskT)   
 
+
           self.temp, self.salt, self.rho = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
                                                                           self.temp,self.salt,self.dtemp,self.dsalt,
                                                                           self.p0,self.maskT)          
+
+          # optional implicit vertical diffusion + convective adjustment (new level)
+          self.vertical_friction()        # on the updated velocities; under
+                                          # TKE also diagnoses K_diss_v
+          self.vertical_mixing()          # option hierarchy (see implicit_vmix.py)
+          if getattr(self,'enable_tke',False): self.integrate_tke()
+          self.rho = get_rho(self.salt,self.temp,self.p0,self.eq_of_state)
           return
 
 
@@ -150,6 +167,7 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
           """
           A single time step for the rigid lid or implicit free surface method.
           """
+          if getattr(self,'enable_tke',False): self.set_tke_diffusivities()
           
           self.dtemp = self.tracer_advection(self.temp,self.dtemp,self.u,self.v,self.w,
                                              self.maskU,self.maskV,self.maskW,self.maskT,tau)  
@@ -162,28 +180,48 @@ class model(thermodynamics,momentum,pressure,free_surface,damping):
                                                 self.maskU,self.maskV,self.maskW,self.maskT,tau) 
              # background advection only if temperature is buoyancy, then there is no salt 
              if hasattr(self,'Khbi'):  
-                self.salt = self.biharmonic_horizontal(self.salt,self.Khbi,self.maskT)   
+                self.salt = self.biharmonic_horizontal(self.salt,self.Khbi,self.maskT)
               
           self.du, self.dv, self.p_h = self.momentum_tendency_impl(self.u,self.v,self.w,
                                                                    self.du,self.dv,self.rho,self.p_h,
                                                                    self.maskU,self.maskV,self.maskW,self.maskT,
                                                                    self.coriolis_t,tau)               
+
+          # allow for user defined momentum forcing, added to du[tau],dv[tau]
+          if hasattr(self,'set_forcing'): self.set_forcing(tau)
+
           if hasattr(self,'Ahbi'):  
                        self.u = self.biharmonic_horizontal(self.u,self.Ahbi,self.maskU)
                        self.v = self.biharmonic_horizontal(self.v,self.Ahbi,self.maskV)          
              
           self.u, self.v = self.update_momentum_AB3(A,B,C,tau,taum1,taum2,
                                                     self.u,self.v,self.du,self.dv,self.maskU,self.maskV)
-                                         
-          self.u, self.v, self.p_s, \
-               self.estimated_error, self.congr_itts  =  self.solve_for_pressure(self.u,self.v,self.p_s,
-                                                                                 self.maskU,self.maskV,self.maskT,self.cf,
-                                                                                 tau,taum1,taum2)
+
+          # user-defined DIRECT momentum increment, bypassing the AB weights:
+          # e.g. u_L += Delta u_S of the Lagrangian-mean (u_L) formulation,
+          # which must be a plain forward increment (AB weighting would break
+          # the exact telescoping u = u_L - u_S) and must PRECEDE the pressure
+          # solve so the projection acts on its divergence.
+          if hasattr(self,'set_forcing_direct'): self.set_forcing_direct()
+
+          self.u, self.v, self.p_s, self.estimated_error, self.congr_itts  = \
+                             self.solve_for_pressure(self.u,self.v,self.p_s,
+                                                     self.maskU,self.maskV,self.maskT,self.cf,tau,taum1,taum2)
+          # vertical friction (option hierarchy: explicit / implicit / TKE);
+          # column-integrated momentum is unchanged (zero-flux BCs), so the
+          # barotropic mode of the pressure solve is not perturbed; the
+          # baroclinic w is re-diagnosed below.
+          self.vertical_friction()
           self.w = self.vertical_velocity(self.u,self.v,self.w,self.maskW) 
                          
           self.temp, self.salt,self.rho = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
                                                                          self.temp,self.salt,self.dtemp,self.dsalt,
                                                                          self.p0,self.maskT)
+
+          # optional implicit vertical diffusion + convective adjustment (new level)
+          self.vertical_mixing()          # option hierarchy (see implicit_vmix.py)
+          if getattr(self,'enable_tke',False): self.integrate_tke()
+          self.rho = get_rho(self.salt,self.temp,self.p0,self.eq_of_state)
           return
 
     

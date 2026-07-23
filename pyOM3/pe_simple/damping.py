@@ -42,3 +42,14 @@ class damping(main):
  
           return ( (fe-self.rollx(fe,1))/self.dx + (fn-self.rolly(fn,1))/self.dy  )*mask
 
+
+      @partial(OM.jaxjit, static_argnums=0)    
+      def harmonic_vertical_expl(self,p1,mixC,mask):          
+          ft = mixC*(self.rollz(p1,-1)-p1)/self.dz*self.rollz(mask,-1)*mask 
+          return p1 + self.dt* (ft-self.rollz(ft,1))/self.dz *mask
+
+      @partial(OM.jaxjit, static_argnums=0)    
+      def harmonic_vertical_expl_tendency(self,p1,mixC,mask):          
+          ft = mixC*(self.rollz(p1,-1)-p1)/self.dz*self.rollz(mask,-1)*mask 
+          return (ft-self.rollz(ft,1))/self.dz *mask
+

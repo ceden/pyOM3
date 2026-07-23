@@ -239,13 +239,13 @@ class solver():
       @partial(OM.jaxjit, static_argnums=(0,))
       def _max(self,p):
           a = OM.np.abs( self.unpad(p) )
-          return OM.global_max( OM.np.amax(a) ) if OM.mpi else OM.np.max(a)           
+          return self.global_max( OM.np.amax(a) ) if OM.mpi else OM.np.max(a)           
 
     
       @partial(OM.jaxjit, static_argnums=(0,))
       def _dot(self,p1,p2): 
           a = self.unpad(p1*p2)
-          return OM.global_sum( OM.np.sum(a) ) if OM.mpi else OM.np.sum(a)           
+          return self.global_sum( OM.np.sum(a) ) if OM.mpi else OM.np.sum(a)           
 
     
       @partial(OM.jaxjit, static_argnums=(0,))     

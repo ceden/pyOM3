@@ -10,19 +10,29 @@ import pyOM3           as OM
 from   pyOM3.pe_simple import setup
 from   functools       import partial
 import numpy           as np_
+try:    from mpi4py import MPI
+except ImportError: MPI = None
 
 
 class decomposition_mpi(setup):
 
     
-      def domain_decomposition_mpi(self,n_pes_x,n_pes_y):
+      def domain_decomposition_mpi(self,n_pes_x,n_pes_y,comm_in = None):
           """
            Horizontal domain decomposition with MPI.
            Input is number of processors in x,y: n_pes_x,n_pes_y.
            Defines what's needed to deal with MPI.
           """
           
-          self.my_pe , self.n_pes = OM.my_pe, OM.n_pes
+          # redirect to a local communicator if given (e.g. wave/ocean split),
+          # otherwise fall back to COMM_WORLD. Everything below and in boundary.py
+          # /snapshot.py/solver.py routes through self.comm rather than the module-
+          # level OM.* helpers, which are hardwired to COMM_WORLD.
+          self.comm  = (MPI.COMM_WORLD if MPI is not None else None) if comm_in is None else comm_in
+          if self.comm is not None:
+             self.my_pe , self.n_pes = self.comm.Get_rank(), self.comm.Get_size()
+          else:
+             self.my_pe , self.n_pes = OM.my_pe, OM.n_pes
           # null space
           self.mesh = None
           self.grid_2D, self.grid_3D, self.grid_4D = None , None, None
@@ -34,16 +44,17 @@ class decomposition_mpi(setup):
 
           if self.n_pes == 1:
              self.xs_pe, self.xe_pe, self.ys_pe, self.ye_pe  =  1, self.Nx, 1, self.Ny
-             self.n_pes_x, self.n_pes_y =  1,1
-             return 
-        
+             self.n_pes_x, self.n_pes_y   =  1, 1
+             self.my_blk_x, self.my_blk_y =  1, 1 
+             return
+          
           self.my_blk_x = np_.mod(self.my_pe,         n_pes_x)+1      # pe rank in x direction, starts with 1
           self.my_blk_y = np_.mod(self.my_pe//n_pes_x,n_pes_y)+1      # pe rank in y direction, ends with n_pes_y
         
           for pe in range(1):#self.n_pes):
               if pe == self.my_pe: print('PE#',pe,': my_blk_x = ',self.my_blk_x,' my_blk_y = ',self.my_blk_y)
                 
-          nx, ny = self.Nx - 2*self.halo, self.Ny - 2*self.halo  # actual grid points of total domain without boundary cells
+          nx, ny = self.Nx - 2*self.halo, self.Ny - 2*self.halo  # actual grid points of total domain without b. cells
           x_blk, y_blk  = (nx-1)//n_pes_x + 1 ,  (ny-1)//n_pes_y + 1 # grid points of each block
           # indices from fortran versions, also useful here
           xs_pe, xe_pe = (self.my_blk_x-1)*x_blk + self.halo , np_.minimum(self.my_blk_x*x_blk,nx) 
@@ -77,10 +88,43 @@ class decomposition_mpi(setup):
           nx,ny = self.Nx-2*self.halo,self.Ny-2*self.halo
           buf = OM.np.empty( (1,), OM.prec)
           for pe in range( 1, self.n_pes_x ):        
-              if self.my_pe == pe:             OM.send( OM.np.array(self.Nx-2*self.halo,OM.prec),  0 , 49)
-              if self.my_pe == 0 :   nx += int(  OM.recv(buf,  pe, 49)[0] )     
+              if self.my_pe == pe:             self.send( OM.np.array(self.Nx-2*self.halo,OM.prec),  0 , 49)
+              if self.my_pe == 0 :   nx += int(  self.recv(buf,  pe, 49)[0] )     
           for pe in range( self.n_pes_x , self.n_pes_y * self.n_pes_x , self.n_pes_x ):        
-              if self.my_pe == pe:             OM.send( OM.np.array(self.Ny-2*self.halo,OM.prec) , 0   , 49 )
-              if self.my_pe == 0 :   ny += int( OM.recv( buf, pe,  49 )[0] )     
-          return  OM.pe0_bcast(nx), OM.pe0_bcast(ny)       
-             
+              if self.my_pe == pe:             self.send( OM.np.array(self.Ny-2*self.halo,OM.prec) , 0   , 49 )
+              if self.my_pe == 0 :   ny += int( self.recv( buf, pe,  49 )[0] )     
+          return  self.pe0_bcast(nx), self.pe0_bcast(ny)
+
+      # ------------------------------------------------------------------
+      # communicator-aware MPI helpers (route through self.comm so the model
+      # works on a local/split communicator, mirroring wim and nh_simple).
+      # ------------------------------------------------------------------
+      def send(self, buf, dest, tag):
+          if self.comm is not None:
+             self.comm.Send( OM.np.ascontiguousarray(buf), dest = dest, tag = tag )
+
+      def recv(self, buf, source, tag):
+          if self.comm is not None:
+             self.comm.Recv( buf, source = source, tag = tag )
+          return buf
+
+      def mpi_barrier(self):
+          if self.comm is not None:  self.comm.Barrier()
+
+      def pe0_bcast(self, x):
+          if self.comm is not None:  return self.comm.bcast(x, root = 0)
+          return x
+
+      def global_sum(self, x):
+          if self.comm is not None:
+             buf = OM.np.empty_like(x)
+             self.comm.Allreduce( OM.np.ascontiguousarray(x), buf, op = MPI.SUM )
+             return buf
+          return x
+
+      def global_max(self, x):
+          if self.comm is not None:
+             buf = OM.np.empty_like(x)
+             self.comm.Allreduce( OM.np.ascontiguousarray(x), buf, op = MPI.MAX )
+             return buf
+          return x

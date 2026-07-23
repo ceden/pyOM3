@@ -1,0 +1,7 @@
+
+compile with 
+
+mpif90 -DFFTW -fallow-argument-mismatch -c fft_spec.F90 fft_init.F90 fft_exec.F90 module.F90
+ar rcs libp3dfft.a fft_spec.o module.o fft_init.o fft_exec.o
+
+

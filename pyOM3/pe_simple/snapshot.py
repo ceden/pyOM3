@@ -93,7 +93,7 @@ class snap_nc4(model):
 
           if write: 
              
-             OM.mpi_barrier()  
+             self.mpi_barrier()  
              if self.my_pe == 0:
                 fid = NF(self.snap_file_name,mode='r+')
                 m = len(fid.dimensions['time'])
@@ -101,11 +101,11 @@ class snap_nc4(model):
                 fid.close() 
              else: m=0
                  
-             m = OM.pe0_bcast(m)   
+             m = self.pe0_bcast(m)   
                            
              for pe in range(self.n_pes): 
                  
-                 OM.mpi_barrier()  
+                 self.mpi_barrier()  
                  
                  if self.my_pe == pe:
                     fid = NF(self.snap_file_name,mode='r+')
@@ -118,7 +118,7 @@ class snap_nc4(model):
                     fid.variables['temp'][(m,slice(None), slice(self.ys_pe-1,self.ye_pe), 
                                                           slice(self.xs_pe-1,self.xe_pe))] = self.unpad(self.temp) 
                     if self.eq_of_state > 0 and self.eq_of_state != 100:  
-                       fid.variables['temp'][(m,slice(None), slice(self.ys_pe-1,self.ye_pe), 
+                       fid.variables['salt'][(m,slice(None), slice(self.ys_pe-1,self.ye_pe), 
                                                              slice(self.xs_pe-1,self.xe_pe))] = self.unpad(self.salt) 
                     fid.variables['p_h'][(m,slice(None), slice(self.ys_pe-1,self.ye_pe), 
                                                           slice(self.xs_pe-1,self.xe_pe))] = self.unpad(self.p_h) 

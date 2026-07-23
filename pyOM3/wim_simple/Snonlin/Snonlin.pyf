@@ -1,0 +1,18 @@
+python module Snonlin
+  interface
+    subroutine setup(nx_in, ny_in, kl_in, ml_in, fr_in)
+      integer, intent(in) :: nx_in, ny_in, kl_in
+      integer, intent(hide), depend(fr_in) :: ml_in = shape(fr_in, 0)
+      real(8), intent(in) :: fr_in(ml_in)
+    end subroutine setup
+    subroutine source(f, sl, fl, n1, n2, n3, n4)
+      integer, intent(hide), depend(f) :: n1 = shape(f,0)
+      integer, intent(hide), depend(f) :: n2 = shape(f,1)
+      integer, intent(hide), depend(f) :: n3 = shape(f,2)
+      integer, intent(hide), depend(f) :: n4 = shape(f,3)
+      real(8), intent(in)  :: f(n1,n2,n3,n4)
+      real(8), intent(out) :: sl(n1,n2,n3,n4)
+      real(8), intent(out) :: fl(n1,n2,n3,n4)
+    end subroutine source
+  end interface
+end python module Snonlin

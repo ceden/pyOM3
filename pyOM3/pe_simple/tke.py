@@ -1,0 +1,321 @@
+"""
+TKE closure (Gaspar et al. 1990) for pe_simple, ported from pyOM2
+for_src/tke/tke.f90 (Eden 2016, Ocean Modelling 101).
+
+Prognostic turbulent kinetic energy tke on the W grid (top faces, like
+kappaH in implicit_vmix.py; pe_simple orientation k=halo bottom .. -halo-1
+surface face). Uniform dz simplifies pyOM2's dzt/dzw bookkeeping; the only
+non-uniform element kept is the HALF-THICK surface W cell (0.5*dz), exactly
+as in tke.f90.
+
+Provides (mixin class `tke`, add to the model class bases like the other
+pe_simple components):
+  init_tke()                allocate fields, set constants
+  set_tke_diffusivities()   sqrttke, mixing length (tke_mxl_choice=2),
+                            kappaM/kappaH with Ri-dependent Prandtl number,
+                            convective kappaH=1 where N^2<0
+  integrate_tke()           implicit TKE step: shear production K_diss_v,
+                            buoyancy destruction P_diss_v, linearised
+                            dissipation, vertical diffusion alpha_tke*kappaM,
+                            surface flux BC (phi_oc from the wave model or
+                            the classical (|tau|)^{3/2}), negative-surface-
+                            TKE correction
+  implicit_vfric()          backward-Euler vertical friction with kappaM
+                            (removes the explicit A_v stability ceiling) and
+                            the energetically consistent K_diss_v diagnosis
+
+Intended call order per ocean time step (WP3 wiring):
+    self.set_tke_diffusivities()
+    self.implicit_vfric()          # friction with kappaM, diagnoses K_diss_v
+                                   # (u_L models: set mix_eulerian=True to mix
+                                   #  u_bar = u_L - u_S per paper Sec. 5)
+    self.integrate_tke()           # TKE step using K_diss_v, P_diss_v
+    # tracer vmix then uses self.kappaH_tke instead of convective_kappa
+
+Energetic consistency: K_diss_v is diagnosed from the SAME discrete operator
+that removes momentum (flux x shear of the updated velocities, Eden 2016
+Appendix A), and P_diss_v = kappaH*N^2 is the exact transfer of the implicit
+tracer mixing, so the TKE budget closes against the mean-flow budgets.
+"""
+from functools import partial
+import pyOM3 as OM
+
+
+class tke:
+
+    # ------------------------------------------------------------------
+    def init_tke(self):
+        """Allocate TKE fields and set the closure constants (pyOM2 values)."""
+        # all constants are configuration-settable (set the attribute before
+        # init_tke); defaults are the pyOM2 tke_module defaults. NOTE: pyOM2
+        # configurations of the acc family set alpha_tke = 30.0 (TKE
+        # pressure-work transport) and mxl_min = 1e-8; the module default
+        # alpha_tke = 1.0 confines TKE much closer to the surface.
+        self.c_k        = getattr(self, 'c_k',        0.1)
+        self.c_eps      = getattr(self, 'c_eps',      0.7)
+        self.alpha_tke  = getattr(self, 'alpha_tke',  1.0)
+        self.mxl_min    = getattr(self, 'mxl_min',    1e-12)
+        self.kappaM_min = getattr(self, 'kappaM_min', 1e-5)   # background visc.
+        self.kappaM_max = getattr(self, 'kappaM_max', 100.0)
+        self.kappaH_min = getattr(self, 'kappaH_min', 1e-5)   # background diff.
+        self.tke_min    = getattr(self, 'tke_min',    1e-12)
+        # wave-scale surface mixing length (Mellor & Blumberg 2004 type):
+        # the downward distance-limiting sweep is seeded with z0_surf + dz
+        # instead of mxl_min + dz, so the near-surface mixing length starts
+        # at O(beta*Hs) rather than O(dz). Set z0_surf (scalar or (Ny,Nx),
+        # e.g. 1.6*Hs from the wave model, updated every coupling step) when
+        # injecting Craig-Banner-scale surface TKE fluxes; default 0 keeps
+        # the original pyOM2 behaviour. Note the pyOM2 choice-2 sweeps grow
+        # the length 1:1 with distance (no von Karman factor), so beta
+        # absorbs kappa_vk.
+        self.z0_surf    = getattr(self, 'z0_surf',    0.0)
+        # surface TKE flux source: wave dissipation (phi_oc) or (|tau|)^{3/2}
+        self.tke_surf_from_waves = getattr(self, 'tke_surf_from_waves', True)
+
+        z = OM.np.zeros((self.Nz, self.Ny, self.Nx), OM.prec)
+        self.tke        = z + self.tke_min * self.maskW
+        self.kappaM_tke = z + self.kappaM_min
+        self.kappaH_tke = z + self.kappaH_min
+        self.K_diss_v   = z * 1.0
+        self.P_diss_v   = z * 1.0
+        self.tke_diss   = z * 1.0
+        self.forc_tke_surface = OM.np.zeros((self.Ny, self.Nx), OM.prec)
+        self.tke_surf_corr    = OM.np.zeros((self.Ny, self.Nx), OM.prec)
+        return
+
+    # ------------------------------------------------------------------
+    @partial(OM.jaxjit, static_argnums=0)
+    def _mxl_choice2(self, sqrttke, nsqr):
+        """Mixing length, tke_mxl_choice=2 of tke.f90: mxl = sqrt(2*tke/N^2),
+        then limited so it cannot grow faster than the distance to the
+        boundaries (downward and upward sweeps), floored at mxl_min."""
+        h, Nz, dz = self.halo, self.Nz, self.dz
+        mxl = OM.np.sqrt(2.0) * sqrttke \
+              / OM.np.sqrt(OM.np.maximum(1e-12, nsqr)) * self.maskW
+
+        # downward sweep (from below the surface face): mxl[k] <= mxl[k+1]+dz
+        ke = Nz - h - 1                                   # surface W face
+        mxl = OM.modify_array(mxl, (ke, slice(None), slice(None)),
+                              OM.np.minimum(mxl[ke],
+                                            self.mxl_min + self.z0_surf + dz))
+        def _dn(i, m):
+            k = ke - 1 - i                                # ke-1 .. h
+            return OM.modify_array(m, (k, slice(None), slice(None)),
+                                   OM.np.minimum(m[k], m[k + 1] + dz))
+        mxl = OM.for_loop(0, ke - h, _dn, mxl)
+
+        # upward sweep: mxl[k] <= mxl[k-1]+dz
+        def _up(k, m):
+            return OM.modify_array(m, (k, slice(None), slice(None)),
+                                   OM.np.minimum(m[k], m[k - 1] + dz))
+        mxl = OM.for_loop(h + 1, ke + 1, _up, mxl)
+
+        return OM.np.maximum(mxl, self.mxl_min)
+
+    # ------------------------------------------------------------------
+    def set_tke_diffusivities(self):
+        """kappaM = min(kappaM_max, c_k*mxl*sqrt(tke)), kappaH = kappaM/Pr(Ri),
+        convective kappaH = 1 where N^2 < 0 (replaces convective_kappa)."""
+        sqrttke = OM.np.sqrt(OM.np.maximum(0.0, self.tke))
+        nsqr    = self.calc_nsqr(self.temp, self.salt, self.rho, self.maskW)
+        mxl     = self._mxl_choice2(sqrttke, nsqr)
+
+        kappaM = OM.np.minimum(self.kappaM_max, self.c_k * mxl * sqrttke)
+        Ri     = nsqr / OM.np.maximum(1e-12,
+                    self.K_diss_v / OM.np.maximum(1e-12, kappaM))
+        Pr     = OM.np.maximum(1.0, OM.np.minimum(10.0, 6.6 * Ri))
+        kappaH = kappaM / Pr
+        kappaM = OM.np.maximum(self.kappaM_min, kappaM)
+        kappaH = OM.np.maximum(self.kappaH_min, kappaH)
+        # convective adjustment as in tke.f90: kappaH = 1 where unstable
+        kappaH = OM.np.where(nsqr < 0.0, OM.np.maximum(kappaH, 1.0), kappaH)
+        # no diffusive flux through the surface face (cf. convective_kappa)
+        ks = -self.halo - 1
+        kappaH = OM.modify_array(kappaH, (ks, slice(None), slice(None)),
+                                 OM.np.zeros_like(kappaH[ks]))
+        self.kappaM_tke = kappaM * self.maskW
+        self.kappaH_tke = kappaH * self.maskW
+        self.mxl, self.sqrttke, self.Nsqr = mxl, sqrttke, nsqr
+        return
+
+    # ------------------------------------------------------------------
+    def implicit_vfric(self):
+        """Backward-Euler vertical friction with viscosity kappaM: removes
+        the explicit A_v stability limit. Follows pyOM2
+        vertical_friction.f90 (implicit_vert_friction) and the discrete
+        dissipation identity of the pyOM2 documentation:
+          - kappaM is averaged T->U (T->V) before building the friction
+            operator (pyOM2: fxa = 0.5*(kappaM(i,j,k)+kappaM(i+1,j,k))),
+          - K_diss_v is flux x shear of the UPDATED (taup1) velocities at
+            the W faces, horizontally averaged U/V -> T,
+        so the mean-flow KE the operator removes reappears in the TKE
+        forcing without discretisation residual.
+
+        u_L formulation (attribute mix_eulerian + u_S present): the
+        operator acts on the EULERIAN velocity u_bar = u_L - u_S (paper
+        Sec. 5: the closure parameterises Eulerian u'u'), and the booking
+        becomes flux x LAGRANGIAN shear, split into K_diss_E (Eulerian
+        shear production, >= 0) and K_diss_L (Stokes/Langmuir production,
+        sign-indefinite); K_diss_v = K_diss_E + K_diss_L."""
+        kmu = 0.5 * (self.kappaM_tke + self.rollx(self.kappaM_tke, -1))  # T->U
+        kmv = 0.5 * (self.kappaM_tke + self.rolly(self.kappaM_tke, -1))  # T->V
+        # NO momentum flux through the surface face: pe_simple's maskW is 1
+        # there, so without this the implicit solve couples the top cell to
+        # the zero-velocity z-halo above -- a phantom no-slip lid with drag
+        # rate kappaM_surf/dz^2 (25x worse at dz=10 than dz=50). The wind
+        # stress enters as an explicit surface flux in the driver instead.
+        # This also removes the spurious K_diss shear production against
+        # that ghost. (kappaH is zeroed the same way in
+        # set_tke_diffusivities.)
+        ks = -self.halo - 1
+        kmu = OM.modify_array(kmu, (ks, slice(None), slice(None)),
+                              OM.np.zeros_like(kmu[ks]))
+        kmv = OM.modify_array(kmv, (ks, slice(None), slice(None)),
+                              OM.np.zeros_like(kmv[ks]))
+        # --- mix the EULERIAN mean velocity (paper Sec. 5) ----------------
+        # The down-gradient closure parameterises u'u' with EULERIAN
+        # fluctuations, so the friction term is dz(c_u K dz u_bar), NOT
+        # dz(c_u K dz u_L): mixing u_L would spuriously diffuse the Stokes
+        # shear. With mix_eulerian set and u_S present (u_L formulation),
+        # subtract u_S (piecewise constant over the step) before the
+        # implicit solve and add it back after -- this treats exactly
+        # dz K dz u_bar backward-Euler, applied as an increment to u_L.
+        if getattr(self, 'mix_eulerian', False) and hasattr(self, 'u_S'):
+            uS_U = 0.5 * (self.u_S + self.rollx(self.u_S, -1)) * self.maskU
+            vS_V = 0.5 * (self.v_S + self.rolly(self.v_S, -1)) * self.maskV
+        else:
+            uS_U = vS_V = None
+        ue = self.u if uS_U is None else self.u - uS_U
+        ve = self.v if vS_V is None else self.v - vS_V
+        ue_new = self.implicit_vdiff(ue, kmu, self.maskU)
+        ve_new = self.implicit_vdiff(ve, kmv, self.maskV)
+        u_new = ue_new if uS_U is None else ue_new + uS_U
+        v_new = ve_new if vS_V is None else ve_new + vS_V
+        dz = self.dz
+        # --- energetically consistent K_diss_v (paper Eqs. 21/22) ---------
+        # flux is K dz(u_bar_new); the KE it removes is against the MODEL
+        # velocity u_L, so the booking is flux x LAGRANGIAN shear:
+        #   K dz(u_bar) . dz(u_L) = P_E + P_L,
+        #   P_E = K |dz u_bar|^2 >= 0        (Eulerian shear production)
+        #   P_L = K dz(u_bar).dz(u_S)        (Stokes/Langmuir production,
+        #                                     sign-indefinite)
+        # kept separately in K_diss_E / K_diss_L for the TKE budget
+        # diagnostics; K_diss_v = P_E + P_L feeds integrate_tke unchanged.
+        # Without mix_eulerian this reduces bit-identically to the old
+        # booking (P_L = 0, dz u_bar = dz u_model).
+        shu = (self.rollz(ue_new, -1) - ue_new) / dz       # Eulerian du/dz at W
+        shv = (self.rollz(ve_new, -1) - ve_new) / dz
+        pu  = kmu * shu * shu * self.maskW                 # flux x Eul. shear
+        pv  = kmv * shv * shv * self.maskW
+        KdE = 0.5 * (pu + self.rollx(pu, 1)) + 0.5 * (pv + self.rolly(pv, 1))
+        self.K_diss_E = self.apply_bc(KdE * self.maskW)
+        if uS_U is not None:
+            ssu = (self.rollz(uS_U, -1) - uS_U) / dz       # Stokes shear at W
+            ssv = (self.rollz(vS_V, -1) - vS_V) / dz
+            pu  = kmu * shu * ssu * self.maskW             # flux x Stokes shear
+            pv  = kmv * shv * ssv * self.maskW
+            KdL = 0.5 * (pu + self.rollx(pu, 1)) + 0.5 * (pv + self.rolly(pv, 1))
+            self.K_diss_L = self.apply_bc(KdL * self.maskW)
+        else:
+            self.K_diss_L = OM.np.zeros_like(self.K_diss_E)
+        self.K_diss_v = self.K_diss_E + self.K_diss_L
+        self.u, self.v = u_new, v_new
+        return
+
+    # ------------------------------------------------------------------
+    def _surface_forcing(self):
+        """Surface TKE flux [m^3/s^3]: wave dissipation flux phi_oc from wim
+        (WP2), or the classical (|tau|)^{3/2} (tau kinematic)."""
+        if self.tke_surf_from_waves and hasattr(self, 'phi_oc'):
+            return OM.np.maximum(0.0, self.phi_oc)
+        if hasattr(self, 'taux'):
+            return OM.np.hypot(self.taux, self.tauy) ** 1.5
+        return self.forc_tke_surface * 0.0
+
+    # ------------------------------------------------------------------
+    @partial(OM.jaxjit, static_argnums=0)
+    def _tke_solve(self, tke, forc, forc_surf, sqrttke, mxl, kappaM):
+        """One backward-Euler TKE step: general Thomas solve, coefficients
+        exactly as tke.f90 (uniform dz; surface W cell 0.5*dz thick)."""
+        h, Nz, dz, dt = self.halo, self.Nz, self.dz, self.dt
+        ke = Nz - h - 1                                    # surface W face
+
+        # TKE diffusivity on the faces BETWEEN W cells (T levels):
+        # delta[k] couples W cells k and k+1  (tke.f90: 0.5*(kappaM_k+kappaM_k+1))
+        delta = dt / dz * self.alpha_tke * 0.5 * (kappaM + self.rollz(kappaM, -1))
+        delta = OM.modify_array(delta, (ke, slice(None), slice(None)),
+                                OM.np.zeros_like(delta[ke]))
+
+        diss = dt * self.c_eps * sqrttke / mxl             # linearised sink
+        a = -self.rollz(delta, 1) / dz                     # couples k, k-1
+        c = -delta / dz                                    # couples k, k+1
+        b = 1.0 + delta / dz + self.rollz(delta, 1) / dz + diss
+        # surface W cell: half thickness 0.5*dz (tke.f90 ke rows)
+        a = OM.modify_array(a, (ke, slice(None), slice(None)),
+                            -self.rollz(delta, 1)[ke] / (0.5 * dz))
+        b = OM.modify_array(b, (ke, slice(None), slice(None)),
+                            1.0 + self.rollz(delta, 1)[ke] / (0.5 * dz) + diss[ke])
+        d = tke + dt * forc
+        d = OM.modify_array(d, (ke, slice(None), slice(None)),
+                            d[ke] + dt * forc_surf / (0.5 * dz))
+
+        m = self.maskW
+        a = a * m
+        c = c * m
+        b = OM.np.where(m > 0.0, b, 1.0)
+
+        # Thomas along axis 0 (same structure as implicit_vdiff)
+        cp = OM.np.zeros_like(tke)
+        dp = OM.np.zeros_like(tke)
+        cp = OM.modify_array(cp, (h, slice(None), slice(None)), c[h] / b[h])
+        dp = OM.modify_array(dp, (h, slice(None), slice(None)), d[h] / b[h])
+        def _fwd(k, st):
+            cp, dp = st
+            mm = b[k] - a[k] * cp[k - 1]
+            cp = OM.modify_array(cp, (k, slice(None), slice(None)), c[k] / mm)
+            dp = OM.modify_array(dp, (k, slice(None), slice(None)),
+                                 (d[k] - a[k] * dp[k - 1]) / mm)
+            return (cp, dp)
+        cp, dp = OM.for_loop(h + 1, Nz - h, _fwd, (cp, dp))
+        out = tke * 1.0
+        out = OM.modify_array(out, (Nz - h - 1, slice(None), slice(None)),
+                              dp[Nz - h - 1])
+        def _bwd(i, o):
+            k = Nz - h - 2 - i
+            return OM.modify_array(o, (k, slice(None), slice(None)),
+                                   dp[k] - cp[k] * o[k + 1])
+        out = OM.for_loop(0, (Nz - 2 * h) - 1, _bwd, out)
+        return out * m + tke * (1.0 - m)
+
+    # ------------------------------------------------------------------
+    def integrate_tke(self):
+        """TKE step: forc = K_diss_v - P_diss_v, implicit dissipation and
+        diffusion, surface flux BC, negative-surface-TKE correction."""
+        # buoyancy destruction: exact transfer of the implicit tracer mixing.
+        # N^2 must be evaluated from the UPDATED buoyancy (the tracer solve
+        # runs before this in the time step): backward-Euler diffusion does
+        # its PE work against the relaxing gradients, and the exact discrete
+        # transfer is kappaH * N^2(b^{n+1}) -- the same taup1 rule as K_diss_v.
+        # Using the pre-mixing N^2 overdrains the TKE whenever
+        # kappaH*dt/dz^2 is not small (alpha_tke=30 regimes).
+        nsqr_new = self.calc_nsqr(self.temp, self.salt, self.rho, self.maskW)
+        self.P_diss_v = self.kappaH_tke * nsqr_new * self.maskW
+        forc = self.K_diss_v - self.P_diss_v
+        self.forc_tke_surface = self._surface_forcing()
+
+        tke_new = self._tke_solve(self.tke, forc, self.forc_tke_surface,
+                                  self.sqrttke, self.mxl, self.kappaM_tke)
+
+        # dissipation diagnostic (with the UPDATED tke, as in tke.f90)
+        self.tke_diss = self.c_eps / self.mxl * self.sqrttke * tke_new * self.maskW
+
+        # surface correction: if the surface cell went negative (strong
+        # buoyancy drain), add the missing TKE and book it (tke.f90)
+        ke = -self.halo - 1
+        neg = OM.np.minimum(tke_new[ke], 0.0)
+        self.tke_surf_corr = -neg * (0.5 * self.dz) / self.dt
+        tke_new = OM.modify_array(tke_new, (ke, slice(None), slice(None)),
+                                  OM.np.maximum(tke_new[ke], 0.0))
+
+        self.tke = self.apply_bc(OM.np.maximum(tke_new, self.tke_min * self.maskW))
+        return

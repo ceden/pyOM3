@@ -1,0 +1,9 @@
+__pycache__/
+.ipynb_checkpoints/
+._*
+*.so
+*.o
+*.mod
+*.nc
+*.cdf
+*.zarr/

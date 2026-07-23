@@ -6,7 +6,8 @@
 """
 import pyOM3                     as OM
 from   pyOM3.pe_simple.model     import model
-import numpy                     as np__
+from   pyOM3.density             import get_rho
+import numpy                     as np_
 from   functools                 import partial
 
 
@@ -14,11 +15,10 @@ class opt_balance(model):
 
     
       def balance_it(self,OB_period,OB_average,OB_average_times,OB_max_itts=10,OB_tol=1e-5,
-                     exchange_base_point = True):
+                     exchange_base_point = True, remove_mean_u = False):
           """
           Entry function for Optimal Balance diagnostics. 
-          Only works with buoyancy as tracer and pressure method for external mode
-          and with background stratification (parameter N0 in initialisations).
+          Only works with buoyancy as tracer and pressure method for external mode.
 
           Uses the model state as input and the following parameter:
           
@@ -50,17 +50,18 @@ class opt_balance(model):
 
           # remove horizontal mean of temperature
           self.temp, self.temp_back = self.OB_remove_mean_temp(self.temp,self.maskT)
+          if remove_mean_u: self.u, self.u_back = self.OB_remove_mean_u(self.u,self.maskU)
           
           # store model state
           state = (self.u*1,self.v*1,self.w*1,self.rho*1,self.temp*1,self.p_s[0,:,:]*1 )
 
           if exchange_base_point:    
             # save base point by time averaging in linear model
-            print(' to save base point, integrating linear model for ',
+            if self.my_pe == 0 : print(' to save base point, integrating linear model for ',
                   n_end_ave*OB_average_times,' timesteps in ',OB_average_times,' chunks')
          
             for m in range(OB_average_times):              
-                print(' chunk ',m)
+                if self.my_pe == 0 : print(' chunk ',m)
                 mean = self.OB_time_ave(n_end_ave)              
                 self.u, self.v, self.w, self.rho, self.temp, p = mean
                 self.p_s = self.move_p_s(self.p_s,p)              
@@ -75,22 +76,23 @@ class opt_balance(model):
           # Start optimal balance iteration
           for n in range(OB_max_itts):
  
-              print(' starting optimal balance iteration:',n)
+              if self.my_pe == 0 : print(' starting optimal balance iteration:',n)
 
               # integrate backward to the linear end
-              print(' integrating backward to linear end for ',n_end_ramp,' timesteps ')
+              if self.my_pe == 0 : print(' integrating backward to linear end for ',n_end_ramp,' timesteps ')
               self.OB_backward_integration(n_end_ramp)
     
               # project on geostrophic mode at linear end
-              print(' integrating linear model for ',n_end_ave*OB_average_times,' timesteps in ',OB_average_times,' chunks')             
+              if self.my_pe == 0 : print(' integrating linear model for ',
+                                         n_end_ave*OB_average_times,' timesteps in ',OB_average_times,' chunks')             
               for m in range(OB_average_times):
-                  print(' chunk ',m)
+                  if self.my_pe == 0 : print(' chunk ',m)
                   mean = self.OB_time_ave(n_end_ave)
                   self.u, self.v, self.w, self.rho, self.temp, p = mean
                   self.p_s = self.move_p_s(self.p_s,p)                  
                  
               # integrate forward to the non linear end
-              print(' integrating forward to non-linear end for ',n_end_ramp,' timesteps ')
+              if self.my_pe == 0 : print(' integrating forward to non-linear end for ',n_end_ramp,' timesteps ')
               self.OB_forward_integration(n_end_ramp)
 
               if exchange_base_point: 
@@ -98,15 +100,16 @@ class opt_balance(model):
                 save = (self.u*1,self.v*1,self.w*1,self.rho*1,self.temp*1,self.p_s[0,:,:]*1 )
               
                 # apply boundary condition at non linear end
-                print(' integrating linear model for ',n_end_ave*OB_average_times,' timesteps in ',OB_average_times,' chunks')
+                if self.my_pe == 0 : print(' integrating linear model for ',
+                                           n_end_ave*OB_average_times,' timesteps in ',OB_average_times,' chunks')
                 for m in range(OB_average_times):
-                    print(' chunk ',m)
+                    if self.my_pe == 0 : print(' chunk ',m)
                     mean = self.OB_time_ave(n_end_ave)
                     self.u, self.v, self.w, self.rho, self.temp, p = mean
                     self.p_s = self.move_p_s(self.p_s,p)                  
 
                 # exchange base point
-                print('exchanging base point')
+                if self.my_pe == 0 : print('exchanging base point')
                 u_save, v_save, w_save, rho_save, temp_save, p_save = save
                 u_base, v_base, w_base, rho_base, temp_base, p_base = base
                 self.u    = u_save    - self.u    + u_base
@@ -121,15 +124,17 @@ class opt_balance(model):
 
               # update reference state
               state = (self.u*1,self.v*1,self.w*1,self.rho*1,self.temp*1,self.p_s[0,:,:]*1 )
-    
+                            
               # Check tolerance criterion
               if n > 0:
-                 print(' norm of difference to n= ',n - 1,' is ', norm_diff,' / ',OB_tol)
+                 if self.my_pe == 0 : print(' norm of difference to n= ',n - 1,' is ', norm_diff,' / ',OB_tol)
                  if norm_diff < OB_tol: break 
                      
           # add horizontal mean to temperature
           self.temp = self.OB_add_mean_temp(self.temp,self.temp_back)
-           
+          self.rho  = get_rho(self.salt,self.temp,self.p0,self.eq_of_state)
+          self.p_h = self.hydrostatic_pressure(self.rho,self.p_h,self.maskT)  
+          if remove_mean_u: self.u = self.OB_add_mean_u(self.u,self.u_back)
           return
 
           
@@ -153,8 +158,8 @@ class opt_balance(model):
           self.dt = -OM.np.abs(self.dt)
           for n in range(_steps): # time step equations 
               OB_rho = 1. - ramp(n * self.dt /self.OB_period)
-              self.OB_time_step(OB_rho,A,B,C,tau,taum1,taum2,0.,use_2nd_advection = True)  
-              tau, taum1, taum2   = np__.mod(tau+1,3), np__.mod(taum1+1,3), np__.mod(taum2+1,3)          
+              self.OB_time_step(OB_rho,A,B,C,tau,taum1,taum2,0.,0.,0.,use_2nd_advection = True)  
+              tau, taum1, taum2   = np_.mod(tau+1,3), np_.mod(taum1+1,3), np_.mod(taum2+1,3)          
               if A == 1. and B == 0. and C == 0:    A, B, C = 1.5,  -0.5, 0. 
               elif A==1.5 and B == -0.5 and C == 0: A, B, C =  23./12. , -16./12., 5./12.          
           return
@@ -168,11 +173,16 @@ class opt_balance(model):
           A,B,C = 1.,0.,0.           # will become Adam-Bashforth coefficients below
           tau, taum1, taum2 = 2,1,0  # pointers to time levels
           self.dt = +OM.np.abs(self.dt)
+          
+          Ahbi_loc = 0 if not hasattr(self,'Ahbi') else self.Ahbi
+          Khbi_loc = 0 if not hasattr(self,'Khbi') else self.Khbi
+          kappa_T_loc = 0 if not hasattr(self,'kappa_T') else self.kappa_T
+          
           for n in range(_steps): # time step equations                
               OB_rho = ramp(n * self.dt / self.OB_period) 
               if ramp_reversed: OB_rho = 1 - OB_rho
-              self.OB_time_step(OB_rho,A,B,C,tau,taum1,taum2,self.Ahbi,use_2nd_advection = False)    
-              tau, taum1, taum2   = np__.mod(tau+1,3), np__.mod(taum1+1,3), np__.mod(taum2+1,3)          
+              self.OB_time_step(OB_rho,A,B,C,tau,taum1,taum2,Ahbi_loc,Khbi_loc,kappa_T_loc,use_2nd_advection = False)    
+              tau, taum1, taum2   = np_.mod(tau+1,3), np_.mod(taum1+1,3), np_.mod(taum2+1,3)          
               if A == 1. and B == 0. and C == 0:    A, B, C = 1.5,  -0.5, 0. 
               elif A==1.5 and B == -0.5 and C == 0: A, B, C =  23./12. , -16./12., 5./12.          
           return
@@ -194,20 +204,24 @@ class opt_balance(model):
           A,B,C = 1.,0.,0.           # will become Adam-Bashforth coefficients below
           tau, taum1, taum2 = 2,1,0  # pointers to time levels 
           self.dt = +OM.np.abs(self.dt)
+          Ahbi_loc = 0 if not hasattr(self,'Ahbi') else self.Ahbi
+          Khbi_loc = 0 if not hasattr(self,'Khbi') else self.Khbi
+          kappa_T_loc = 0 if not hasattr(self,'kappa_T') else self.kappa_T
+          
           u_m,v_m,w_m = OM.np.zeros_like(self.u),OM.np.zeros_like(self.v),OM.np.zeros_like(self.w)
           rho_m,temp_m, p_sm = OM.np.zeros_like(self.rho), OM.np.zeros_like(self.temp), OM.np.zeros_like(self.p_s[0,:,:])          
           for n in range(_steps):
-              self.OB_time_step(0.,A,B,C,tau,taum1,taum2,self.Ahbi,use_2nd_advection = False)  
+              self.OB_time_step(0.,A,B,C,tau,taum1,taum2,Ahbi_loc,Khbi_loc,kappa_T_loc,use_2nd_advection = False)  
               u_m, v_m, w_m, rho_m, temp_m, p_sm = _add(self.u,self.v,self.w,
                                                         self.rho,self.temp,self.p_s[tau,:,:],
                                                         u_m,v_m,w_m,rho_m,temp_m,p_sm)
-              tau, taum1, taum2   = np__.mod(tau+1,3), np__.mod(taum1+1,3), np__.mod(taum2+1,3)          
+              tau, taum1, taum2   = np_.mod(tau+1,3), np_.mod(taum1+1,3), np_.mod(taum2+1,3)          
               if A == 1. and B == 0. and C == 0:    A, B, C = 1.5,  -0.5, 0. 
               elif A==1.5 and B == -0.5 and C == 0: A, B, C =  23./12. , -16./12., 5./12.
           return _divide(u_m,v_m,w_m,rho_m,temp_m,p_sm,_steps) 
     
           
-      def OB_time_step(self,OB_rho,A,B,C,tau,taum1,taum2,Ahbi_loc,use_2nd_advection = False):
+      def OB_time_step(self,OB_rho,A,B,C,tau,taum1,taum2,Ahbi_loc,Khbi_loc,kappa_T_loc,use_2nd_advection = False):
           """
           Perform one time step given OB_rho scaling non-linear terms and viscosity Ahbi_loc. 
           """
@@ -225,7 +239,13 @@ class opt_balance(model):
             else:    
               self.dtemp = self.OB_tracer_advection_2nd(self.temp,self.dtemp,self.u,self.v,self.w,
                                                   self.maskU,self.maskV,self.maskW,self.maskT,tau,OB_rho)  
-                    
+
+          if Khbi_loc>0: 
+             self.temp = self.biharmonic_horizontal(self.temp,Khbi_loc,self.maskT)
+          if kappa_T_loc>0: 
+             self.temp = self.harmonic_vertical_expl(self.temp,kappa_T_loc,self.maskT) ## problem wih temp_back here
+
+          
           self.du, self.dv, self.p_h = self.OB_momentum_linear(self.u,self.v,self.du,self.dv,
                                                                self.maskU,self.maskV,self.maskT,
                                                                self.rho,self.coriolis_t,tau)
@@ -261,11 +281,24 @@ class opt_balance(model):
           temp -= temp_back
           return temp,temp_back
 
-    
+      @partial(OM.jaxjit, static_argnums=0)    
+      def OB_remove_mean_u(self,u,maskU):
+          _u = OM.np.sum( OM.np.sum(u*maskU,axis=0),axis=-1) 
+          _m = OM.np.sum( OM.np.sum(maskU,axis=0),axis=-1) 
+          _u = OM.np.where( _m>0, _u/(1e-32+_m), 0)
+          u_back = OM.np.zeros_like(u) + _u[None,:,None]
+          u -= u_back
+          return u,u_back
+
+        
       @partial(OM.jaxjit, static_argnums=0)    
       def OB_add_mean_temp(self,temp,temp_back):
           return temp+temp_back
 
+      @partial(OM.jaxjit, static_argnums=0)    
+      def OB_add_mean_u(self,u,u_back):
+          return u+u_back
+    
     
       @partial(OM.jaxjit, static_argnums=0)    
       def OB_tracer_linear_2nd(self,Var,dvar,u,v,w,maskU,maskV,maskW,maskT,tau):  
