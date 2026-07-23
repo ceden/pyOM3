@@ -1,0 +1,523 @@
+\documentclass[12pt]{article}
+\usepackage{lineno}
+%\usepackage{ametsoc}
+\usepackage{natbib}
+\usepackage{a4wide}
+\usepackage{longtable}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex,colorlinks, citecolor=black,linkcolor=black,urlcolor=black]{hyperref}
+\definecolor{darkgreen}{rgb}{0.1,0.4,0.1}
+\definecolor{darkblue}{rgb}{0.1,0.1,0.3}
+
+
+
+\newif\ifdetail
+\global\detailfalse
+%\global\detailtrue
+
+\def\bem#1{\colorbox{green}{\em #1}}
+
+\newcommand{\beq}  { \begin{eqnarray} }
+\newcommand{\eeq}  { \end{eqnarray}}
+\newcommand{\beeq}  { \begin{eqnarray*} }
+\newcommand{\eeeq}  { \end{eqnarray*}}
+\newcommand{\eq }  [1]{Eq.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\eqs }  [1]{Eqs.~(\ref{#1})}
+\newcommand{\sect}  [1]{Sec.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\fig}  [1]{Fig.~\ref{#1}}   % Fig. #1
+\renewcommand{\v}[1]{{\mbox{\boldmath$ #1 $}}}  % Vektor durch Fettdruck
+\newcommand{\m}    [1]{{\bf  #1 }}              % Matrix in sans serif
+\newcommand{\gz}[1] {{{d #1} \over {dz}}}
+\newcommand{\pt}[1]{{\partial_t #1}}
+\newcommand{\ptt}[1]{{\partial_{tt} #1}}
+\newcommand{\pttt}[1]{{\partial_{ttt} #1}}
+\newcommand{\pttx}[1]{{{\partial^3 #1} \over {\partial t^2 \partial x}}}
+\newcommand{\ptty}[1]{{{\partial^3 #1} \over {\partial t^2 \partial y}}}
+\newcommand{\ptx}[1]{{{\partial^2 #1} \over {\partial t \partial x}}}
+\newcommand{\pty}[1]{{{\partial^2 #1} \over {\partial t \partial y}}}
+\newcommand{\pz}[1]{{\partial_z #1}}
+\newcommand{\pzz}[1]{{\partial_{zz} #1}}
+\newcommand{\px}[1]{{\partial_x #1}}
+\newcommand{\py}[1]{{\partial_y #1}}
+\newcommand{\pxi}[1]{{\partial_i #1}}
+\newcommand{\pxj}[1]{{\partial_j #1}}
+\newcommand{\pxk}[1]{{\partial_k #1}}
+\newcommand{\pb}[1]{{{\partial #1} \over {\partial b}}}
+%\newcommand{\pxy}[1]{{{\partial^2 #1} \over {\partial x \partial y}}}
+\newcommand{\pxy}[1]{\partial_{xy} #1}
+\newcommand{\pyy}[1]{\partial_{yy} #1}
+\newcommand{\pxx}[1]{\partial_{xx} #1}
+\newcommand{\kx}{{\bf k} \times}
+\newcommand{\dt}[1]{{{d #1} \over {d t}}}
+\newcommand{\Dt}[1]{{{D #1} \over {D t}}}
+\newcommand{\Div}[1]{ \nabla \cdot #1 }
+\renewcommand{\div}[1]{ \nabla_{yz} \cdot #1 }
+\newcommand{\Bar}[1]{ \overline{ #1} }
+\newcommand{\rvec} [1]{
+    \raisebox{-1.5ex}{$\stackrel{\textstyle #1}{\neg}$} }% rotierter Vektor
+\newcommand{\nablq}   {\rvec\nabla}                    % rotated nabla operator
+\newcommand{\Vec}[1]{\left(\begin{array}{c} #1 \end{array}\right) }
+%\renewcommand{\mho}{\mathcal{W}}
+\newcommand{\pn}[1]{{{\partial #1} \over {\partial n}}}
+\newcommand{\pnn}[1]{{{\partial #1} \over {\partial m}}}
+\newcommand{\ps}[1]{{{\partial #1} \over {\partial s}}}
+\newcommand{\p}{{\partial}}
+\newcommand{\vn}{{\v \nabla}}
+\newcommand{\lk}{\left(}
+\newcommand{\rk}{\right)}
+
+\newcommand{\tl}{\tilde}
+
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+
+\newcommand{\ep}{\epsilon}
+
+\begin{document}
+
+ \section*{The simple Primitive equation model}
+
+Consider the Boussinesq equations in hydrostatic approximation
+\beq \label{eq1}
+  \pt{\v u } +   f \rvec{\v u}  +   \vn p =   - \v u \cdot \vn \v u - w \pz{} \v u +  \v F( \v u)~~,~~
+    \pt{b}   =  - \v u \cdot \vn b  - w \pz{} b +  M b
+     \eeq
+  with the diagnostic relations     $\pz p =b$ and $\vn \cdot \v u + \pz w =0$.
+  Vectors are two-dimensional and $\rvec{\v u} $ denotes  anticlockwise
+ rotation by $90^o$. 
+  Pressure is scaled with background density $\rho_0$ and thermodynamics have been
+  simplified to a buoyancy equation.
+  $\v F$  and $M$ are the friction and mixing operators.
+   At the free surface $z=\eta$, we also have the
+      condition 
+      \beq \pt p_s  = -   g \vn \cdot  \int_{-H}^\eta \v u dz 
+       \eeq
+  with $p_s = p|_{z=\eta} =  g \eta$.
+  Alternatively, we use a rigid lid with $w=0$ at $z=0$
+  and $p_s = p|_{z=0}$.
+We split full pressure $p$ into hydrostatic part and surface pressure.
+\beq
+p = p_h(z) + p_s ~,~
+p_h =  \int_{-h}^z b  dz'
+\eeq
+where  $p_s$ is to be determined by the external mode solvers.
+
+
+
+\subsection*{Simple implicit external solver for rigid lid}
+
+Velocity and buoyancy and pressure are all co-located in time in this scheme.
+The buoyancy equation is integrated as
+\beq
+  b^{n+1}- b^n = \Delta t \lk  \Bar{\delta b}^{n+1/2} + M (b^{n})    \rk 
+\eeq
+with the advective buoyancy tendency
+\beq
+\delta b^n =  \vn \cdot \v u^{n} b^n + \p_z w^{n} b^n ~~,~~
+\Bar{ \delta b}^{n+1/2} = A \delta b^n + B \delta b^{n-1} + C \delta b^{n-2}
+ \eeq
+ interpolated with the Adam-Bashforth (AB3) scheme  to time level $n+1/2$.
+ Mixing is treated with an Euler forward step, or maybe implicit in case of vertical mixing.
+ 
+An intermediate velocity $\v u^*$ is calculated from
+\beq
+\v u^* -\v  u^n = \Delta t \lk    \Bar{\delta \v u}^{n+1/2}   + \v F (\v u^{n}) \rk 
+\eeq  
+with the momentum tendency $\delta \v u$ excluding the surface pressure gradient and friction
+\beq
+ \delta \v u^n =  - f \rvec{\v u}^n - \vn  p_h^n  - \v u^n \cdot \vn \v u^n - w^n \pz{} \v u^n 
+\eeq
+These tendencies are extrapolated with AB3  to time level $n+1/2$ 
+\beq
+\Bar{ \delta \v u}^{n+1/2} = A \delta \v u^n + B \delta \v u^{n-1} + C \delta \v u^{n-2}
+\eeq
+Friction is treated with an Euler forward step.
+From the vertically integrated continuity equation follows the condition
+\beq
+\vn \cdot  \int_{-h}^0  \v u^*  =  \Delta t  \vn \cdot h \vn p_s^{n+1}
+\eeq
+which is solved with a conjugate-gradient iteration for $p_s^{n+1}$
+(attributes \verb|epsilon| for the convergence threshold and
+\verb|max_iterations|; a BiCGStab variant is implemented as an alternative).
+The iteration count and the estimated error are available per step as
+\verb|congr_itts| and \verb|estimated_error|. The intermediate velocity is  then
+corrected as
+\beq
+ \v u^{n+1} = \v u^* - \Delta t \vn p_s^{n+1}
+\eeq
+It is possible to include an implicit free surface in the time stepping.
+Vertical velocity is calculated from continuity
+\beq
+ w^{n+1} = -  \int_{-h}^z \vn \cdot \v u^{n+1}
+\eeq
+This scheme is also used as default in the MITgcm.
+
+\subsection*{Simple split-explicit external mode solver}
+
+
+   
+Velocity is known in this scheme at $t=n+1/2$, while $b$ and $p$ at level $n$.
+The momentum equation is discretised as
+\beq
+\v u^* -\v  u^{n-1/2} = \Delta t \lk - f  \Bar{\rvec{\v u}}^n+   \Bar{\delta \v u}^{n}  - \vn  p_h^n - \vn p_s^n+ \v F (\v u^{n-1/2}) \rk 
+\eeq  
+with the intermediate velocity $\v u^*$ and 
+AB3 extrapolation of Coriolis force and advection terms tendencies
+\beq
+ \Bar{\rvec{\v u}}^n =  A \rvec{\v u}^{n-1/2} + B \rvec{\v u}^{n-3/2} + C \rvec{\v u}^{n-5/2}
+~~,~~ \Bar{ \delta \v u}^{n} = A \delta \v u^{n-1/2} + B \delta \v u^{n-3/2} + C \delta \v u^{n-5/2}
+\eeq
+and
+\beq
+ \delta \v u^{n-1/2} =     - \v u^{n-1/2} \cdot \vn \v u^{n-1/2} - w^{n-1/2} \pz{} \v u^{n-1/2}
+\eeq
+For the hydrostatic and surface pressure $p_h+p_s$ no extrapolation is made, since they are at level $n$ anyways, 
+and friction is treated with Euler forward.
+
+Now the momentum tendencies are vertically integrated but without
+surface pressure and Coriolis contributions.
+\beq
+ \v R^n = \int_{-h}^0  \lk  \Bar{\delta \v u}^{n}  - \vn  p_h^n+ \v F(\v u^{n-1/2}) \rk dz 
+\eeq
+The external mode is integrated with sub-cycling over $m=1, ...M$
+($M$ set by the attribute \verb|sub_cycling|) from $n$ to $n+1$ with
+a simple, dissipative  scheme proposed by Demange et al (2019) using the forcing $\v R^n$
+\beq
+\v U^{n+(m+1)/M} - \v U^{n+m/M} &=& \Delta t/M \lk - f  \rvec{\Bar{\v U}}^{n+(m+1/2)/M} -  h \vn p_s^{n+m/M} + 
+ \v R^n  \rk
+ \\
+ p_s^{n+(m+1)/M} - p_s^{n+m/M} &=& - g \Delta t/M \lk  (1+\theta)  \vn \cdot \v U^{n+(m+1)/M} 
+ - \theta   \vn \cdot \v U^{n+m/M}
+ \rk
+\eeq
+with the transport $\v U^n = \int_{-h}^0 \v u^n dz$, and $\Bar{\v U}^{n+(m+1/2)/M}$ interpolated
+with AB2.   Demange et al (2019)  found  $\theta=0.14$ to be the best choice in terms of phase error and damping.
+The new external mode is given by
+\beq
+\v U^{n+1}=\frac{1}{M} \sum_{m=1}^{M} \v U^{n+m/M}  + \frac{\theta}{M} \lk  \v U^{n+1} - \v U^n  \rk 
+\eeq
+After the sub-cycling,  the barotropic part of the intermediate velocity is corrected 
+\beq
+  \v u^{n+1/2} = \v u^* -1/h \lk  \int_{-h}^0 \v u^* dz - \v U^{n+1} \rk 
+\eeq
+The buoyancy equation is integrated using $\v u^{n+1/2}$ and $w^{n+1/2} = - \int_{-h}^z \vn \cdot \v u^{n+1/2}$
+as
+\beq
+  b^{n+1}- b^n = \Delta t \lk  \delta b^{n+1/2} + M (b^{n})    \rk 
+\eeq
+with the buoyancy tendency
+\beq
+\delta b^n =  \vn \cdot \v u^{n+1/2} b^n + \p_z w^{n+1/2} b^n
+ \eeq
+ interpolated with AB3 to time level $n+1/2$.
+ This scheme is one option in FESOM2.
+The external-mode treatment is selected by the attributes
+\verb|implicit_free_surface| and \verb|explicit_free_surface|: both false
+gives the rigid lid, the first the implicit free surface (both solved with
+the iterative solver above), the second the split-explicit scheme.
+  
+
+\section*{Vertical mixing and friction options}
+
+Vertical mixing of buoyancy and vertical friction are organised in a
+hierarchy of options similar to pyOM2, selected by the attribute
+\verb|vmix_scheme| $\in$ \{\verb|'explicit'|, \verb|'implicit'|\} and two
+switches (module \verb|implicit_vmix.py|; the previous flag
+\verb|enable_implicit_vmix| maps to the implicit scheme with convective
+adjustment, so existing configurations are unchanged).
+
+\emph{Explicit scheme.} Fixed coefficients $\kappa$ (buoyancy) and $A_v$
+(momentum) only, integrated forward in time,
+\beq
+ b^{n+1} = b^n + \Delta t\, \pz{} \lk \kappa\, \pz b^n \rk, \qquad
+ \v u^{n+1} = \v u^{n+1} + \Delta t\, \pz{} \lk A_v\, \pz{\v u} \rk
+\eeq
+subject to the diffusive stability limit, which is checked at start-up
+(\verb|check_vmix_stability|, called from \verb|prepare_for_run|):
+$ 4 \max(\kappa, A_v)\, \Delta t / \Delta z^2 \le 1/2$; the model refuses to
+run otherwise, and also refuses convective adjustment or the TKE closure
+under the explicit scheme.
+
+\emph{Implicit scheme.} Both operators are integrated with backward Euler
+(unconditionally stable, so arbitrarily large coefficients are allowed),
+as a tridiagonal solve per column with the coefficient located on the
+$W$ points. Three sub-options for the coefficients:
+(i) constant $\kappa$ and $A_v$;
+(ii) convective adjustment (\verb|enable_conv_adjust|): background
+$\kappa$, but $\kappa = \kappa_{conv}$ (large) where $N^2 < 0$;
+(iii) the TKE closure (\verb|enable_tke|), which overrides all constant
+coefficients for both buoyancy and momentum as described below.
+Vertical friction is applied after the surface pressure correction: since
+the vertical operator with zero-flux boundary conditions leaves the
+column-integrated momentum unchanged, the barotropic mode is not
+perturbed, and $w$ is re-diagnosed afterwards.
+
+\subsection*{TKE closure}
+
+The closure of Gaspar et al.\ (1990) is ported from pyOM2
+(\verb|tke.py|, mixin class). All closure constants are configuration
+attributes (set before \verb|init_tke|); the defaults are the pyOM2
+\verb|tke_module| defaults: $c_k = 0.1$, $c_\epsilon = 0.7$, $\alpha = 1$,
+$\ell_{min} = 10^{-12}\,$m, $\kappa_M^{max} = 100\,$m$^2$/s, and background
+floors $\kappa_M^{min} = \kappa_H^{min} = 10^{-5}\,$m$^2$/s (the floors play
+the role of pe\_simple's constant background $A_v$ and $\kappa$; pyOM2
+handles backgrounds separately and uses $\kappa_M^{min}=0$). Note that the
+pyOM2 configurations of the acc family deviate from the module defaults and
+set $\alpha = 30$ (a proxy for vertical TKE transport by pressure work,
+which spreads the surface-injected TKE substantially deeper) and
+$\ell_{min} = 10^{-8}\,$m; for consistency with those experiments both
+should be set accordingly (\verb|alpha_tke|, \verb|mxl_min|). The turbulent
+kinetic energy $e$ is a prognostic variable on the $W$ points,
+\beq
+ \pt e = \pz{} \lk \alpha\, \kappa_M \pz e \rk
+ + K_{diss} - P_{diss} - c_\epsilon\, e^{3/2} / \ell
+\eeq
+with the mixing length $\ell = \sqrt{2 e}/N$, limited such that it cannot
+grow faster than the distance to the boundaries (two sweeps, pyOM2's
+\verb|tke_mxl_choice=2|), and the diffusivities
+\beq
+ \kappa_M = \min( \kappa_M^{max},\, c_k\, \ell \sqrt{e} ), \qquad
+ \kappa_H = \kappa_M / \max(1, \min(10,\, 6.6\, Ri)), \qquad
+ Ri = N^2 \kappa_M / K_{diss}
+\eeq
+Convection is contained in the closure: $\kappa_H = \max(\kappa_H, 1)$
+where $N^2 < 0$, which replaces the convective-adjustment option.
+
+The discretisation follows pyOM2: backward Euler with the dissipation
+linearised in the diagonal ($c_\epsilon \sqrt{e^n}/\ell$ acting on
+$e^{n+1}$), a surface $W$ cell of half thickness $\Delta z/2$, and the
+surface flux boundary condition added to that cell,
+\beq
+ F_e(0) = \left\{
+ \begin{array}{ll}
+   \Phi_{oc} & \mbox{wave dissipation flux from the wave model} \\
+   (|\v \tau|)^{3/2} & \mbox{classical parameterisation}
+ \end{array} \right.
+\eeq
+selected by \verb|tke_surf_from_waves| (default on, falling back to the
+classical form if no wave flux is present; $\v \tau$ kinematic; the first
+form closes the energy cycle between the wave and ocean components, the
+second is the pyOM2 default and serves as the control experiment). No
+diffusive TKE, tracer or momentum flux passes through the surface face
+itself: the surface forcing enters only as the explicit flux above, which
+also removes a spurious shear production against the zero-velocity halo
+above the surface (a phantom no-slip lid). For wave-driven injection the
+downward mixing-length limiting sweep can be seeded with a surface
+roughness length (attribute \verb|z0_surf|, default $0$, e.g.\
+$1.6\,H_s$ from the wave model in the sense of Mellor \& Blumberg 2004),
+so the near-surface mixing length starts at the wave scale rather than
+at $O(\Delta z)$. If the
+surface cell is drained negative by buoyancy fluxes, the missing energy is
+added back and booked in \verb|tke_surf_corr| as in pyOM2, and
+$e \ge e_{min} = 10^{-12}$ is enforced.
+
+Energetic consistency is exact on the discrete level: vertical friction is
+computed implicitly with $\kappa_M$ averaged to the $U$/$V$ points as in
+pyOM2 ($\overline{\kappa_M}^i$), and the shear production is diagnosed
+from the same discrete operator with the updated velocities,
+\beq
+ K_{diss} = \Bar{\, \overline{\kappa_M}^i \lk \pz{u^{n+1}} \rk^2 \,}^i
+          + \Bar{\, \overline{\kappa_M}^j \lk \pz{v^{n+1}} \rk^2 \,}^j
+\eeq
+so the kinetic energy removed from the mean flow reappears in the TKE
+forcing without discretisation residual; $P_{diss} = \kappa_H N^2$ is the
+exact transfer of the implicit buoyancy mixing, evaluated with the
+\emph{updated} buoyancy (the tracer solve precedes the TKE step; using the
+pre-mixing $N^2$ over-drains the TKE whenever $\kappa_H \Delta t/\Delta z^2$
+is not small). In stand-alone column
+tests the discrete TKE budget (surface flux $+$ shear production $=$
+dissipation $+$ buoyancy destruction $+$ storage) closes to machine
+precision.
+
+When the model velocity is the Lagrangian mean $\v u_L$ of the coupled
+wave--ocean formulation, the attribute \verb|mix_eulerian| (default off,
+requires the Stokes velocity to be present) lets the friction operator act
+on the Eulerian mean velocity $\bar{\v u} = \v u_L - \v u_S$: the
+down-gradient closure parameterises Eulerian fluctuations, so mixing
+$\v u_L$ would spuriously diffuse the Stokes shear. The Stokes velocity is
+subtracted before the implicit solve and added back afterwards, and the
+shear-production booking becomes flux times \emph{Lagrangian} shear, split
+into the non-negative Eulerian part $K_{diss}^E = \kappa_M (\pz{\bar{\v u}})^2$
+and the sign-indefinite Stokes (Langmuir) part
+$K_{diss}^L = \kappa_M \pz{\bar{\v u}} \cdot \pz{\v u_S}$, kept separately
+in the diagnostics with $K_{diss} = K_{diss}^E + K_{diss}^L$ feeding the TKE
+equation. Without \verb|mix_eulerian| this reduces bit-identically to the
+plain booking above.
+
+The calling sequence per time step is: diffusivities from the current
+$e$ and $N^2$ at the start of the step (so buoyancy mixing and friction
+use the same coefficients the transfers are paired with), vertical
+friction after the pressure correction, and the TKE step at the end of
+the time step.
+
+
+\section*{Model parameters and options}
+
+All parameters and options are attributes of the model instance, set either
+through the parameter dictionary passed at construction or by assigning the
+attribute before \verb|prepare_for_run|; options with a default may be left
+unset. The tables list every attribute the model reads.
+
+\subsection*{Required parameters (no default)}
+
+\begin{longtable}{@{}llp{8.4cm}@{}}
+\hline
+Attribute & Unit & Meaning \\
+\hline
+\endhead
+\verb|nx|, \verb|ny|, \verb|nz| & --- & global grid size (cells, without halo
+  points) \\
+\verb|dx|, \verb|dy|, \verb|dz| & m & grid spacing; $\Delta z$ is a uniform
+  scalar \\
+\verb|dt| & s & time step \\
+\verb|eq_of_state| & --- & equation of state: $0$ (temperature carries the
+  buoyancy, no salinity), $1$ (linear $\rho(S,T)$, salinity prognostic),
+  $100$ (ideal-gas atmosphere) \\
+\verb|implicit_free_surface| & --- & implicit free surface if true \\
+\verb|explicit_free_surface| & --- & split-explicit free surface if true;
+  both false: rigid lid \\
+\verb|periodic_in_x|, \verb|periodic_in_y| & --- & lateral boundaries
+  periodic (true) or closed (false) \\
+\verb|epsilon| & --- & convergence threshold of the iterative surface-pressure
+  solver (rigid lid / implicit free surface) \\
+\verb|max_iterations| & --- & iteration cap of that solver \\
+\verb|sub_cycling| & --- & number of barotropic sub-cycles $M$ (split-explicit
+  scheme only) \\
+\hline
+\end{longtable}
+
+\noindent
+The constructor additionally takes \verb|n_pes_x|, \verb|n_pes_y| (processor
+grid, default $1 \times 1$), \verb|halo_points| (default 1) and
+\verb|comm_in| (default: MPI world communicator). The constants
+\verb|grav| $=9.81$ and \verb|rho_0| $=1024$ are set internally (note: they
+overwrite any value passed in the parameter dictionary). Coriolis parameter,
+topography (\verb|kbot|) and initial conditions are set through the template
+methods \verb|set_coriolis|, \verb|set_topography| and
+\verb|set_initial_conditions|, overloaded in the configuration.
+
+\subsection*{Forcing hooks and coupling fields}
+
+\begin{longtable}{@{}lp{10.6cm}@{}}
+\hline
+Attribute / method & Meaning \\
+\hline
+\endhead
+\verb|set_forcing(tau)| & optional user method; adds forcing to the momentum
+  tendencies \verb|du[tau]|, \verb|dv[tau]| (enters the AB interpolation) \\
+\verb|set_forcing_direct()| & optional user method; direct momentum increment
+  bypassing the AB weights, applied before the pressure solve. Used for the
+  Stokes tendency $\Delta \v u_S$ of the Lagrangian-mean ($\v u_L$)
+  formulation, which must be a plain forward increment \\
+\verb|taux|, \verb|tauy| & kinematic wind stress; also the fallback surface
+  TKE forcing $|\v \tau|^{3/2}$ \\
+\verb|phi_oc| & wave-breaking energy flux from the wave model; surface TKE
+  flux when \verb|tke_surf_from_waves| is on \\
+\verb|u_S|, \verb|v_S| & Stokes velocity from the wave model; required by
+  \verb|mix_eulerian| \\
+\hline
+\end{longtable}
+
+\subsection*{Options with defaults}
+
+\begin{longtable}{@{}llp{7.6cm}@{}}
+\hline
+Attribute & Default & Meaning \\
+\hline
+\endhead
+\verb|superbee_advection| & unset & if set true, tracer advection uses the
+  Superbee flux limiter instead of the second-order fluxes (momentum
+  advection is always second order). Note: setting it to false raises an
+  error; leave it unset for the second-order scheme \\
+\verb|Khbi| & unset & biharmonic horizontal tracer diffusion coefficient
+  (m$^4$/s); active if present, forward Euler \\
+\verb|Ahbi| & unset & biharmonic horizontal friction coefficient (m$^4$/s);
+  active if present, forward Euler (rigid-lid/implicit path) \\
+\verb|vmix_scheme| & \verb|'explicit'| & vertical mixing/friction hierarchy:
+  \verb|'explicit'| (forward Euler, coefficient checked against the
+  diffusive stability limit) or \verb|'implicit'| (backward Euler,
+  unconditionally stable). If unset, the legacy flag
+  \verb|enable_implicit_vmix| decides \\
+\verb|kappa_T| & $0$ & background vertical diffusivity (m$^2$/s) \\
+\verb|A_v| & $0$ & background vertical viscosity (m$^2$/s) \\
+\verb|enable_conv_adjust| & on iff implicit & convective adjustment:
+  $\kappa = \kappa_{conv}$ where $N^2 < 0$ (implicit scheme only) \\
+\verb|kappa_conv| & $1$ & convective-adjustment diffusivity (m$^2$/s) \\
+\verb|enable_tke| & off & TKE closure; overrides the constant coefficients
+  for both buoyancy and momentum (implicit scheme only) \\
+\hline
+\end{longtable}
+
+\subsection*{TKE closure constants (read at \texttt{init\_tke})}
+
+\begin{longtable}{@{}llp{8.2cm}@{}}
+\hline
+Attribute & Default & Meaning \\
+\hline
+\endhead
+\verb|c_k| & $0.1$ & diffusivity constant, $\kappa_M = c_k \ell \sqrt{e}$ \\
+\verb|c_eps| & $0.7$ & dissipation constant, $c_\epsilon e^{3/2}/\ell$ \\
+\verb|alpha_tke| & $1$ & vertical TKE diffusion $\alpha \kappa_M$; the pyOM2
+  acc configurations use $30$ \\
+\verb|mxl_min| & $10^{-12}$ & mixing-length floor (m); acc configurations use
+  $10^{-8}$ \\
+\verb|kappaM_min| & $10^{-5}$ & viscosity floor (m$^2$/s), plays the role of
+  the constant background $A_v$ \\
+\verb|kappaM_max| & $100$ & viscosity cap (m$^2$/s) \\
+\verb|kappaH_min| & $10^{-5}$ & diffusivity floor (m$^2$/s) \\
+\verb|tke_min| & $10^{-12}$ & TKE floor (m$^2$/s$^2$) \\
+\verb|z0_surf| & $0$ & surface roughness length (m) seeding the downward
+  mixing-length sweep (e.g.\ $1.6\,H_s$) \\
+\verb|tke_surf_from_waves| & on & surface TKE flux from the wave dissipation
+  $\Phi_{oc}$; falls back to $|\v \tau|^{3/2}$ if no wave flux is present \\
+\verb|mix_eulerian| & off & vertical friction acts on the Eulerian mean
+  velocity $\v u_L - \v u_S$ ($\v u_L$ formulation), with the
+  $K_{diss}^E$/$K_{diss}^L$ booking split \\
+\hline
+\end{longtable}
+
+\subsection*{Snapshot diagnostics}
+
+Two snapshot classes are available; either replaces the model class as the
+base of the configuration and overrides \verb|prepare_for_run| and
+\verb|diagnose|. Both read the attribute \verb|snapint| (snapshot interval in
+seconds, required) and take the \verb|prepare_for_run| arguments
+\verb|snap_file_name| and \verb|show_each_time_step| (default on: print every
+time step; off: print at output steps only). When the iterative
+surface-pressure solver is active, both print its per-step iteration count
+and accumulate the total count between outputs.
+
+\emph{snap\_nc4} writes a single netCDF file (default name
+\verb|'snap.cdf'|), created with the T- and U-grid coordinate axes and the
+variables $u$, $v$, $w$, temp, $p_h$, $\rho$ and $p_s$; salinity is included
+when the equation of state carries it (\verb|eq_of_state| $>0$ and
+$\ne 100$). At every output step each PE in turn writes its halo-free
+sub-block into the global arrays of the shared file (serialised with
+barriers). For the rigid-lid/implicit path the current time level of the
+surface pressure is written, for the split-explicit path the plain 2D field.
+This class works with the MPI domain decomposition and with
+single-process JAX, but not in a multihost JAX environment, since all
+processes must be able to open the same file.
+
+\emph{snap\_raw} writes one \verb|.npy| file per variable, per PE and per
+output step into a directory tree
+\verb|<name>/pe=<rank>/n=<step>/| (default name \verb|'raw_snap'|; an
+existing directory of that name is removed at start-up), with the
+coordinate axes and the processor-grid layout
+(\verb|decomposition.npy|) stored once at the top level. Each process only
+touches its own subdirectory, and JAX sharded arrays are written through
+their local shard, so this class also works in a multihost JAX
+environment. The variable set is $u$, $v$, $w$, temp, salt, $p_h$ and
+$p_s$ (salt always, $\rho$ not included). The fragmented output is meant
+to be reassembled afterwards using the stored decomposition, e.g.\ into
+zarr.
+
+
+\end{document}
+
+

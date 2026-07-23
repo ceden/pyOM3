@@ -1,0 +1,1484 @@
+\documentclass[12pt]{article}
+\usepackage{lineno}
+%\usepackage{ametsoc}
+\usepackage{natbib}
+\usepackage{a4wide}
+\usepackage{longtable}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex,colorlinks, citecolor=black,linkcolor=black,urlcolor=black]{hyperref}
+\definecolor{darkgreen}{rgb}{0.1,0.4,0.1}
+\definecolor{darkblue}{rgb}{0.1,0.1,0.3}
+
+
+
+\newif\ifdetail
+\global\detailfalse
+%\global\detailtrue
+
+\def\bem#1{\colorbox{green}{\em #1}}
+
+\newcommand{\beq}  { \begin{eqnarray} }
+\newcommand{\eeq}  { \end{eqnarray}}
+\newcommand{\beeq}  { \begin{eqnarray*} }
+\newcommand{\eeeq}  { \end{eqnarray*}}
+\newcommand{\eq }  [1]{Eq.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\eqs }  [1]{Eqs.~(\ref{#1})}
+\newcommand{\sect}  [1]{Sec.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\fig}  [1]{Fig.~\ref{#1}}   % Fig. #1
+\renewcommand{\v}[1]{{\mbox{\boldmath$ #1 $}}}  % Vektor durch Fettdruck
+\newcommand{\m}    [1]{{\bf  #1 }}              % Matrix in sans serif
+\newcommand{\gz}[1] {{{d #1} \over {dz}}}
+\newcommand{\pt}[1]{{\partial_t #1}}
+\newcommand{\ptt}[1]{{\partial_{tt} #1}}
+\newcommand{\pttt}[1]{{\partial_{ttt} #1}}
+\newcommand{\pttx}[1]{{{\partial^3 #1} \over {\partial t^2 \partial x}}}
+\newcommand{\ptty}[1]{{{\partial^3 #1} \over {\partial t^2 \partial y}}}
+\newcommand{\ptx}[1]{{{\partial^2 #1} \over {\partial t \partial x}}}
+\newcommand{\pty}[1]{{{\partial^2 #1} \over {\partial t \partial y}}}
+\newcommand{\pz}[1]{{\partial_z #1}}
+\newcommand{\pzz}[1]{{\partial_{zz} #1}}
+\newcommand{\px}[1]{{\partial_x #1}}
+\newcommand{\py}[1]{{\partial_y #1}}
+\newcommand{\pxi}[1]{{\partial_i #1}}
+\newcommand{\pxj}[1]{{\partial_j #1}}
+\newcommand{\pxk}[1]{{\partial_k #1}}
+\newcommand{\pb}[1]{{{\partial #1} \over {\partial b}}}
+%\newcommand{\pxy}[1]{{{\partial^2 #1} \over {\partial x \partial y}}}
+\newcommand{\pxy}[1]{\partial_{xy} #1}
+\newcommand{\pyy}[1]{\partial_{yy} #1}
+\newcommand{\pxx}[1]{\partial_{xx} #1}
+\newcommand{\kx}{{\bf k} \times}
+\newcommand{\dt}[1]{{{d #1} \over {d t}}}
+\newcommand{\Dt}[1]{{{D #1} \over {D t}}}
+\newcommand{\Div}[1]{ \nabla \cdot #1 }
+\renewcommand{\div}[1]{ \nabla_{yz} \cdot #1 }
+\newcommand{\Bar}[1]{ \overline{ #1} }
+\newcommand{\rvec} [1]{
+    \raisebox{-1.5ex}{$\stackrel{\textstyle #1}{\neg}$} }% rotierter Vektor
+\newcommand{\nablq}   {\rvec\nabla}                    % rotated nabla operator
+\newcommand{\Vec}[1]{\left(\begin{array}{c} #1 \end{array}\right) }
+%\renewcommand{\mho}{\mathcal{W}}
+\newcommand{\pn}[1]{{{\partial #1} \over {\partial n}}}
+\newcommand{\pnn}[1]{{{\partial #1} \over {\partial m}}}
+\newcommand{\ps}[1]{{{\partial #1} \over {\partial s}}}
+\newcommand{\p}{{\partial}}
+\newcommand{\vn}{{\v \nabla}}
+\newcommand{\lk}{\left(}
+\newcommand{\rk}{\right)}
+
+\newcommand{\tl}{\tilde}
+
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+
+\newcommand{\ep}{\epsilon}
+\newcommand{\erfc}{\mathrm{erfc}}
+ 
+ 
+\begin{document}
+
+ \section*{The spectral wave model wim\_simple (Wave Interaction Model, WIM)}
+ 
+wim\_simple is a spectral surface wave model, coupled to an ocean model in an energetically
+and dynamically consistent way.
+Basis is the wave action spectral density equation for deep water surface gravity waves
+\beq \label{eqA}
+ \pt{A}  +  \dot{\v x} \cdot  \vn_{\v x}  A   +\dot{\v k} \cdot  \vn_{\v k} A  &=& S = S_{in} + S_{out} + S_{nl}
+\eeq
+with wave action density $A(\v k,\v x,t)$, the horizontal wavenumber vector $\v k = (k_x,k_y)$,
+the dispersion relation $\Omega=\sigma + \v U \cdot \v k$ with intrinsic frequency
+$\sigma(\v k) = \sqrt{ g |\v k| }$ and Doppler shift velocity $\v U$,
+transport velocities $  \dot{\v x} =   \vn_{\v k} \Omega$ and $\dot{\v k}= - \vn_{\v x} \Omega$,
+action input by wave growth $S_{in}$, action dissipation by wave breaking $S_{out}$,
+ and non-linear action transfer $S_{nl}$
+and operators $\vn_{\v x} = (\p_x,\p_y)$ and $\vn_{\v k} = (\p_{k_x}, \p_{k_y})$.
+Only deep water waves are considered, with $\vn_{\v x} \sigma = 0$ and $\p_t \sigma = 0$,
+but the concept extends readily to waves at finite depth.
+Since the scattering integral $S_{nl}$ conserves energy and momentum of the waves,
+it holds that $\int \sigma S_{nl} d \v k = 0$ and $\int \v k S_{nl} d \v k = 0$.
+
+
+The surface wave model predicts the Stokes velocity $\v u_S$ and the wave stress $\v \tau_o$
+to force an ocean model.
+Considering the Lagrangian ocean velocity $\v u_L = \v u + \v u_S$ and its kinetic energy,
+ the consistent energy cycle becomes 
+\beq \label{eq_K}
+\p_t \int_{-\infty}^0  |\v u_L|^2/2 dz + \vn_{\v x}  \cdot \int_{-\infty}^0  \v u^L_h  \pi  dz  &=&   C  \\  \label{eq_W}
+\p_t  \int E d \v k +  \vn_{\v x}  \cdot  \int \lk  \dot{\v x}   E  + \dot{ \v x}  A (\v U \cdot \v k)  \rk d \v k
+   &=& \int (\Omega S_{in} +\v U \cdot \v k \, S_{nl}) d \v k +\int \sigma S_{out}   d \v k   -C  \nonumber
+\eeq
+with the wave energy spectral density $E = \sigma A$ and the exchange term 
+\beq \label{eq_C}
+   C&=&  \int_{-\infty}^0  \v u^L_h \cdot   \p_t \v u_S  dz +\int_{-\infty}^0  \v u^L_h  \cdot    \p_z \v \tau  dz 
+   = \int  \v U \cdot \v k (\p_t A -S_{out}) d \v k
+   \eeq
+   and the setting, following Vanneste and Young for the Doppler shift velocity $\v U$,
+\beq \label{eq_Q}
+  \v U(\v x,\v k,t) = \int_{-\infty}^0 \v u^L_h Q  dz  ~~,~~\v u^S_h(\v x,z,t)  = \int Q A \v k d \v k~~,~~Q(k,z) = 2 k e^{2 kz}    
+  \\
+\p_z \v \tau(\v x,z,t) = -  \int  Q    \v k S_{out} d \v k~,~ \v \tau_o(\v x,t) =\int_{-\infty}^0 \p_z \v \tau dz =- \int   \v k S_{out} d \v k
+\eeq
+with $\int_{-\infty}^0 Q \, dz = 1$ and the ocean momentum forcing $ \v \tau_o =-\int   \v k S_{out} d \v k$,
+i.e.\ the stress on the ocean is the dissipation of wave momentum.
+Note that $\v U$ contains both the Eulerian mean and the Stokes horizontal velocity components.
+Waves and ocean exchange energy by the effect of the Doppler shift and the ocean stress, both
+given by $C$; other source terms of the wave energy are the wave growth by the wind,
+$\int \Omega S_{in} d \v k$, and the dissipation by wave breaking, $\int \sigma S_{out} d \v k$,
+which may be directed into a turbulent ocean energy reservoir (see below).
+The cycle closes exactly up to the term $\int \v U \cdot \v k \, S_{nl} d \v k$, which represents
+the work done on the sheared mean flow by the vertical redistribution of Stokes momentum
+through the nonlinear transfer. Only the baroclinic part of $\v U$ contributes to this term,
+since $\int \v k S_{nl} d \v k = 0$. The discrete interaction approximation used for $S_{nl}$
+evaluates resonant quadruplets based on the intrinsic frequency and thus enforces
+$\int \sigma S_{nl} d \v k = 0$, such that with a background current this term appears as a
+spurious source; since it is small compared to the other sources, it is ignored.
+
+
+\subsection*{Relation to WAM}
+
+The concept and discretisation of wim\_simple follows closely the example of WAM
+found in WAM (cycle 7) at \url{https://github.com/myWAveModel/WAM},
+except for simplified action sources.
+Instead of the canonical wavenumber coordinates $\v k$ used above,
+frequency $\nu = \sigma/(2 \pi)$ and wavenumber angle $\theta$
+with $k_x = k \sin \theta$, $k_y = k \cos \theta$ and $k=|\v k|$ are used as phase dimensions,
+covered by an equidistant grid in $\theta$ and a logarithmic grid in $\nu$ as in WAM.
+Different to WAM, however, $\nu$ is here the \emph{intrinsic} frequency, while in WAM
+the extrinsic frequency is used; the intrinsic frequency is better suited to
+represent wave--mean flow interaction, following the example of WAVEWATCH III.
+Instead of the spectral energy density $E(\v k) = \sigma A(\v k)$, the model carries
+the WAM-like spectral density $E(\theta,\nu)$, related by
+$ \int_{-\infty}^0  |\v u_L|^2/2 dz= \int E(\v k) d \v k = g \int E(\theta,\nu) d \theta d\nu  $.
+Units of $E(\v k) d \v k$ are $m^3/s^2$,
+thus $E(\theta,\nu)  d \theta d\nu$ has units $m^2$ (the surface elevation variance)
+and $E(\theta,\nu)$ has units $m^2 s $,
+while $E(\v k)$ has units $m^5/s^2$; the factor $g$ shows up accordingly in the
+definitions of $\v u_S$ and $\v \tau$ below.
+\ifdetail
+Coordinate transformation is not necessary but given here for completeness.
+ From $(k_x,k_y)$ to ($\theta,k$) 
+with $k_x=k \cos \theta$, $k_y=k \sin \theta$
+\beq
+E(\v k) d \v k  = k E(\v k) d \theta d k
+\eeq
+since (take absolute value)
+\beq
+\left |   \begin{array}{cc}
+\p k_x /\p \theta & \p k_x/ \p k  \\
+\p k_y /\p \theta & \p k_y/ \p k  \\
+\end{array} \right|  = 
+\left |   \begin{array}{cc}
+-k \sin \theta & \cos \theta  \\
+k \cos \theta &  \sin \theta\\
+\end{array} \right| 
+= - k \sin^2 \theta - k \cos^2 \theta = -k
+\eeq
+ Transformation from  $(\theta,k)$ to  $(\theta,\sigma)$ with $k = \sigma^2/g$ by
+\beq
+   d \theta d k =  d \theta \frac{\p k}{\p \sigma} d \sigma = 2 (\sigma/g)  d \theta  d \sigma
+   ~~,~~
+   d \v k =   2 (\sigma^3/g^2)  d \theta  d \sigma
+\eeq 
+\fi
+
+
+
+
+The model equation formulated for $A(\theta,\nu)$ reads
+\beq \label{eq6}
+% \pt{ A}    +  \dot{\v x} \cdot  \vn_{\v x}  A  +\dot{\theta} \p_{\theta} A   +\dot{\sigma} \p_{\sigma} A
+% &=& S_{in} + S_{out} + S_{nl} 
+% \\
+  \pt{ A}    +  \vn_{\v x}  \cdot   (\dot{\v x} A ) +\p_{\theta}  (\dot{\theta} A  )
+ + \p_{\nu} ( \dot{\nu} A)
+ &=&S_{in} + S_{out} + S_{nl} 
+\eeq
+We need expressions for group velocity $\dot{\v x}$ and the drift velocities $\dot{\theta}$
+and $\dot \nu$.
+
+\subsubsection*{Group velocity}
+
+Since $\v U = \v U(k)$, the group velocity is given by
+\ifdetail
+\beq
+ \dot x &=& \p_{k_x} \Omega = \p_{k_x} \sigma  + \p_{k_x}  Uk_x  + \p_{k_x}  V k_y  
+ =   \sqrt{g} \p_{k_x}  (k_x^2 + k_y^2)^{1/4}+ U + k_x \p_{k_x}  U + k_y\p_{k_x}  V 
+ \\ &=&  (c /2)  k_x/k + U + \v k \cdot \p_{k_x}  \v U 
+ \\
+ \dot y &=& \p_{k_y} \Omega = (c /2)  k_y/k+ \p_{k_y}  Uk_x  + \p_{k_y}  V k_y  
+ =  (c /2)  k_y/k+ V + \v k \cdot \p_{k_y}  \v U   
+ \eeq
+ \fi
+ \beq
+ \dot{\v x} =  (c /2)  \v s + \v U + \v k \cdot \vn_{\v k}  \v U 
+ \eeq
+with the phase velocity  $c = \sigma/k = \sqrt{g} /\sqrt{k} = g /\sigma $
+and the wave direction vector $\v s = (\sin \theta,\cos \theta)$.
+\ifdetail
+Note that
+\beq 
+\vn_{\v k}  ( \v  k \cdot    \v U)   = \Vec{  \p_{k_x} (U k_x + V k_y) \\ \p_{k_y} (U k_x + V k_y) }
+= \v U + \Vec{   k_x  \p_{k_x} U  + k_y   \p_{k_x}  V \\  k_x \p_{k_y} U  +k_y  \p_{k_y} V   }
+\\
+= 
+ \v U + \Vec{   (k_x  \p_{k} U  + k_y    \p_{k}  V) k_x/k  \\  
+ (k_x \p_{k} U  +k_y  \p_{k} V) k_y/k    }
+\eeq
+with $ \p_{k_x} k  = % \p_{k_x} (k_x^2+k_y^2)^{1/2} = 1/2  (k_x^2+k_y^2)^{-1/2}  2 k_x = 
+k_x/k$
+and  $\v U = \v U(k)$
+\fi
+Since the wavenumber gradient of the Doppler velocity $\v U$
+is purely radial (it points along $\v k$),
+\beq \label{eq:kgradkU}
+\v k \cdot \vn_{\v k} \v U
+= \Vec{ (k_x \p_k U + k_y \p_k V)\, k_x/k \\
+        (k_x \p_k U + k_y \p_k V)\, k_y/k }
+= \lk \v s \cdot \p_k \v U \rk \, \v k
+= k \lk \sin\theta\, \p_k U + \cos\theta\, \p_k V \rk \, \v s ,
+\eeq
+with  $\p_k \v U = (\p_k U, \p_k V)$. The full group velocity reads
+\beq \label{eq:xdot_full}
+\dot{\v x} = (c/2)\,\v s + \v U + k \lk \sin\theta\, \p_k U + \cos\theta\, \p_k V \rk \, \v s .
+\eeq
+With $k = (2\pi \nu)^2/g$ one has
+$k\,\p_k U_i = k \p_\nu U_i \p \nu/\p k = \frac{\nu}{2}\,\p_\nu U_i$
+%with $2 \pi \nu =  \sqrt{g k} $ and $  (2 \pi) \p \nu/\p k = g/2 /\sqrt{g k}  $ 
+%and $k   (2 \pi) \p \nu/\p k = \sqrt{g k} /2 =\pi f $
+%
+ so the radial correction can be written with
+a single scalar factor
+\beq \label{eq:xdot_disc}
+R = \frac{\nu}{2}\lk \v s \cdot \p_\nu \v U  \rk ,
+\qquad
+\dot{\v x} %= \Vec{ (c/2)\sin\theta + U + R\,\sin\theta  \\ (c/2)\cos\theta + V + R\,\cos\theta  }
+= (c/2) \v s  + \v U + R \v s
+\eeq
+i.e.\ the same directional projection $R\,\v s$ enters both components. This reduces
+to the pure group velocity $\dot{\v x} = (c/2)\v s + \v U$ whenever the current has no
+frequency dependence ($\p_\nu \v U = 0$), e.g.\ for a barotropic current.
+
+\subsubsection*{Other drift velocities}
+
+Since $\v U = \v U(k)$, the material derivative of $\v U$ along a ray contains,
+besides $\p_t \v U + \dot{\v x} \cdot \vn_{\v x} \v U$,  also the contribution
+$\dot{\v k} \cdot \vn_{\v k} \v U$, so  $\dot \sigma$
+becomes
+with %$k_x = k \sin \theta$ and $k_y = k \cos \theta$ and 
+$\dot{\v k} =  - (\vn \v U )\cdot \v k $
+\ifdetail
+\beq
+\dot \sigma  &=& 2 \pi \dot \nu =   \p_t \Omega - \dot{\v U}  \cdot \v k  - \v U \cdot \dot{\v k}
+\\
+&=&  \p_t \Omega -  \dot U k_x + \dot V k_y  - \v U \cdot \dot{\v k}
+\\ &=&  \p_t \Omega -  (\p_t U + \v u \cdot \vn_x U + \dot{\v k} \cdot \vn_{\v k} U) k_x + \dot V k_y  - \v U \cdot \dot{\v k}
+\\ &=& (\p_t \v U ) \cdot \v k 
+-  (\p_t \v U ) \cdot \v k -  ( \dot{\v x} \cdot \vn_x \v U) \cdot \v k 
+-(\dot{\v k} \cdot \vn_{\v k} \v U) \cdot \v k
+-  \v U \cdot \dot{\v k} 
+\\ &=& -  ( \dot{\v x} \cdot \vn_x \v U) \cdot \v k 
+-(\dot{\v k} \cdot \vn_{\v k} \v U) \cdot \v k
++  \v U \cdot  ( (\vn \v U )\cdot \v k )
+\\
+&=&  -   \dot{\v x} \cdot ((\vn_x \v U)  \cdot \v k) +  \v U \cdot  ( (\vn \v U )\cdot \v k )
+-(\dot{\v k} \cdot \vn_{\v k} \v U) \cdot \v k
+\\ &=& -( \v U  -   \dot{\v x} ) \cdot \dot \v k-(\dot{\v k} \cdot \vn_{\v k} \v U) \cdot \v k
+\eeq
+\fi
+\beq \label{eq:omdot_Uk}
+\dot \sigma &=& \p_t \Omega - \dot{\v U} \cdot \v k - \v U \cdot \dot{\v k}
+ =  ( \dot{\v x}   - \v U ) \cdot \dot{\v k}
+   - ( \dot{\v k} \cdot \vn_{\v k} \v U ) \cdot \v k
+\eeq
+\ifdetail
+\beq
+ ( \dot{\v k} \cdot \vn_{\v k} \v U ) \cdot \v k 
+ &=&  (\dot{\v k} \cdot \vn_{\v k} U) k_x +  (\dot{\v k} \cdot \vn_{\v k}) V k_y
+ \\ &=&  (\dot{k_x} \p_{k_x} U +(\dot{k_y} \p_{k_y} U ) k_x +  (\dot{\v k} \cdot \vn_{\v k}) V k_y
+ \\ &=&  (\dot{k_x} \p_{k} U k_x/k +(\dot{k_y} \p_{k} U k_y/k) k_x +  (\dot{\v k} \cdot \vn_{\v k}) V k_y
+ \\ &=& \p_{k} U  (\dot{\v k} \cdot \v k) k_x /k  + \p_{k} V  (\dot{\v k} \cdot \v k )  k_y/k
+ =  k (\dot{\v k} \cdot \v s)  ( \p_k \v U \cdot \v s)
+\eeq  
+with $ \p_{k_x} k  = k_x/k$.
+\fi
+With $\vn_{\v k} U_i = (\p_k U_i) \, \v k /k$ and $k \, \p_k U_i = (\nu/2) \p_\nu U_i$
+one finds
+$( \dot{\v k} \cdot \vn_{\v k} \v U ) \cdot \v k
+ = ( \dot{\v k} \cdot \v s ) \, k \lk \v s \cdot \p_k \v U \rk
+ %=  ( \dot{\v k} \cdot \v s ) \,  \lk \v s \cdot (\nu/2) \p_\nu \v U \rk
+ = R \, ( \v s \cdot \dot{\v k} )$
+with $R$ from \eq{eq:xdot_disc}. Since also
+$\dot{\v x} - \v U = (c/2 + R) \, \v s$ by \eq{eq:xdot_disc}, we obtain
+\beq \label{eq:omdot_final}
+\dot \sigma = 2 \pi \dot \nu = 
+ (  (c/2 + R) \, \v s ) \cdot \dot{\v k}
+   -  R \, ( \v s \cdot \dot{\v k} ) 
+=
+(c/2) \, \v s \cdot \dot{\v k}
+\eeq
+Finally,
+\ifdetail
+\beq
+\tan \theta &=& k_x/k_y ~~\to ~~ \dot \theta /\cos^2\theta = (1/k_y) \dot k_x - (k_x/k_y^2) \dot k_y 
+\eeq
+\fi
+\beq
+\dot \theta = ( \cos\theta   \dot k_x -    \sin \theta \dot k_y ) k^{-1}
+\eeq
+results
+using $\tan \theta = k_x/k_y$ and 
+$\dot k_x = -  k_x \p_x U - k_y \p_x V $ and  $\dot k_y = - k_x \p_y  U   -k_y \p_y  V $.
+
+\ifdetail
+\subsubsection*{Energy transfer to mean flow}
+
+Multiplying \eq{eq6} by $\sigma$ gives the budget of the intrinsic energy
+$E = \sigma A$. Since $\sigma = 2 \pi \nu$ is the spectral coordinate, it
+commutes with $\p_t$, $\vn_{\v x}$ and $\p_\theta$; only the frequency
+advection generates
+$\sigma \, \p_\nu ( \dot \nu A) = \p_\nu ( \dot \nu E) - \dot \sigma A$
+so that
+\beq \label{eq:ebudget}
+\pt{E} + \vn_{\v x} \cdot ( \dot{\v x} E ) + \p_\theta ( \dot \theta E )
+ + \p_\nu ( \dot \nu E )
+ &=& \sigma \dot A + \dot \sigma A
+\eeq
+All terms on the left are conservative transport of intrinsic energy; on the
+right, $\sigma \dot A$ is the energy of the source terms and $\dot \sigma A$
+is the local energy exchange with the mean flow mediated by propagation.
+Multiplying \eq{eq6} instead by $\Omega(\v x, \theta, f, t)$
+yields 
+\ifdetail
+\beq 
+  \Omega  \pt{ A}    +  \Omega  \vn_{\v x}  \cdot   (\dot{\v x} A ) 
+  + \Omega \p_{\theta}  (\dot{\theta} A  )
+ + \Omega \p_{\nu} ( \dot{\nu} A)
+ &=& \Omega  \dot A 
+ \\
+  \pt{ \Omega   A}  - A \p_t \Omega 
+  +  \vn_{\v x}  \cdot ( \Omega  \dot{\v x} A )  
+  + \p_{\theta}  (\Omega  \dot{\theta} A  )
+  +\p_{\nu} (  \Omega  \dot{\nu} A) 
+  - A ( \dot{\v x}    \cdot \vn_x  \Omega 
+   + \dot{\theta} \p_{\theta} \Omega  
+  +  \dot{\nu}  \p_\nu  \Omega )
+   &=& \Omega  \dot A 
+   \eeq
+   \beq
+  \pt{ \Omega   A} 
+  +  \vn_{\v x}  \cdot ( \Omega  \dot{\v x} A )  
+  + \p_{\theta}  (\Omega  \dot{\theta} A  )
+  +\p_{\nu} (  \Omega  \dot{\nu} A) 
+    &=& \Omega  \dot A  + A \p_t \Omega 
+\eeq
+\fi
+\beq \label{eq:absE}
+ \p_t   E + \vn_{\v x} \cdot ( \dot{\v x} \Omega A )
+ + \p_\theta ( \dot \theta \Omega A ) + \p_\nu ( \dot \nu \Omega A )
+ &=& \Omega \dot A  - \v U \cdot \v k \p_t A
+\eeq
+using $\dot{\v x} \cdot \vn_{\v x} \Omega + \dot \theta \, \p_\theta \Omega
+ + \dot \nu \, \p_\nu \Omega = 0$.
+
+Except for flux divergencies the
+exchange $C$ thus proceeds through three routes: (i) the refraction transfer
+$ \dot \sigma A$ to the ocean,
+carried by the frequency advection,
+(ii) the source-mediated part
+$\v U \cdot \v k \, ( S_{in} + S_{nl} ) $,
+handed over as $\p_t \v u_S$-work, and (iii) the dissipation part routed
+through the stress $\v \tau$ related to $\v U \cdot \v k \,  S_{out}$.
+In a horizontally homogeneous column all propagation terms vanish, $\p_t A = \dot
+A$, and $C$ collapses to routes (ii) and (iii): energy flows to the ocean
+with $\dot \sigma \equiv 0$, since each action quantum created or destroyed
+by the sources carries the mean-flow energy $\v U \cdot \v k$ alongside its
+intrinsic energy $\sigma$.
+
+
+\fi
+\subsection*{High frequency cut-off}
+
+Since the growth rates $\gamma_{in}$ and $\gamma_{out}$ increase strongly with frequency,
+which would require a very small time step at large $\nu$,
+the wave model is only calculated up to  a cut-off frequency $\nu_c$,
+and for the higher frequencies $\nu > \nu_c$ 
+a Phillips spectrum with a $\nu^{-5}$ tail of the wave
+spectrum is  applied, the so-called high-frequency tail. It has the form 
+$E_{hi}(\nu)  =   E(\nu_c,\theta) \nu_c^5 \nu^{-5}$. 
+The cut-off frequency $\nu_c$ is calculated as in WAMDI (1988) 
+\beq
+\nu_c = \max( 2.5 \bar \nu, 3 \nu_{pm})
+\eeq
+with the mean frequency 
+$2 \pi \bar \nu =  \int E d \theta d\nu/ \int (E/\sigma) d \theta d\nu$, the ''wind sea'' frequency $2 \pi \nu_{pm} =  g/(28 u_{\star})$,
+and the friction velocity $u_\star$.
+For $\nu > \nu_c$ it is assumed that \eq{eq6} becomes local and steady, such that the
+source terms balance locally in space and time and in $\nu$ and $\theta$, i.e.\ $S |_{\nu>\nu_c}=0$.
+The per-column prognostic cut-off and the imposed $\nu^{-5}$ tail are activated by the
+attribute \verb|mask_energy| (default off); the resulting prognostic/diagnostic bin mask
+is also the basis of the equilibrium tail-flux booking of \verb|tail_flux| $=$ \verb|'input'|
+described below, which therefore requires \verb|mask_energy| to be active.
+
+
+\subsection*{Source terms}
+
+The source terms $S_{in}$ and $S_{out}$ are parameterized by growth rates,
+$ S_{in} = \gamma_{in} A$ and $S_{out}=  \gamma_{out} A$, 
+for which the simplest forms  following  WAMDI (1988) are used
+\beq \label{eq:gammas}
+ \gamma_{out} = -  \beta_{o} g^{-4}  \bar E^2 \bar \sigma^7 \, \,     \sigma^2  ~&,&~
+ \gamma_{in} =   \sigma\frac{\rho_a}{\rho_o} \times \, 
+    0.25 \max\left( 0,
+     28 (u^*/c)  \cos(\theta - \theta*) -1  \right) )
+ \eeq
+with mean energy $\bar E = \int E d \theta d\nu$,  mean frequency
+$\bar \sigma = \bar E/ \int (E/\sigma) d \theta d\nu$,
+air,water density  $\rho_a,\rho_o$, atmospheric friction velocity magnitude $u^{\star}$,
+with direction $ \theta^*$, deep water phase velocity $c = g/  \sigma$,
+and the parameter $\beta_{o} = 2.56 $.
+Other parameterisations are implemented as options.
+The mean frequency is clipped to the resolved spectral range,
+\beq
+\bar\sigma \leftarrow \min\!\left(\max(\bar\sigma,\, \sigma_0),\, \sigma_{N_\nu-1}\right)
+\eeq
+The non-linear source term $S_{nl}$ is the discrete interaction approximation (DIA)
+of Hasselmann et al.\ (1985), taken from WAM (cycle 7).
+A fortran version directly from the original WAM legacy code, 
+and two python versions (one with jax/jit acceleration, one pure numpy) are available.
+The attribute ''snonlin\_backend'' determines which one to use ('fortran'/'jax'/'numpy'), default is 'fortran';
+all versions give identical results.
+
+
+\subsection*{Stokes velocity}
+
+Stokes velocity is  
+\beq
+\v u_S(z) =  \int \int 2 (k/\sigma) e^{2kz} \v k   E(\v k)  d \v k  
+= (2/g) \int_0^\infty  \sigma^3  e^{2k z } \int_0^{2 \pi}   \v s E  d\theta d \nu 
+\eeq
+with direction vector $\v s=(\sin \theta,\cos \theta)$. The frequency integral is calculated over the
+prognostic range of $\nu$, and the contribution by the high frequency tail is added.
+The latter part is given by
+  \beq \label{eq:ushi}
+  \v u_S^{hi} = 
+  (2/g) \int_{\nu_c}^\infty \int_0^{2 \pi}    \sigma^3  e^{2z \sigma^2/g}    \v s  E(\nu_c,\theta)  \nu_c^5  \nu^{-5} d\theta d \nu 
+  \approx  (2/g)  \nu_c  \int_0^{2 \pi}   \sigma_c^3 \v s  E(\nu_c,\theta)  d\theta
+%  \\  \approx 
+ %   (2/g) \int_{\nu_c}^\infty \sigma^3 \nu_c^5  \nu^{-5} d \nu  \int_0^{2 \pi}   \v s  E(\nu_c,\theta) d\theta 
+ %   =   (2/g)  (2 \pi)^3\nu_c^5 /\nu_c  \int_0^{2 \pi}   \v s  E(\nu_c,\theta)  d\theta
+ \eeq 
+ assuming that the uppermost model level thickness consumes the factor $ e^{2z \sigma^2/g} $
+ and with $\sigma_c = 2 \pi \nu_c$. Below the uppermost vertical level, $  \v u_S^{hi} =0$ in this
+ approximation.
+ For small effective vertical decay scale of the tail contribution or large
+ vertical levl thickness, this approximation
+ gets worse.
+The frequency integral in \eq{eq:ushi} can in fact be carried out
+exactly, retaining the full depth dependence of the exponential. With
+$\sigma_c = 2\pi \nu_c$ the result is
+%
+\begin{equation}
+  u_S^{hi}(z)
+  = \frac{2}{g}\, \nu_c \int_0^{2\pi}\! \mathbf{s}\,E(\nu_c,\theta)\,
+    \sigma_c^{3}\left[\,
+      e^{2z\sigma_c^{2}/g}
+      - \sigma_c\sqrt{-\frac{2\pi z}{g}}\;
+        \erfc\!\left(\sigma_c\sqrt{-\frac{2z}{g}}\right)
+    \right] d\theta ,
+  \label{eq:ushi-exact}
+\end{equation}
+%
+valid for $z\le 0$. The approximation \eq{eq:ushi} is recovered in the
+near-surface limit $\sigma_c^{2}|z|/g \ll 1$, where the $\erfc$ term
+vanishes and $e^{2z\sigma_c^{2}/g}\to 1$, leaving the bracket equal to
+$\sigma_c^{3}$ and hence the prefactor $\frac{2}{g}\nu_c\,\sigma_c^{3}$ of
+\eq{eq:ushi}. Note that WAM (cycle 7) uses the approximated version;
+the difference grows with the ratio of the uppermost level thickness to the
+vertical decay scale of the tail.
+ 
+\ifdetail
+ 
+%
+Starting from the high-frequency tail of \eq{eq:ushi} with the Phillips
+form $E_{hi}(f)=E(\nu_c,\theta)\,\nu_c^{5}\nu^{-5}$, the per-direction frequency
+integral to evaluate is
+%
+\beq
+  I(z) \;=\; \int_{\nu_c}^{\infty}\sigma^{3}\,
+              e^{2z\sigma^{2}/g}\,\nu_c^{5}\,\nu^{-5}\,d\nu ,
+  \qquad \sigma = 2\pi \nu .
+\eeq
+%
+Substituting $\sigma^{3}=(2\pi)^{3}\nu^{3}$ and writing
+$b \equiv 8\pi^{2}z/g \le 0$ (since $z\le 0$, so $e^{b\nu^{2}}$ decays),
+%
+\beq
+  I(z) \;=\; (2\pi)^{3} \nu_c^{5}\int_{\nu_c}^{\infty} \nu^{-2}\,e^{b \nu^{2}}\,d\nu .
+\eeq
+%
+The remaining integral is evaluated by parts, differentiating $e^{b\nu^2}$
+and integrating $\nu^{-2}$:
+%
+\beq
+  \int_{\nu_c}^{\infty} \nu^{-2} e^{b \nu^{2}}\,d\nu
+  = \Bigl[-\nu^{-1} e^{b \nu^{2}}\Bigr]_{\nu_c}^{\infty}
+    + 2b\int_{\nu_c}^{\infty} e^{b \nu^{2}}\,d\nu
+  = \frac{e^{b \nu_c^{2}}}{\nu_c}
+    - \sqrt{-\pi b}\;\erfc\!\left(\nu_c\sqrt{-b}\right),
+\eeq
+%
+where the boundary term at infinity vanishes ($b<0$) and the Gaussian
+integral gives
+$\int_{\nu_c}^{\infty} e^{b \nu^{2}}\,d\nu
+   = \frac{1}{2}\sqrt{-\pi/b}\,\erfc(\nu_c\sqrt{-b})$.
+Hence
+%
+\beq
+  I(z) = (2\pi)^{3} \nu_c^{5}
+         \left[\frac{e^{b \nu_c^{2}}}{\nu_c}
+               - \sqrt{-\pi b}\;\erfc\!\left(\nu_c\sqrt{-b}\right)\right].
+\eeq
+%
+Re-expressing in terms of $\sigma_c = 2\pi \nu_c$ using
+$b \nu_c^{2} = 2z\sigma_c^{2}/g$,
+$\;\nu_c\sqrt{-b} = \sigma_c\sqrt{-2z/g}\,$, and
+$\;(2\pi)^{3}\nu_c^{5}\sqrt{-\pi b}
+   = \sigma_c^{3}\nu_c\cdot\sigma_c\sqrt{-2\pi z/g}\,$ gives
+%
+\beq
+  I(z) = \sigma_c^{3} \nu_c
+         \left[\,e^{2z\sigma_c^{2}/g}
+               - \sigma_c\sqrt{-\frac{2\pi z}{g}}\;
+                 \erfc\!\left(\sigma_c\sqrt{-\frac{2z}{g}}\right)\right].
+\eeq
+%
+Inserting $I(z)$ back, together with the prefactor $2/g$ and the angular
+integral $\int_0^{2\pi}\mathbf{s}\,E(\nu_c,\theta)\,d\theta$, yields
+\eq{eq:ushi-exact}. As $z\to 0^{-}$ the exponential tends to unity and
+the $\erfc$ argument to zero with its $\sqrt{-z}$ prefactor, so
+$I\to\sigma_c^{3}\nu_c$, recovering \eq{eq:ushi}.
+ \fi
+ 
+\subsection*{Wave stress}
+
+The stress force in the ocean is given, with the dissipation energy source
+$\dot E_{out} = \gamma_{out} E$ in $(\theta,\nu)$ coordinates, by
+\beq \label{eq:dztau}
+ \p_z \v \tau %= - \int Q \v k S_{out} d \v k 
+ =  - (2 /g) \int_0^\infty  e^{2kz}  \sigma^3 \int_0^{2 \pi}  \v s  \dot E_{out}  d \theta d\nu 
+  \eeq
+The stress itself is 
+\beq \label{eq:tauo}
+ \v \tau_o = %- \int  \v k S_{out} d \v k = 
+  -   \int_0^\infty\sigma   \int_0^{2 \pi}     \v s \dot E_{out}  d \theta d\nu
+   \eeq 
+The contribution  by the high-frequency tail assuming the WAMDI dissipation scale is
+\beq \label{eq:dztau-hi}
+ \p_z \v \tau^{hi}  
+ %=  - (2 /g) \int_{\nu_c}^\infty  e^{2kz}  \sigma^3  \gamma_{out} \int_0^{2 \pi}  \v s  E  d \theta d\nu \\ 
+ %=  2 \nu_c^5  \beta_{o} g^{-5}  \bar E^2 \bar \sigma^7 (2 \pi)^5 \int_{\nu_c}^\infty  e^{2kz}   d\nu
+% \int_0^{2 \pi}  \v s   E(\nu_c,\theta)   d \theta \\
+ =  2 \nu_c^5  \beta_{o} g^{-5}  \bar E^2 \bar \sigma^7 (2 \pi)^5 \int_{\nu_c}^\infty  e^{ (8 \pi^2/g) z  \,  \nu^2 }   d\nu
+ \int_0^{2 \pi}  \v s   E(\nu_c,\theta)   d \theta 
+  \eeq
+   with $E_{hi}(\nu)  =   E(\nu_c,\theta) \nu_c^5 \nu^{-5}$ and 
+   $\gamma_{out} = -  \beta_{o} g^{-4}  \bar E^2 \bar \sigma^7 \sigma^2 $ and the finite integral
+   \beq \label{eq:erfint}
+    \int_a^{\infty \:}e^{-bx^2}dx = \frac{ \sqrt{\pi }- \sqrt{\pi }\mbox{erf}\left(a\sqrt{b}\right)} { 2\sqrt{b}}
+   \eeq
+  For the stress we find for the high-frequency tail 
+   \beq \label{eq:tauo-hi}
+ \v \tau_o^{hi}  =    
+ %  -   \nu_c^5 \int_{\nu_c}^\infty\sigma  \gamma_{out}  \nu^{-5} d\nu \int_0^{2 \pi}     \v s  E(\nu_c,\theta)d \theta 
+ %\\ = 
+  (2 \pi)^3 \nu_c^4 \beta_{o} g^{-4}  \bar E^2 \bar \sigma^7 
+ \int_0^{2 \pi}     \v s   E(\nu_c,\theta)  d \theta 
+   \eeq 
+
+An alternative formulation of the tail stress follows from the equilibrium
+assumption that underlies the imposed $\nu^{-5}$ shape itself: for $\nu > \nu_c$
+the sources balance, $\dot E_{in} + \dot E_{nl} + \dot E_{out} = 0$, so the
+flux to the ocean, $-\dot E_{out}$, can be evaluated as
+$\dot E_{in} + \dot E_{nl}$ instead of extending the WAMDI dissipation scale
+(which is calibrated on the resolved spectrum and underestimates the
+dissipation that maintains the equilibrium range). The input part is
+\beq \label{eq:tauo-hi-in}
+ \v \tau_o^{hi,in} = \int_{\nu_c}^\infty \sigma\, \gamma_{in}\, \nu_c^5 \nu^{-5}
+   \, d\nu \int_0^{2\pi} \v s\, E(\nu_c,\theta)\, d\theta
+\eeq
+with $\gamma_{in}$ from \eq{eq:gammas}. Writing $28 (u^\star/c)
+\cos(\theta - \theta^*) = a \nu$ with $a(\theta) = 28 u^\star 2\pi
+\cos(\theta-\theta^*)/g$, the input is active only above
+$\nu_1 = \max(\nu_c, 1/a)$, and the frequency integral is elementary,
+$\int_{\nu_1}^\infty (a \nu^{-2} - \nu^{-3})\, d\nu = a/\nu_1 - 1/(2 \nu_1^2)$, giving
+per direction
+\beq \label{eq:tauo-hi-in2}
+ \v \tau_o^{hi,in} = \frac{\rho_a}{\rho_o} \frac{(2\pi)^2 \nu_c^3}{4}
+ \int_0^{2\pi} \v s\, E(\nu_c,\theta)
+ \left\{ \begin{array}{ll} a \nu_c - \frac{1}{2}, & a \nu_c \ge 1\\[2pt]
+ \frac{1}{2}\, (a \nu_c)^2, & 0 < a \nu_c < 1 \end{array} \right\}  d\theta
+\eeq
+(continuous at $a \nu_c = 1$; zero for $\cos(\theta-\theta^*) \le 0$). The
+integrand decays like $\nu^{-2}$, i.e.\ the integral converges exactly as
+benignly as the WAMDI form in \eq{eq:tauo-hi}; note that the corresponding
+integral with the dissipation of Janssen (1994; see also Komen et al.\ 1994,
+and the ECMWF IFS documentation, Part VII) diverges strongly because of its
+$(k/\bar k)^4$ term -- its $(k/\bar k)^2$ term behaves like the WAMDI form --
+which is the reason the WAMDI scale is used in \eq{eq:tauo-hi}. The nonlinear part uses the conservation of the exact
+transfer over the full spectrum, $\int_0^\infty \sigma \int \v s\,
+\dot E_{nl}\, d\theta\, d\nu = 0$, so that
+\beq \label{eq:tauo-hi-nl}
+ \v \tau_o^{hi,nl} = \int_{\nu_c}^\infty \sigma \int_0^{2\pi} \v s\,
+ \dot E_{nl}\, d\theta\, d\nu
+ = - \int_0^{\nu_c} \sigma \int_0^{2\pi} \v s\, \dot E_{nl}\, d\theta\, d\nu
+\eeq
+i.e.\ the cascade flux into the tail equals minus the resolved-range
+integral of the computed nonlinear transfer (the ``cascade credit''). For
+completeness, the resulting total stress on the ocean in this
+formulation is
+\beq \label{eq:tauo-in-tot}
+ \v \tau_o = - \int_0^{\nu_c} \sigma \int_0^{2\pi} \v s
+ \left( \dot E_{out} + \dot E_{nl} \right) d\theta\, d\nu
+ \; + \; \v \tau_o^{hi,in}
+\eeq
+where the first term is the resolved dissipation of \eq{eq:tauo} restricted
+to the prognostic range with the cascade credit \eq{eq:tauo-hi-nl} folded
+in, and the second term is the analytic tail input \eq{eq:tauo-hi-in2}.
+
+The depth-distributed version (the ``stress work'' of \eq{eq:dztau}) follows
+with the same replacement of the tail rate. With
+$-\dot E_{out} = \gamma_{in} E(\nu_c,\theta) \nu_c^5 \nu^{-5}$ above $\nu_c$ and
+$\sigma^3 \gamma_{in} = \frac{\rho_a}{\rho_o} \frac{(2\pi)^4}{4}
+\nu^4 (a \nu - 1)$,
+\beq \label{eq:dztau-hi-in}
+ \p_z \v \tau^{hi,in} = \frac{2}{g} \frac{\rho_a}{\rho_o}
+ \frac{(2\pi)^4}{4} \nu_c^5 \int_0^{2\pi} \v s\, E(\nu_c,\theta)
+ \int_{\nu_1}^\infty e^{ (8\pi^2/g) z\, \nu^2 }
+ \left( a - \nu^{-1} \right) d\nu\, d\theta
+\eeq
+with $\nu_1 = \max(\nu_c, 1/a)$ as before. The $a$--term is the finite integral
+\eq{eq:erfint}; the second term requires the companion
+\beq \label{eq:e1int}
+ \int_{a_0}^{\infty} x^{-1} e^{-b x^2} dx = \frac{1}{2} E_1( a_0^2\, b )
+\eeq
+with the exponential integral $E_1$. The vertical integral of
+\eq{eq:dztau-hi-in} recovers \eq{eq:tauo-hi-in2} exactly. The cascade
+contribution \eq{eq:tauo-hi-nl} is deposited at the surface: it is
+dissipated by tail waves with $\nu \ge \nu_c$, whose deposition scales
+$g/2\sigma^2$ are centimetres, far below any ocean grid spacing. Both
+formulations are implemented, selected by the switch \verb|tail_flux|
+$\in$ \{\verb|'wamdi'|, \verb|'input'|\}; the discrete treatment, including
+the diagnostic bins inside the grid, is described below.
+
+\subsubsection*{Discretisation of the wave--ocean coupling and the energy exchange}
+
+All three coupling quantities of \eq{eq_Q} -- the Stokes velocity $\v u_S$,
+the stress force $\p_z \v \tau$ and the Doppler velocity $\v U$ -- involve the
+same vertical kernel $Q(k,z) = 2 k e^{2kz}$ with $\int_{-\infty}^0 Q \, dz =
+1$: $\v u_S$ and $\p_z \v \tau$ assign spectral quantities to a depth profile,
+while $\v U$ projects the Lagrangian velocity back onto the spectral grid. The
+exchange term $C$ of \eq{eq_C} closes because $\v U$ is the adjoint of the
+profile assignment, i.e.\ because the same $Q$ appears on both sides of the
+depth integral. The discretisation preserves this structure: one common
+discrete kernel is used in all three methods of
+\verb|./pyOM3/wim/interface.py| (\verb|calc_stokes|, \verb|calc_stress_work|,
+\verb|calc_doppler_vel|), given by the cell integral of $Q$ over each ocean
+cell of thickness $\Delta z$ with centres $z_k$ and faces $z_{k \pm 1/2} = z_k
+\pm \Delta z/2$ (uppermost face at $z=0$),
+\beq \label{eq:Qdz}
+ \bar Q_k \Delta z = \int_{z_{k-1/2}}^{z_{k+1/2}} Q \, dz 
+ = e^{2 k z_{k+1/2}} - e^{2 k z_{k-1/2}} 
+\eeq
+in place of the point value $Q(z_k) \Delta z$. The cell integral is essential:
+the decay scale $g/(2\sigma^2)$ of the kernel is of the order of centimetres
+for the high frequencies of the prognostic range and for the tail, far below
+any ocean level thickness, so that point sampling loses a large part of the
+coupling amplitude (about half of the stress force for $\Delta z = 1 \, m$ and
+a developing wind sea). The weights \eq{eq:Qdz} telescope over the column,
+$\sum_k \bar Q_k \Delta z = 1 - e^{-2 k D}$ for column depth $D$, with three
+consequences that hold exactly for any $\Delta z$: the column-integrated
+stress force equals the surface stress $\v \tau_o$ of \eq{eq:tauo}, the
+discrete Stokes transport $\sum_k \v u_S(z_k) \Delta z$ equals its analytic
+value, and a depth-independent (barotropic) current is projected onto the
+Doppler velocity without attenuation, $\v U = \v u_L (1 - e^{-2kD})$. The
+frequency derivative $\p_\nu \v U$ entering the radial refraction term
+\eq{eq:xdot_disc} is taken as the analytic derivative of the discrete kernel,
+$\p_\nu (\bar Q_k \Delta z) = (2k/\nu) \, 2 ( z_{k+1/2} e^{2 k z_{k+1/2}} -
+z_{k-1/2} e^{2 k z_{k-1/2}} )$, so that refraction sees the same Doppler
+projection as the advection.
+
+For the high-frequency tails the same principle is applied to the exact tail
+profiles. The tail of the stress force \eq{eq:dztau-hi} contains the frequency
+integral $W(t) = \int_{\nu_c}^\infty e^{-b t \nu^2} d\nu$ with $t = -z \ge 0$ and $b
+= 8 \pi^2/g$, evaluated with \eq{eq:erfint}; its antiderivative is
+\beq \label{eq:tailH}
+ H(t) = \int_0^t W(t') dt' = \frac{\sqrt{\pi}}{b} \left[ \sqrt{b t} \, 
+ \mbox{erfc} \left( \nu_c \sqrt{b t} \right) 
+ + \frac{1 - e^{-\nu_c^2 b t}}{\nu_c \sqrt{\pi}} \right]
+\eeq
+and each cell receives $\left( H(-z_{k-1/2}) - H(-z_{k+1/2}) \right)/\Delta z$
+in place of the point value. Since $H(\infty) = 1/(b \nu_c)$, the column sum of
+the tail force equals its exact depth integral $\v \tau_o^{hi}$ of
+\eq{eq:tauo-hi}, using $2 (2 \pi)^5 \nu_c^5 g^{-5} H(\infty) = (2 \pi)^3 \nu_c^4
+g^{-4}$; the prefactor $(2 \pi)^5$ in \eq{eq:dztau-hi} is essential for this
+consistency. The Stokes tail \eq{eq:ushi-exact} is treated the same way: with
+$a = 2 \sigma_c^2/g$ its depth profile $B(t) = \nu_c [ e^{-a t} - \sqrt{\pi a t}
+\, \mbox{erfc}(\sqrt{a t}) ]$ has the antiderivative ($S = \sqrt{t}$)
+\beq \label{eq:Istokes}
+ I(t) = \nu_c \left[ \frac{1 - e^{-a t}}{a} - 2 \sqrt{\pi a} \left( 
+ \frac{S^3}{3} \mbox{erfc}(\sqrt{a} S) 
+ + \frac{1 - (a S^2 + 1) e^{-a S^2}}{3 \sqrt{\pi} \, a^{3/2}} \right) \right]
+\eeq
+with $I(\infty) = \nu_c/(3 a)$, so that the discrete tail transport equals the
+exact value $(2\pi/3) \nu_c^2 \int \v s E(\nu_c,\theta) d\theta$. In tests the
+column sums reproduce $\v \tau_o$ and the
+Stokes transport to machine precision; for a shallow column below a
+developed wind sea, however, a substantial part of the retained fraction $1 - e^{-2kD}$
+of the wave momentum flux can be deposited below the column bottom. For a
+closed momentum budget the attribute \verb|closed_bottom| extends the
+integration of the bottom cell to $z \to -\infty$, in the shared kernel
+($e^{2 k z_{bot}} \to 0$ in \eq{eq:Qdz}) as well as in both tail
+antiderivatives ($H, I \to H(\infty), I(\infty)$), so that $\sum_k \bar Q_k
+\Delta z = 1$ exactly: the bottom cell absorbs the deep part of all coupling
+profiles, no wave momentum is lost, and the barotropic Doppler projection
+becomes exact, $\v U = \v u_L$, at all frequencies (with the open bottom the
+low-frequency bins of a shallow column see an almost vanishing Doppler
+current). Since the kernel remains shared, the adjoint identity
+\eq{eq:Cdisc} below is unaffected. The closure amounts to assuming $\v u_L$
+constant below the column floor and is the recommended setting for shallow
+test columns; for deep columns ($2 k D \gg 1$) it makes no difference.
+
+The energy exchanged between ocean and waves is controlled by the same
+kernel. On the ocean side, with the adjoint pair \eq{eq:Qdz} the discrete
+identity
+\beq \label{eq:Cdisc}
+ \sum_k \v u^L_h(z_k) \cdot \p_t \v u_S(z_k) \, \Delta z 
+ = \int \v U \cdot \v k \; \p_t A \; d \v k
+\eeq
+holds exactly (to machine precision) for any spectral tendency $\p_t A$ and
+any $\Delta z$, over the prognostic frequency range (the tails are diagnostic
+and remain outside this closure). The ocean therefore receives, per coupling
+step, exactly the energy $\int \v U \cdot \v k \, \p_t A \, d \v k$
+corresponding to the actual discrete evolution of the wave field, and the
+handoff itself introduces no discretisation error.
+
+On the wave side, the counterpart of this energy must be extracted from (or
+added to) the intrinsic wave energy $\int \sigma A \, d \v k$ by the
+propagation operator. For steady $\v U$ the rays conserve $\Omega = \sigma +
+\v U \cdot \v k$, so the continuous propagation operator satisfies $\int
+\Omega \, \p_t A |_{prop} \, d \v k = 0$ and the intrinsic energy change $\int
+\sigma \, \p_t A$ balances the ocean gain $-\int \v U \cdot \v k \, \p_t A$
+identically. Discretely, the flux-form advection conserves the action $\int A
+\, d\v k$ to machine precision, but not $\int \Omega A \, d \v k$: the
+nonlinear Superbee limiter leaves a residual (the frequency advection velocity
+$\dot \nu$ is already located on the $u$-centred frequency faces, so face
+staggering is not the cause). In tests with a wave packet refracted across a jet
+(moderate Doppler shift, $\max |\v U \cdot \v k|/\sigma \approx 0.3$) this
+$\Omega$-conservation defect amounts to about $1 \, \%$ of the gross local
+transfer rate $\int |\dot \sigma A| \, d\v k$ for the Superbee scheme,
+consistent with the $\mathcal{O}(0.5 \, \%)$ energy overshoot observed for such a
+packet. First-order upwind advection is far worse (about
+$12 \, \%$, since its frequency diffusion moves action across the $\sigma$
+gradient), an unlimited second-order flux reduces the defect to about $0.2 \,
+\%$. The $x$-sweep is exactly energy-neutral for a zonal jet; the defect
+resides in the $y$, $\nu$ and $\theta$ sweeps.
+
+The residual is removed exactly by a conservative energy fixer
+(attribute \verb|energy_consistent| in \verb|propagation.py|). Writing the
+discrete advection in flux form per phase-space grid cell $i$ as
+$\pt{(A_i \Delta_i)} = -\sum_{faces} \delta F_i$, with the phase-space
+volume $\Delta_i$ of the cell and $F$ the total (limited) action transport
+through a cell face in $\v x$, $\nu$ or $\theta$, the transports cancel
+pairwise in the sum over all cells and action is conserved to machine
+precision for any advection scheme. Multiplying by $\Omega_i$, summing over
+all grid cells and shifting the sums equivalent to a discrete partial
+integration yields
+\beq \label{eq:edefect}
+ \pt{} \sum_i \Omega_i A_i \Delta_i = \sum_i \sum_{faces} F_i \, \delta \Omega_i
+ \equiv D
+\eeq
+with the forward difference $\delta \Omega$ of $\Omega$ across each cell
+face. Boundary terms vanish for closed and periodic boundaries (not for
+reflective ones, for which no correction is made). The possible leakage $D$
+is split into contributions $\sum_{j,k} D_{j,k} = D$ per water column at
+discrete position $(j,k)$, with the shared horizontal face terms split
+half-half between neighbouring columns, and each $D_{j,k}$ is cancelled by a
+small corrective action transport $\tilde F_m$ across the frequency faces of
+that column,
+\beq \label{eq:efix}
+ \tilde F_m = \lambda \, \bar A_m \, \delta_\nu \Omega_m ~~,~~
+ \lambda(\v x) = - \frac{ D_{j,k} }
+                       { \sum_m \bar A_m \, (\delta_\nu \Omega_m)^2 }
+\eeq
+with $m$ running over all $\nu$ faces and directions $\theta$ at position
+$(j,k)$, and the weight $\bar A_m$ given by the face average of the action
+content of the two adjacent cells. Being a transport, $\tilde F$ leaves the
+action conservation untouched, but by the same partial integration it changes
+the energy by $\sum_m \tilde F_m \, \delta_\nu \Omega_m = -D_{j,k}$. The
+frequency direction is chosen for the corrective flux since it is the only
+one in which $\delta \Omega$ does not vanish without currents
+($\delta_\nu \Omega \approx \delta_\nu \sigma > 0$ for small Doppler
+shift), and it is where the leakage is generated by action crossing the
+frequency gradient of $\Omega$. The factor $\bar A_m$ ties the correction to
+the level of action, so that it acts as a small correction of the frequency
+propagation velocity rather than as a source term and positivity is not
+threatened, and the factor $\delta_\nu \Omega_m$ makes the denominator
+sign-definite, so that $\lambda$ exists whenever action is present at that
+position. Minimising the action-weighted amplitude
+$\sum_m \tilde{F}_m^2 / \bar A_m$ subject to this constraint yields the same
+form by the standard Lagrange-multiplier condition: among all conservative
+frequency-flux corrections that restore the energy, \eq{eq:efix} is the
+smallest one in the action-weighted least-squares sense, i.e.\ the correction
+perturbs the solution as little as possible.
+
+The correction is local (one scalar per position $\v x$, no global
+communication) and dormant without currents: for $\v U = 0$ we have
+$\Omega = \sigma$, no frequency transports exist, and $D_{j,k} = 0$ so that
+$\lambda = 0$. In tests the correction amounts to about $1 \, \%$ of the
+frequency transports, the tendency-level defect drops from $0.9 \, \%$ of the
+gross transfer to machine precision, and in long integrations of a wave
+packet through a jet the energy $\int \Omega A \, d \v k$ is conserved
+exactly (Adams--Bashforth time stepping preserves this, since each stored
+tendency is corrected individually and $\Omega$ is constant while $\v U$ is
+frozen between coupling updates), whereas without the fixer the spurious
+drift amounts to roughly half of the genuine exchange. The transfer from
+ocean to waves is thus exact on both sides; a structurally energy-conserving
+advection would achieve the same without an a posteriori correction and
+remains an option for future work.
+   
+ \subsection*{The coupling to the ocean}
+ 
+ 
+ Stokes velocity, wave stress, and wave stress force are calculated in \verb|./pyOM3/wim/interface.py|.
+ The methods there may be called and results passed to the ocean model.
+ The velocity variable of the coupled ocean model is interpreted as the
+ three-dimensional Lagrangian mean velocity $\v u_L = \v u + \v u_S$, with the
+ Eulerian mean velocity $\v u$ and the Stokes velocity $\v u_S$, which is the most
+ natural choice for energetic consistency (it also follows the example of interpreting
+ the model's velocity as the isopycnal thickness weighted velocity to account for the
+ effect of meso-scale eddies). Starting from the Craik--Leibovich equations of motion,
+ the momentum equation for $\v u_L$ becomes
+\beq \label{eqM}
+\p_t \v u_L  -  \v u_L \times \vn \times (\v u_L-\v u_S)
+ + f \v z \times \v u_L  = - \vn \pi + \p_t \v u_S + (\p_z \v  \tau,0)
+\eeq
+with the three-dimensional operator $\vn = (\vn_{\v x}, \p_z)$ and a gradient force
+$\vn \pi$ collecting the pressure gradient and wave-driven gradient components.
+The ocean model thus receives the wave-driven force $\p_t \v u_S$, the vortex force
+\beq \label{eq:vf_cont0}
+\v F = - \v u_L \times \vn \times \v u_S
+\eeq
+with $\v u_L \cdot \v F = 0$, and the wave momentum flux (stress), either as the
+surface stress $\v \tau_o$ into the uppermost grid cell or as the interior stress
+force $\p_z \v \tau$; the tracers are advected by $\v u_L$.
+Note that the Coriolis term acts on the full $\v u_L$: with $w = 0$, identical
+results are obtained using $\v u$ as model velocity and adding the Stokes--Coriolis
+force $-f \v z \times \v u_S$ instead of $\p_t \v u_S$, but with $w \neq 0$ the
+Lagrangian formulation is required to stay energetically consistent. The scalar
+product of \eq{eqM} with $\v u_L$ contains no transfer terms related to the vortex
+force and the Coriolis--Stokes force; the direct transfer to or from the waves is by
+$\v u_L \cdot \p_t \v u_S$ and by the stress work $\v u_h^L \cdot \p_z \v \tau$,
+which together form the exchange $C$ of \eq{eq_C}.
+
+\subsubsection*{Discrete vortex force for horizontally uniform $\v u_S$ (nh\_simple)}
+
+For a horizontally uniform Stokes velocity $\v u_S = (u_S(z),v_S(z),0)$, as used in
+the non-hydrostatic model nh\_simple, the wave-driven force of \eq{eq:vf_cont0} becomes
+\beq
+\v F =  - \v u_L \times \vn \times \v u_S =
+ \Vec{ \; w \, \pz{u_S} \\  \;w \, \pz{v_S} \\ -  u \,\pz{u_S} - v\, \pz{v_S} }
+ ~~,~~\v u_L \cdot\v F = 0
+ \label{eq:vf_cont}
+\eeq
+writing $\v u_L = (u,v,w)$ in this section for brevity.
+On the C-grid, $u$, $v$ and $w$ are staggered at the cell faces
+$(i+\frac{1}{2},j,k)$, $(i,j+\frac{1}{2},k)$ and $(i,j,k+\frac{1}{2})$,
+and the vertical Stokes shear is placed on the $w$-levels,
+\beq
+S^u_{k+\frac{1}{2}} = \frac{ u_{S,k+1}-u_{S,k} }{\Delta z} ~~,~~
+S^v_{k+\frac{1}{2}} = \frac{ v_{S,k+1}-v_{S,k} }{\Delta z}
+\eeq
+with $S^u = S^v = 0$ at the rigid lid and the flat bottom.
+Introducing the two-point averages
+$\Bar{ \phi }^{x}_{i+\frac{1}{2}} = ( \phi_{i} + \phi_{i+1} )/2$
+and analogous in $y$ and $z$, the discrete force $\v F=(F^u,F^v,F^w)$ is
+\beq
+F^u_{i+\frac{1}{2},j,k} = \Bar{ \; \Bar{w}^{x} \, S^u \; }^{z} ~~,~~
+F^v_{i,j+\frac{1}{2},k} = \Bar{ \; \Bar{w}^{y} \, S^v \; }^{z}
+~~,~~
+F^w_{i,j,k+\frac{1}{2}} =
+ - \Bar{ \; \Bar{u}^{x} \; }^{z} S^u  - \Bar{ \; \Bar{v}^{y} \; }^{z} S^v
+\label{eq:vf_disc}
+\eeq
+i.e.\ the products $\Bar{w}^{x} S^u$ are formed on the cell edges
+$(i+\frac{1}{2},j,k+\frac{1}{2})$ and averaged back to the $u$-points,
+while for $F^w$ the horizontal velocities are averaged first to the cell
+centers and then to the $w$-levels where the shear is located.
+The averaging operators in \eq{eq:vf_disc} are pairwise transposed:
+each average that moves $w$ towards $u$ in $F^u$ is mirrored by an average
+moving $u$ towards $w$ in $F^w$. With the summation-by-parts identity for
+the two-point average
+\beq
+\sum_i \psi_{i+\frac{1}{2}} \, \Bar{\phi}^{x}_{i+\frac{1}{2}}
+= \sum_i \phi_{i} \, \Bar{\psi}^{x}_{i}
+\label{eq:sbp}
+\eeq
+which holds without boundary terms in the periodic horizontal directions,
+and in the vertical because the boundary contributions carry the factor
+$S^u = S^v = 0$ at the lid and bottom faces, the total work of the discrete
+force vanishes exactly,
+\beq
+\sum_{i,j,k} \lk u F^u + v F^v + w F^w \rk = 0
+\eeq
+for arbitrary $\v u_L$ and arbitrary profiles $u_S(z)$, $v_S(z)$; this has
+been verified numerically to machine precision for random fields. Note that
+the work vanishes only in the sum.
+
+The vanishing work is a property of the spatial operator and does not by
+itself guarantee numerical stability. Since $\v F$ is perpendicular to
+$\v u_L$, it turns the velocity vector without changing its magnitude,
+i.e.\ it acts locally as a rotation with angular frequency $|\pz{\v u_S}|$,
+analogous to inertial oscillations with frequency $f$. An explicit
+third-order Adams--Bashforth time stepping scheme is stable for such neutral
+oscillations only if the angle covered per time step remains below
+$|\pz{\v u_S}| \Delta t \lesssim 0.72$. Since the Stokes shear is largest in
+the uppermost grid cell and grows with the developing sea, this number
+should be monitored during integrations together with the advective Courant
+numbers.
+
+\subsubsection*{Discrete vortex force in the hydrostatic case (pe\_simple)}
+
+In the hydrostatic model pe\_simple the Stokes velocity $\v u_S = (u_S,v_S,0)$
+varies in all three dimensions, and the force \eq{eq:vf_cont0} is truncated to
+\beq
+\v F = \Vec{ - v \, \zeta_S \\ \; u \, \zeta_S }
+~~,~~ \zeta_S = \px{v_S} - \py{u_S}
+~~,~~ \v u_h^L \cdot \v F = 0
+\label{eq:vf_pe}
+\eeq
+with $\v u_h^L = (u,v)$ in this section for brevity.
+The Stokes-shear terms $w \pz{u_S}$ and $w \pz{v_S}$, part of the first and
+second component of the total force $-\v u_L \times \vn \times \v u_S$,
+respectively, are deliberately omitted. This is because the scalar product
+of these terms with $\v u_h^L$ is only cancelled by $w$ times the vertical
+force component $-u \pz{u_S} - v \pz{v_S}$, which the hydrostatic model does
+not carry. Retained alone, the Stokes-shear terms would thus perform the
+uncancelled work $w \lk u \pz{u_S} + v \pz{v_S} \rk$ on $\v u_L$.
+The omitted terms are the so-called Stokes shear force of Suzuki and
+Fox-Kemper (2016). Their neglect is also in agreement with quasi-geostrophic
+scaling where the Rossby number $Ro$ becomes small: within the Stokes layer
+of depth $h_S$ the vertical velocity of balanced flow is limited by the
+surface kinematic condition and its $O(Ro)$ divergence to
+$|w| \lesssim Ro \, U h_S/L$, such that
+$|w \pz{u_S}| \sim Ro \, U U_S / L$ independent of $h_S$ and smaller by
+$O(Ro)$ than the retained vortex force.
+
+On the C-grid, $u_S$ and $v_S$ are given at the cell centers and averaged
+to the $u$- and $v$-points, and the Stokes vorticity is formed at the cell
+corners $(i+\frac{1}{2},j+\frac{1}{2})$ by centered differences,
+\beq
+\zeta_S = \frac{ \Bar{v_S}^{y}_{i+1} - \Bar{v_S}^{y}_{i} }{\Delta x}
+        - \frac{ \Bar{u_S}^{x}_{j+1} - \Bar{u_S}^{x}_{j} }{\Delta y}
+\eeq
+The products are formed at the corners first,
+and then averaged back to the velocity points,
+\beq
+F^u_{i+\frac{1}{2},j} = - \Bar{\zeta_S \, \Bar{v}^{x} }^{y} ~~,~~
+F^v_{i,j+\frac{1}{2}} = \; \Bar{ \zeta_S \, \Bar{u}^{y}}^{x}
+\label{eq:vf_pe_disc}
+\eeq
+with $\v F = (F^u,F^v)$.
+Applying the summation-by-parts identity \eq{eq:sbp} once in $y$ to the
+first and once in $x$ to the second term of the work moves both averages
+onto the velocities, and the two contributions meet at the corners,
+\beq
+\sum u F^u + \sum v F^v
+= \sum_{\mathrm{corners}} \zeta_S
+ \lk - \Bar{v}^{x} \, \Bar{u}^{y} + \Bar{u}^{y} \, \Bar{v}^{x} \rk = 0
+\eeq
+i.e.\ the cancellation is not only global as in nh\_simple but holds
+corner by corner. The boundary terms of \eq{eq:sbp} vanish because the
+velocities vanish on the channel walls and on land, so the identity holds
+in the presence of topography; this has been verified to machine precision
+for random fields on a masked channel.
+
+\subsubsection*{Discrete aspects of the momentum coupling}
+
+The discretisation of the remaining coupling terms in the ocean model
+(C-grid) is chosen such that the energetic properties of the continuous
+system are preserved where possible, and monitored where not.
+
+\emph{Stokes--Coriolis force.} Continuously, the combined rotational forces are
+$(f+\zeta)\hat z\times\v u_L$, which does no work against $\v u_L$. For the
+Coriolis part this property carries over exactly to the discrete level if the
+Stokes velocity is first interpolated from T to the U/V points and then passed
+through the \emph{same} discrete Coriolis operator $C$ as the Eulerian
+velocity (the energy-conserving form of the main code, with $f$ evaluated at
+T points inside the adjoint-paired averaging). By linearity the total discrete
+Coriolis force is then $C(\v u_L)$, and the antisymmetry of the operator gives
+$\sum \v u_L\cdot C(\v u_L)=0$ to machine precision for arbitrary $f(y)$. Note
+that adding instead a separate Stokes--Coriolis term with its own (single)
+T-to-U/V averaging leaves an $O(\Delta x^2)$ residual in the $\v u_L$ energy
+budget, since $\v u_S$ then enters the budget once as a T-point field and once
+through a double interpolation; the difference is a commutator between the
+$1$-$2$-$1$ smoothing and $f$.
+
+\emph{Vortex force.} With the discretisations of the previous section the
+$\v u_L$-work of the applied vortex force vanishes exactly (globally in
+nh\_simple, corner by corner in pe\_simple). The coupled driver nevertheless
+computes $\sum \v u_L\cdot \v F$ (volume integrated, with the vortex force
+exactly as applied) every coupling step and stores it in the coupling
+output, so that it can be verified to remain at round-off level.
+
+\emph{Stokes advection of tracers.} The advection of buoyancy by $\v u_S$ is
+added in flux form: $\v u_S$ is averaged from T to the U/V faces, the vertical
+Stokes velocity $w_S$ is diagnosed from the discrete Stokes continuity
+equation integrated upward from the bottom ($w_S(-D)=0$), and the fluxes are
+differenced like the model's own tracer fluxes, with zero buoyancy flux
+through the surface face. This form is exactly conservative (the fluxes
+telescope, so $\int b\,dV$ is preserved to round-off) and
+constancy-preserving in the interior (a constant $b$ yields zero tendency,
+since the diagnosed $w_S$ closes the three-dimensional Stokes divergence
+discretely); both properties were verified to machine precision. In the top
+cell the surface no-flux condition places the convergence of the Stokes
+transport (the Stokes pumping $w_S$ at the surface face) into the cell budget,
+which is the physically correct location: it is compensated by the Eulerian
+anti-Stokes flow driven by the Stokes--Coriolis force. Centered fluxes are
+used; the Stokes Courant number is $O(10^{-3})$, far below the regime where
+flux limiting matters.
+
+\emph{Stress and vertical placement.} The wave stress is kinematic
+(the spectrum is the variance density, so no density factor appears; the
+air--water density ratio enters through the growth rate of the input source
+term) and is applied either to the surface face of the top wet cell
+($\tau/\Delta z$) or depth-distributed with the same cell-integrated vertical
+kernel that underlies the Stokes velocity and the Doppler projection, which
+makes the discrete energy-exchange identity (the $C$-closure of the previous
+section) hold to machine precision. Note that with a top-cell thickness large
+compared to the Stokes decay scale $1/(2k)$, the stored top-cell Stokes
+velocity is a cell average and correspondingly smaller than the surface value;
+resolving the near-surface Stokes shear requires $\Delta z$ of a few metres.
+
+\emph{High-frequency tail fluxes to the ocean (tail\_flux switch).} Above
+the prognostic cutoff $\nu_c$ the spectrum is diagnostic ($E \propto \nu^{-5}$,
+imposed by the tail parameterisation), and its momentum and energy fluxes to
+the ocean must be added analytically to the resolved-range dissipation
+integrals. Two formulations are implemented, selected by the attribute
+\verb|tail_flux|:
+
+(i) \verb|'wamdi'| (default): the WAMDI dissipation rate
+continued over the tail,
+$\int_{\nu_c}^\infty \gamma_{out}\,E_{hi}\, \sigma\, d\nu$ with $\gamma_{out} \propto
+\bar\sigma (\sigma/\bar\sigma)^2 (\bar\alpha/\alpha_{PM})^2$. The integrand
+decays like $\nu^{-2}$ and converges; note that the corresponding integral with
+the dissipation of Janssen (1994) diverges strongly because of its
+$(k/\bar k)^4$ term (its $(k/\bar k)^2$ term behaves like the WAMDI form),
+which is why the WAMDI form is used for this term. However,
+$\gamma_{out}$ is the whitecapping rate calibrated on the resolved spectrum and
+underestimates the dissipation that actually maintains the $\nu^{-5}$
+equilibrium range --- the very reason the tail must be imposed diagnostically
+--- so this form systematically underestimates the tail fluxes (in tests by
+a substantial factor in the momentum flux).
+
+(ii) \verb|'input'|: in the equilibrium range $S_{in} + S_{nl} + S_{out} = 0$
+holds, so the flux to the ocean, $-S_{out}$, equals $S_{in} + S_{nl}$. The
+input part is the analytic integral of the WAMDI growth rate over the tail:
+with $a(\theta) = 28 u_\star 2\pi \cos(\theta-\theta_w)/g$ (the input
+parameter evaluated at $\nu_c$), the input being active only above
+$\nu_1 = 1/a$,
+\beq
+I_\tau(\theta) = \frac{\epsilon}{4} (2\pi)^2 \nu_c^3\, E_c(\theta)
+\left\{ \begin{array}{ll} a \nu_c - \frac{1}{2}, & a \nu_c \ge 1\\[2pt]
+\frac{1}{2} (a \nu_c)^2, & 0 < a \nu_c < 1 \end{array} \right.
+\qquad
+I_\Phi(\theta) = \frac{\epsilon}{4} (2\pi) \nu_c^2 g\, E_c(\theta)
+\left\{ \begin{array}{ll} \frac{a \nu_c}{2} - \frac{1}{3}, & a \nu_c \ge 1\\[2pt]
+\frac{1}{6} (a \nu_c)^3, & 0 < a \nu_c < 1 \end{array} \right.
+\eeq
+($\epsilon = \rho_a/\rho_w$, $E_c(\theta) = E(\nu_c,\theta)$; continuous at
+$a \nu_c = 1$; zero upwind; the integrands again decay like $\nu^{-2}$). The same booking applies to the
+\emph{in-grid} diagnostic bins (between the per-column prognostic cut-off
+$m_0$ and the last grid frequency, where the $\nu^{-5}$ shape is imposed):
+there the flux is evaluated discretely as $\gamma_{in} E$ with the actual
+imposed spectrum, while the prognostic bins keep the true $\gamma_{out} E$
+dissipation --- booking the in-grid diagnostic range at $\gamma_{out}$ would be
+inconsistent with the equilibrium assertion that the imposed tail itself
+encodes (and underestimates the flux substantially: the in-grid diagnostic
+range can carry several times the beyond-grid tail). The nonlinear part uses the
+conservation of the exact transfer over the full spectrum,
+$\int_{tail} S_{nl}\, d\Omega = -\int_{resolved} S_{nl}\, d\Omega$: the
+\emph{prognostic}-range integrals of the stored $S_{nl}$ (momentum weight
+$\sigma$, energy weight $g$) are credited to the ocean fluxes (the ``cascade
+credit''; the in-grid diagnostic $S_{nl}$ is part of the equilibrium booking
+there, and the algebra of the two ranges collapses exactly to the
+prognostic-masked integral).
+On the truncated grid the discrete DIA is not exactly conservative at the
+cutoff; the residual is deliberately included in the credit --- whatever the
+discrete operator removes from the resolved range is deposited in the tail.
+For the depth-distributed stress (method \verb|calc_stress_work|, as opposed
+to the surface stress of \verb|calc_stress|) the tail is
+deposited with its exact profile: with $b = 8\pi^2/g$, $t=-z$,
+$\beta_L = b\,t \nu_L^2$, the cumulative-from-surface tail stress is
+$V(t) = C_0 [\, a/\nu_L - 1/(2\nu_L^2) - (a J_2 - J_3)\,]$ with
+$J_2 = e^{-\beta_L}/\nu_L - \sqrt{\pi b t}\,\mathrm{erfc}\sqrt{\beta_L}$ and
+$J_3 = \frac{1}{2}( e^{-\beta_L}/\nu_L^2 - b t\, E_1(\beta_L))$, so the cell
+weights $(V(t_{bot})-V(t_{top}))/\Delta z$ sum to the surface tail exactly;
+the cascade credit is deposited in the uppermost cell (its carrier waves
+have deposition scales $g/2\sigma^2$ of centimetres).
+
+\emph{Dissipation energy flux to the ocean.} The term
+$\int \sigma S_{out}\, d\v k$ of the wave energy budget \eq{eq_W} is
+the energy the breaking waves hand to near-surface turbulence. It is diagnosed
+locally as
+\beq
+\Phi_{oc}(\v x) = -\,g \int \dot E_{out}\, d\nu\, d\theta \;\ge\, 0
+\eeq
+(kinematic; $\rho_w \Phi_{oc}$ in W\,m$^{-2}$; WAM's PHIOC), computed from the
+same stored dissipation rate $\gamma_{out}$ and with the same spectral
+measures as the wave stress, and written to the coupling output both as the
+local field and as its domain integral in the energy-diagnostic record. The
+dissipation of the diagnostic $\nu^{-5}$ tail is included according to the
+\verb|tail_flux| switch described above (under \verb|'input'| together with
+the nonlinear cascade credit). The
+field is the surface boundary condition for the flux $F$ of the turbulent
+kinetic energy (TKE) closure following Gaspar et al.\ (1990) in the ocean
+component ($\rho_w \Phi_{oc}$ as the surface TKE flux, in place of the
+$u_\star^3$-based parameterisation), which routes this term into the ocean's
+turbulent kinetic energy budget and thereby closes the coupled energy cycle.
+The TKE closure receives, besides the usual shear production by the Eulerian
+mean flow, a shear production term related to the mean Stokes velocity,
+$c_u K (\p_z \bar{\v u}) \cdot \p_z \bar{\v u}_S$, resulting from the
+down-gradient closure of the eddy stresses; the corresponding energy is
+exchanged with the mean Lagrangian kinetic energy.
+
+\emph{Vertical friction and mixing.} For consistency with the TKE closure,
+the vertical friction operator acts on the Eulerian mean velocity,
+$\p_z A_v \p_z (\v u_L - \v u_S) = \p_z A_v \p_z \v u$: the work of this
+viscous term against $\v u_L$ then exactly matches the shear production
+terms of the TKE closure, including the Stokes-shear production. Mixing the
+Lagrangian instead of the Eulerian momentum would break this energy
+consistency.
+
+\emph{Coupling frequency and the exchange term.} The two models exchange
+fields once per coupling interval $\Delta t_c$, chosen as a common multiple of
+the two time steps: the component with the smaller time step sub-cycles
+$\Delta t_c/\Delta t$ steps between exchanges. When the wave step is the
+smaller one, $\Delta t_c = \Delta t_{\rm ocean}$ and the wave model
+sub-cycles; when $\Delta t_{\rm ocean} < \Delta t_{\rm wave}$ (e.g.\ a
+non-hydrostatic or very high resolution ocean) the roles reverse and the ocean
+sub-cycles, with $\Delta t_c = \Delta t_{\rm wave}$. In either case all
+coupling fields are piecewise constant over the coupling interval, so the
+exchange work $C=\int \v u_L\cdot\p_t\v u_S\,dV$ is evaluated with
+$\p_t\v u_S$ as the difference quotient across the coupling update, i.e.\ over
+$\Delta t_c$ rather than over the time step of either component. The
+domain-integrated energy diagnostics --- wind input to the waves
+$g\int\gamma_{\rm in}E\,d\Omega\,dA$, the stress work on the ocean (computed
+with the identical stencils as the applied forcing), the exchange term $C$,
+and the vortex-force work --- are written to the coupling output at every
+coupling step, so the discrete energy pathway of the coupled system is
+monitored throughout the integration rather than assumed. The choice of
+$\Delta t_c$ is constrained by the physics rather than by stability: the
+coupling fields should be well sampled, i.e.\ $\Delta t_c$ small compared to
+the evolution time scales of the exchanged quantities (translation of the wind
+systems across a grid cell for the stress and Stokes fields, and the evolution
+of the resolved ocean currents for the refraction terms).
+
+  
+\subsection*{Propagation, boundary conditions, land mask}
+
+Action is propagated since it avoids to calculate the energy exchange with the mean flow
+explicitely. 
+Advection uses the second-order scheme with Superbee limiter (\verb|tracer_flux_superbee|)
+taken from MITgcm. 
+A first-order upwind option is also available (\verb|tracer_flux_upwind|,
+selected by the attribute ''f\_limiter''$=$''upwind''); it shares the identical
+finite-volume (face-flux) structure --- the same land masking, halo exchange,
+closed frequency faces and reflection --- so conservation and the energy fixer
+of \eq{eq:efix} still apply, but the flux limiter is set to zero. Upwind is more
+diffusive (it smears sharp swell fronts) but robust to grid-scale noise.
+The refraction drift velocities $\dot \nu$ and $\dot \theta$ can optionally be
+clipped to a CFL bound (attribute \verb|limit_fdot|, default off, with the
+bound set by \verb|refraction_cfl|, default $0.5$): strong current shear can
+otherwise drive the spectral advection beyond its stability limit locally.
+The clipping breaks the exact ray equations where it engages and is meant as
+a safeguard, not a substitute for a proper time step.
+
+
+
+Lateral boundary conditions in $x$ and $y$ are periodic (attribute ''periodic\_in\_x''/''periodic\_in\_y''),
+closed, or reflective. Boundary conditions in frequency are always closed, in direction
+always periodic.
+Lateral 
+reflection boundary conditions at coast lines are implemented  the same way as in the 
+IDEMIX2 in pyOM2.
+These are activated by setting the attribute ''enable\_reflection'' to true value'. 
+If undefined or false, the default of closed boundary are used where energy may pile up near the 
+boundary.
+Land mask is set in the template method   ''set\_topography'' in \verb|./pyOM3/wim/main.py|.
+
+
+\subsection*{Time stepping scheme}
+
+Each time step is split into an explicit propagation substep for the wave action
+$A$ followed by an implicit source substep for the wave energy $E = \sigma A$.
+The propagation tendency $\dot A|_{\rm prop}$ (the sum of the flux divergences in
+$x$, $y$, $\nu$ and $\theta$) is advanced with a multi-step Adams--Bashforth
+scheme,
+\beq \label{eq:ab3}
+A^{n+1} = A^{n} + \Delta t\left( c_A\, \dot A^{\,n}|_{\rm prop}
+                              + c_B\, \dot A^{\,n-1}|_{\rm prop}
+                              + c_C\, \dot A^{\,n-2}|_{\rm prop}\right).
+\eeq
+The scheme used is the stabilised second- or third-order Adams--Bashforth  pair
+\beq \label{eq:ab2eps}
+(c_A,c_B,c_C) &=& \left(\frac{3}{2}+\epsilon,\; -\frac{1}{2}-\epsilon,\; 0\right),
+\qquad \epsilon \approx 0.05, ~~\mbox{for second order}
+\\
+(c_A,c_B,c_C) &=& \left(\frac{23}{12},\; -\frac{16}{12},\; \frac{5}{12}\right)
+~~\mbox{for third order}
+\eeq
+both started with a forward Euler step $(1,0,0)$. The time loop uses the
+AB2$+\epsilon$ pair; the third-order coefficients are given for reference but
+are deliberately not used (see below). The recent tendencies are held in a
+rotating three-level buffer (the pointers ''tau'', ''taum1'', ''taum2''). Only
+the propagation is integrated this way; the source terms are treated separately
+below. After the propagation update the action is subject to the lateral
+boundary conditions and, on land, is masked to zero.
+
+The choice of the time scheme for the propagation is more delicate than usual
+because the advection uses a flux \emph{limiter}. TVD limiters (Superbee,
+upwind) guarantee a monotone, non-oscillatory update --- in particular
+$A \ge 0$ --- only when the limited flux is applied in a \emph{single forward
+Euler step} (or a strong-stability-preserving Runge--Kutta combination of such
+steps). Multi-step Adams--Bashforth schemes combine tendencies from several time
+levels with \emph{negative} weights, which destroys this guarantee at any CFL
+number: each stored tendency is limited with respect to its own state, but the
+negatively-weighted combination is free to over- and undershoot. For the
+third-order scheme $(23/12,\,-16/12,\,5/12)$ the negative weight is large and
+the violation is severe: a smooth, sign-definite action field develops
+undershoots ($A < 0$) in an alternating grid-scale ($2\Delta x$) checkerboard
+pattern at sharp fronts (storm edges, swell fronts). Unlike in the ocean
+model --- where the same combination is harmless because tracers are not
+sign-definite, explicit (biharmonic and vertical) diffusion damps grid-scale
+noise every step, and no term amplifies small wiggles --- the wave model has no
+explicit diffusion, its action must remain non-negative, and the source terms
+amplify any $\pm$ pattern strongly non-linearly (through
+$\alpha = \bar E\,\bar\sigma^4$ and the cubic DIA transfer), so the checkerboard
+grows over $\mathcal{O}(1)$ day until floating-point overflow. The AB2$+\epsilon$
+coefficients \eq{eq:ab2eps} reduce the negative weight to $-(1/2+\epsilon)$,
+which in practice (CFL${}\lesssim 0.25$) is small enough for the limiter's
+built-in slack to absorb the violation: the action remains non-negative to
+machine precision in long integrations where AB3 fails within a day. This is an
+empirical rather than a rigorous property; forward Euler $(1,0,0)$ or an SSP
+Runge--Kutta scheme restores the formal TVD guarantee at the cost of temporal
+accuracy or an additional flux evaluation per step.
+
+Two safeguards back this up. First, a positivity floor (attribute
+\verb|floor_action|, default on) clips the action at zero after each
+propagation step, as is standard in WAM. The clipped mass --- the action the
+floor removes, which equals the spurious action it injects and hence the
+energy-consistency cost of the clip --- is measured \emph{before} clipping and
+a warning is issued whenever it exceeds round-off scale relative to the total
+action, so a silently active floor cannot mask a genuine positivity violation;
+switching the floor off restores the raw scheme. Second, $\min A$ is monitored
+automatically every $O(100)$ steps against a relative round-off threshold and a
+warning names the remedy (larger $\epsilon$ or forward Euler): any
+limiter/time-scheme violation shows up there long before a blow-up.
+
+
+Writing the source terms as growth rates acting on the energy, the source substep
+integrates $\partial_t E = S$ with $S = \dot E_{nl} + (\gamma_{in} +
+\gamma_{out})E$, where $\dot E_{nl}$ is the non-linear (DIA) transfer. A fully
+explicit update would require a very small time step because the growth rate
+increases with frequency (this is also the reason for the high-frequency
+cut-off). Instead a linearised-implicit (semi-implicit) step is used: linearising
+$S$ about the current state, $S(E^{n+1}) \approx S(E^n) + \partial_E S\,
+(E^{n+1}-E^n)$, and solving for $E^{n+1}$ gives
+\beq \label{eq:implicit_source}
+E^{n+1} = E^{n} + \frac{S\, \Delta t}{1 - \Delta t\, \partial_E S},
+\qquad
+\partial_E S = \gamma_{in} + \gamma_{out} + \partial_E \dot E_{nl},
+\eeq
+where the diagonal of the non-linear functional derivative
+$\partial_E \dot E_{nl}$ is returned by the DIA backend alongside the transfer
+itself. This is unconditionally stable for a purely dissipative feedback
+($\partial_E S < 0$), for which the denominator exceeds unity and the update is
+damped. The growth can additionally be bounded as in WAM by a growth limiter
+(attribute \verb|limit_growth|, default off) that caps $S$ (not $\partial_E S$)
+so that the energy cannot grow by more than a prescribed fraction per step,
+\beq \label{eq:growthlimit}
+S \leftarrow \min\!\left(S,\; 10^{-7}\, g\,
+\max(u_\star,\,u_\star^{\min})\, \bar\sigma\,/\,(2\pi \nu^4)\right),
+\qquad u_\star^{\min} = 0.01\ {\rm m\,s^{-1}}.
+\eeq
+The friction-velocity floor $u_\star^{\min}$ in the cap is essential and easy
+to overlook: without it, the cap vanishes wherever the wind vanishes and the
+limiter degenerates to $S \leftarrow \min(S,0)$ in calm cells. This clips only
+the \emph{positive} lobes of the nonlinear transfer, destroying the
+conservative $\pm$ structure of $S_{nl}$ exactly there, and acts as a small
+but systematic negative-action source. In a calm region that accumulates swell
+without a sink (e.g.\ a walled basin with reflective coasts outside the wind
+band), the resulting violation grows linearly in time --- independent of the
+time step and of the time-stepping scheme --- until, after $O(100)$ days, the
+nonlinear source terms of the accumulated spectrum activate and the
+integration fails abruptly. The floor keeps the cap strictly positive
+everywhere while leaving the physics unchanged: $u_\star^{\min}$ is far below
+the input threshold of the slowest resolved wave ($c \approx 28\,u_\star$
+requires $u_\star \gtrsim 0.06$ m\,s$^{-1}$ for the highest resolved
+frequency), so the wind input remains identically zero in floored cells; only
+the growth cap becomes a finite positive bound instead of zero.
+Because the limiter bounds only the numerator, the denominator
+$1 - \Delta t\, \partial_E S$ can still vanish or change sign where
+$\partial_E S$ is large and positive --- most notably at high frequency during
+spin-up from a small seed, where the DIA derivative is steep. When this happens
+the update overshoots and the highest bins become unstable. Two safeguards are
+used: the high-frequency cut-off removes the steepest bins from the prognostic
+integration (replacing them by the diagnostic $\nu^{-5}$ tail), and, optionally,
+only the dissipative part of the feedback is kept in the implicit denominator,
+\beq \label{eq:denomclamp}
+\partial_E S \;\rightarrow\; \min\!\left(\partial_E S,\, 0\right),
+\eeq
+guaranteeing $1 - \Delta t\, \partial_E S \ge 1$. This is activated 
+by setting the attribute  \verb|implicit_dissipation_only|  to
+\verb|True| and equals  the standard WAM/WW3
+construction --- the stabilising dissipative feedback is treated implicitly while
+the growth is treated explicitly and bounded by the limiter. It leaves the
+equilibrium ($S = 0$) unchanged and therefore does not affect the energy balance;
+it only alters the transient integration of the growth phase.
+
+After the source substep the energy is masked to zero on land, the
+high-frequency tail is re-imposed through \verb|imphftail|, and the action is
+recovered as $A = E/\sigma$ for the next propagation step.
+
+
+The time step of the propagation is limited by the advective CFL number based
+on the fastest group velocity, i.e.\ the lowest resolved frequency (Superbee is
+stable to CFL${}\lesssim 0.5$, upwind to CFL${}<1$; in practice CFL${}\approx
+0.2$--$0.25$ is used, which is also the regime in which the AB2$+\epsilon$
+scheme preserves the non-negativity of the action, see the time-stepping
+section). Note that the grid-scale checkerboard described there is \emph{not} a
+CFL violation --- it appears at any Courant number when a multi-step scheme
+with a large negative weight (AB3) is combined with the flux limiter --- so it
+cannot be cured by reducing the time step; the cure is the time scheme.
+Substantially larger time steps than the advective CFL allows would require an
+implicit or semi-Lagrangian treatment of propagation, at the cost --- for plain
+semi-Lagrangian --- of the exact (face-flux) energy conservation.
+
+
+\subsection*{Model parameters and options}
+
+All parameters and options are attributes of the model instance. They are set
+either through the parameter dictionary passed at construction or by assigning
+the attribute on the instance before the model is stepped; options marked with
+a default may simply be left unset. The tables below list every attribute the
+wave model reads, with its default where one exists.
+
+\subsubsection*{Required parameters (no default)}
+
+\begin{longtable}{@{}llp{8.6cm}@{}}
+\hline
+Attribute & Unit & Meaning \\
+\hline
+\endhead
+\verb|nx|, \verb|ny| & --- & global horizontal grid size (cells, without halo
+  points) \\
+\verb|dx|, \verb|dy| & m & horizontal grid spacing \\
+\verb|nf| & --- & number of frequency bins (local on every PE) \\
+\verb|nd| & --- & number of direction bins (local on every PE) \\
+\verb|f0| & 1/s & lowest frequency of the geometric frequency grid (WAM value
+  $0.035$) \\
+\verb|df0| & --- & relative frequency increment $\Delta \nu/\nu$ of the
+  geometric grid (WAM value $0.1$) \\
+\verb|dt| & s & time step \\
+\verb|periodic_in_x| & --- & lateral boundary in $x$: periodic if true, closed
+  if false (the outermost ring of cells is then set to land) \\
+\verb|periodic_in_y| & --- & as above for $y$ \\
+\hline
+\end{longtable}
+
+\noindent
+The constructor additionally takes the keyword arguments \verb|n_pes_x|,
+\verb|n_pes_y| (processor grid, default $1\times 1$; their product must equal
+the communicator size), \verb|halo_points| (default 1) and \verb|comm_in|
+(default: the MPI world communicator).
+
+\subsubsection*{Forcing and coupling fields}
+
+\begin{longtable}{@{}llp{8.6cm}@{}}
+\hline
+Attribute & Default & Meaning \\
+\hline
+\endhead
+\verb|ustar| & required & friction velocity magnitude $u_\star$; scalar or
+  horizontal field (scalars are broadcast) \\
+\verb|udir| & required & wind direction $\theta^*$ (radians); scalar or field \\
+\verb|ocean_U|, \verb|ocean_V| & unset & Doppler velocity $\v U(\nu)$ provided
+  by the coupler. If unset, all current effects (advection by currents,
+  refraction, the energy fixer) are dormant \\
+\verb|ocean_Udf|, \verb|ocean_Vdf| & $0$ & frequency derivative
+  $\p_\nu \v U$ of the Doppler velocity (radial group-velocity correction
+  $R$ and frequency refraction) \\
+\hline
+\end{longtable}
+
+\subsubsection*{Options with defaults}
+
+\begin{longtable}{@{}llp{8.2cm}@{}}
+\hline
+Attribute & Default & Meaning \\
+\hline
+\endhead
+\verb|snonlin_backend| & \verb|'fortran'| & DIA implementation:
+  \verb|'fortran'| (original WAM code; requires double precision),
+  \verb|'jax'| or \verb|'numpy'|; all give identical results \\
+\verb|grav| & $9.81$ & gravitational acceleration \\
+\verb|rho_o| & $1024$ & reference water density. Currently unused inside the
+  wave model: the air--water density ratio of the source terms is fixed at
+  $1.225/1000$ \\
+\verb|z0| & $0.0002$ & roughness length; read only by the optional WAM input
+  parameterisation, inactive with the default WAMDI input \\
+\verb|mask_energy| & off & prognostic cut-off $\nu_c$ per column with the
+  imposed $\nu^{-5}$ diagnostic tail (\verb|imphftail|); prerequisite for the
+  equilibrium booking of \verb|tail_flux| $=$ \verb|'input'| \\
+\verb|limit_growth| & off & WAM growth limiter, \eq{eq:growthlimit} \\
+\verb|implicit_dissipation_only| & off & keep only the dissipative part of the
+  source feedback in the implicit denominator, \eq{eq:denomclamp} \\
+\verb|floor_action| & on & positivity floor $A \leftarrow \max(A,0)$ after the
+  propagation step, with the clipped mass monitored and warned about \\
+\verb|f_limiter| & \verb|'superbee'| & advection flux limiter:
+  \verb|'superbee'| (second order) or \verb|'upwind'| (first order,
+  diffusive, robust) \\
+\verb|energy_consistent| & off & conservative energy fixer of the propagation
+  operator, \eq{eq:efix} \\
+\verb|enable_reflection| & off & specular reflection of the advective fluxes
+  at coastlines \\
+\verb|limit_fdot| & off & clip the refraction velocities $\dot\nu, \dot\theta$
+  to a CFL bound \\
+\verb|refraction_cfl| & $0.5$ & the CFL bound used by \verb|limit_fdot| \\
+\verb|closed_bottom| & off & extend the bottom cell of the coupling kernel to
+  $z \to -\infty$ (exact barotropic projection, no momentum lost below the
+  column floor) \\
+\verb|tail_flux| & \verb|'wamdi'| & booking of the diagnostic-tail fluxes to
+  the ocean: \verb|'wamdi'| (dissipation-rate continuation) or
+  \verb|'input'| (equilibrium-range $\gamma_{in}$ integral plus nonlinear
+  cascade credit) \\
+\hline
+\end{longtable}
+
+\subsubsection*{Snapshot diagnostics}
+
+The netCDF snapshot class reads the attribute \verb|snapint| (snapshot
+interval in seconds, required) and takes the setup arguments
+\verb|snap_file_name| (default \verb|'snap.cdf'|) and
+\verb|show_each_time_step| (default on). The land mask is defined by
+overloading the template method \verb|set_topography|; the default is an
+all-ocean domain, with closed outer boundaries generated automatically from
+\verb|periodic_in_x|/\verb|periodic_in_y|.
+
+
+\end{document}
