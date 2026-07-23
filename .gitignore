@@ -7,3 +7,4 @@ __pycache__/
 *.nc
 *.cdf
 *.zarr/
+.DS_Store
