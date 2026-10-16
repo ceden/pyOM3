@@ -1,0 +1,401 @@
+\documentclass[12pt]{article}
+\usepackage{lineno}
+%\usepackage{ametsoc}
+\usepackage{natbib}
+\usepackage{a4wide}
+\usepackage{longtable}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex,colorlinks, citecolor=black,linkcolor=black,urlcolor=black]{hyperref}
+\definecolor{darkgreen}{rgb}{0.1,0.4,0.1}
+\definecolor{darkblue}{rgb}{0.1,0.1,0.3}
+
+
+
+\newif\ifdetail
+\global\detailfalse
+%\global\detailtrue
+
+\def\bem#1{\colorbox{green}{\em #1}}
+
+\newcommand{\beq}  { \begin{eqnarray} }
+\newcommand{\eeq}  { \end{eqnarray}}
+\newcommand{\beeq}  { \begin{eqnarray*} }
+\newcommand{\eeeq}  { \end{eqnarray*}}
+\newcommand{\eq }  [1]{Eq.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\eqs }  [1]{Eqs.~(\ref{#1})}
+\newcommand{\sect}  [1]{Sec.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\fig}  [1]{Fig.~\ref{#1}}   % Fig. #1
+\renewcommand{\v}[1]{{\mbox{\boldmath$ #1 $}}}  % Vektor durch Fettdruck
+\newcommand{\m}    [1]{{\bf  #1 }}              % Matrix in sans serif
+\newcommand{\gz}[1] {{{d #1} \over {dz}}}
+\newcommand{\pt}[1]{{\partial_t #1}}
+\newcommand{\ptt}[1]{{\partial_{tt} #1}}
+\newcommand{\pttt}[1]{{\partial_{ttt} #1}}
+\newcommand{\pttx}[1]{{{\partial^3 #1} \over {\partial t^2 \partial x}}}
+\newcommand{\ptty}[1]{{{\partial^3 #1} \over {\partial t^2 \partial y}}}
+\newcommand{\ptx}[1]{{{\partial^2 #1} \over {\partial t \partial x}}}
+\newcommand{\pty}[1]{{{\partial^2 #1} \over {\partial t \partial y}}}
+\newcommand{\pz}[1]{{\partial_z #1}}
+\newcommand{\pzz}[1]{{\partial_{zz} #1}}
+\newcommand{\px}[1]{{\partial_x #1}}
+\newcommand{\py}[1]{{\partial_y #1}}
+\newcommand{\pxi}[1]{{\partial_i #1}}
+\newcommand{\pxj}[1]{{\partial_j #1}}
+\newcommand{\pxk}[1]{{\partial_k #1}}
+\newcommand{\pb}[1]{{{\partial #1} \over {\partial b}}}
+%\newcommand{\pxy}[1]{{{\partial^2 #1} \over {\partial x \partial y}}}
+\newcommand{\pxy}[1]{\partial_{xy} #1}
+\newcommand{\pyy}[1]{\partial_{yy} #1}
+\newcommand{\pxx}[1]{\partial_{xx} #1}
+\newcommand{\kx}{{\bf k} \times}
+\newcommand{\dt}[1]{{{d #1} \over {d t}}}
+\newcommand{\Dt}[1]{{{D #1} \over {D t}}}
+\newcommand{\Div}[1]{ \nabla \cdot #1 }
+\renewcommand{\div}[1]{ \nabla_{yz} \cdot #1 }
+\newcommand{\Bar}[1]{ \overline{ #1} }
+\newcommand{\rvec} [1]{
+    \raisebox{-1.5ex}{$\stackrel{\textstyle #1}{\neg}$} }% rotierter Vektor
+\newcommand{\nablq}   {\rvec\nabla}                    % rotated nabla operator
+\newcommand{\Vec}[1]{\left(\begin{array}{c} #1 \end{array}\right) }
+%\renewcommand{\mho}{\mathcal{W}}
+\newcommand{\pn}[1]{{{\partial #1} \over {\partial n}}}
+\newcommand{\pnn}[1]{{{\partial #1} \over {\partial m}}}
+\newcommand{\ps}[1]{{{\partial #1} \over {\partial s}}}
+\newcommand{\p}{{\partial}}
+\newcommand{\vn}{{\v \nabla}}
+\newcommand{\lk}{\left(}
+\newcommand{\rk}{\right)}
+
+\newcommand{\tl}{\tilde}
+
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+
+\newcommand{\ep}{\epsilon}
+\newcommand{\erfc}{\mathrm{erfc}}
+ 
+ 
+\begin{document}
+
+ \section*{The spectral wave model wim\_realistic}
+
+wim\_realistic is wim\_simple on the grid of pe\_realistic.
+This text describes only the differences to wim\_simple.
+Everything that is not mentioned here is as described in the documentation of wim\_simple.
+
+The differences are the following.
+The horizontal grid spacings may vary.
+The horizontal coordinates may be longitude and latitude on the sphere.
+The propagation then contains the metric factors and the turning of the rays on the sphere.
+The coupling to the ocean allows a vertical grid with varying cell thickness.
+The wind input of Janssen and the dissipation of WAM4 are available as an option.
+
+Most methods of wim\_realistic are those of wim\_simple.
+They are inherited or assigned from wim\_simple.
+wim\_simple itself is not changed by wim\_realistic.
+The source terms of wim\_simple, the nonlinear transfer, the time stepping, the reflection, the open coasts and the JAX backend are therefore the same in both models.
+
+\subsection*{Grid}
+
+The model domain consists of $n_x \times n_y$ cells.
+The horizontal coordinates $x$ and $y$ are either Cartesian coordinates in metres or longitude $\lambda$ and latitude $\phi$ in degrees.
+The attribute \verb|coord_degree| selects longitude and latitude.
+The spectral grid in frequency $\nu$ and direction $\theta$ is that of wim\_simple.
+
+The widths of the cells are given by the attributes \verb|dxt| and \verb|dyt|.
+Each of them is either a number or an array of length $n_x$ or $n_y$ without halo points.
+The numbers \verb|dx| and \verb|dy| of wim\_simple are accepted instead.
+With \verb|coord_degree| the widths are given in degrees.
+
+The horizontal grid is built as in pe\_realistic.
+A cell has its centre at a $T$ point and its faces at $U$ points.
+In $x$ the cell $i$ has the centre $x^t_i$, the width $\Delta x^t_i$ and the eastern face $x^u_i$.
+The distance between the centres $x^t_i$ and $x^t_{i+1}$ is $\Delta x^u_i$.
+The same holds in $y$.
+The faces and centres follow from the widths by the recursion of pyOM2,
+\beq \label{eq:ucentred_w}
+ x^u_i = x^u_{i-1} + \Delta x^t_i ~,~~
+ x^t_{i+1} = 2 x^u_i - x^t_i ~,~~
+ \Delta x^u_i = x^t_{i+1} - x^t_i
+\eeq
+The first interior $U$ point is placed at \verb|x_origin| and \verb|y_origin| (default 0).
+
+The recursion \eq{eq:ucentred_w} can give $\Delta x^u \le 0$ when the widths jump.
+This holds also across the seam of a periodic direction.
+The widths must therefore vary smoothly.
+
+With \verb|coord_degree| the widths are converted to metres after the coordinates are built.
+The factor is $a \pi /180$ with the radius of the earth $a = 6370\,$km (attribute \verb|radius|).
+The metric factors are $\cos \phi$ at the $T$ rows, $\cos \phi$ at the $U$ rows and $\tan \phi /a$ at the $T$ rows.
+In Cartesian coordinates they are 1, 1 and 0.
+The area of a cell is $A^t = \cos \phi^t \Delta x^t \Delta y^t$ with $\Delta x$ and $\Delta y$ in metres.
+
+The attributes \verb|dx| and \verb|dy| are set to None after the grid is built.
+Code from wim\_simple that still uses them therefore stops with an error.
+
+The grid has no treatment of the poles and no reduced grid.
+The domain must therefore end before the poles.
+The zonal width $\cos \phi\, \Delta x^t$ of a cell becomes small at high latitude.
+The Courant number in $x$ then grows with $1/\cos \phi$, and the time step has to be chosen accordingly.
+
+\subsection*{Propagation}
+
+On the sphere the action equation of wim\_simple becomes
+\beq
+ \pt A + \frac{1}{a \cos \phi} \lk \p_\lambda (\dot x A) + \p_\phi (\cos \phi\, \dot y A) \rk
+ + \p_\theta (\dot \theta A) + \p_\nu (\dot \nu A) = S
+\eeq
+with $\lambda$ and $\phi$ in radians.
+The velocities $\dot x$ and $\dot y$ are the eastward and northward velocities in m/s.
+They are those of wim\_simple, $\dot{\v x} = (c/2) \v s + \v U + R \v s$.
+The direction $\theta$ is counted from north, with $\v s = (\sin \theta, \cos \theta)$ as in wim\_simple.
+
+The discrete form is the flux form of wim\_simple.
+The flux in $y$ is multiplied by $\cos \phi^u$.
+The flux divergence is divided by $\cos \phi^t \Delta x^t$ and $\cos \phi^t \Delta y^t$, with the widths in metres.
+The fluxes in frequency and direction are those of wim\_simple.
+The Courant numbers of the Superbee scheme are $|\dot x| \Delta t/(\cos \phi^t \Delta x^t)$ and $|\cos \phi^u \dot y| \Delta t /(\cos \phi^t \Delta y^t)$.
+
+The refraction by the Doppler velocity $\v U$ needs the horizontal gradients of $\v U$.
+On the sphere these are $(a \cos \phi)^{-1} \p_\lambda$ and $a^{-1} \p_\phi$.
+The discrete differences of wim\_simple are therefore divided by $\cos \phi^t \Delta x^u$ and $\Delta y^u$ instead of $\Delta x$ and $\Delta y$.
+
+On the sphere a ray that keeps its direction relative to north does not follow a great circle.
+The direction therefore changes along the ray even without currents.
+With currents the frequency changes as well.
+Both effects add terms to $\dot \theta$ and $\dot \sigma$ of wim\_simple,
+\beq
+ \dot \theta &=& \dot \theta_{simple} + \lk c/2 + \v s \cdot \v U \rk \sin \theta \frac{\tan \phi}{a} \\
+ \dot \sigma &=& \dot \sigma_{simple} - \frac{\sigma}{2} \lk \v U \cdot \v s_\perp \rk \sin \theta \frac{\tan \phi}{a}
+\eeq
+with $\v s_\perp = (\cos \theta, -\sin \theta)$ and $\dot \nu = \dot \sigma /(2 \pi)$.
+Here $\dot \theta_{simple}$ and $\dot \sigma_{simple}$ are the expressions of wim\_simple with the gradients on the sphere.
+The added term of $\dot \theta$ is evaluated at the faces in direction, as $\dot \theta$ of wim\_simple.
+The added term of $\dot \sigma$ is evaluated at the centres in direction.
+
+Without currents only the term $(c/2) \sin \theta \tan \phi /a$ remains.
+It turns the ray onto the great circle.
+The frequency is then constant along the ray.
+
+The two terms follow exactly from the dispersion relation in spherical coordinates.
+The derivation is checked symbolically in \verb|development/derive_spherical_rays.py|.
+The documentation of ECMWF (IFS Part VII, Eq.\ 2.25c) keeps only the term $(c/2) \sin \theta \tan \phi/a$.
+The terms with $\v U$ are of the order $|\v U| \tan \phi /a$.
+This is about $2 \cdot 10^{-7}\,$s$^{-1}$ at $60^\circ$ latitude for $|\v U| = 1\,$m/s.
+
+The option \verb|limit_fdot| of wim\_simple also bounds the added terms.
+
+The energy fixer is that of wim\_simple.
+The defect $D$ of wim\_simple is here the integral over the area of the cells.
+The terms of the faces in $x$ are multiplied by $\Delta y^t$.
+The terms of the faces in $y$ are multiplied by $\Delta x^t$, since the flux already carries $\cos \phi^u$.
+The terms of the faces in frequency and direction are multiplied by $A^t$.
+On a uniform Cartesian grid this reduces to the fixer of wim\_simple.
+
+The open coasts are those of wim\_simple.
+The outflow through a face in $x$ is weighted with $\Delta y^t$ and through a face in $y$ with $\Delta x^t$.
+
+The Fortran kernels of the propagation (\verb|propagation_backend| $=$ 'fortran') are those of wim\_simple.
+The metric factors and the added terms above are handed to them.
+They give the same result as the array form.
+
+\subsection*{Coupling to an ocean with varying cell thickness}
+
+The coupling of wim\_simple assumes ocean cells of constant thickness $\Delta z$.
+pe\_realistic has cells of varying thickness $\Delta z^t$.
+wim\_realistic therefore accepts $\Delta z^t$ as an array in the coupling.
+
+The Stokes velocity, the stress and the Doppler velocity of wim\_simple use the kernel $Q = 2 k e^{2 k z}$ integrated over each ocean cell,
+\beeq
+ \int_{z_b}^{z_t} Q\, dz = e^{2 k z_t} - e^{2 k z_b}
+\eeeq
+with the top face $z_t$ and the bottom face $z_b$ of the cell.
+For an array $\Delta z^t$ the faces are the partial sums of $\Delta z^t$ from the surface downward.
+The array is given from the bottom to the surface, as in pe\_realistic.
+The top face of a cell is then exactly the bottom face of the cell above.
+The sum of the kernel over the column is therefore exactly $1 - e^{-2 k H}$ for a column of depth $H$.
+With \verb|closed_bottom| the lowest cell also takes the rest $e^{-2 k H}$, so that the sum is exactly 1, as in wim\_simple.
+
+\verb|calc_stokes| and \verb|calc_stress_work| divide the integrated kernel by the thickness $\Delta z^t$ of each cell.
+The Doppler velocities need no division and are those of wim\_simple.
+With a number $\Delta z$ the arithmetic is that of wim\_simple, bit for bit.
+
+\verb|calc_phioc_work| of wim\_simple is not generalised.
+It works only with a number $\Delta z$.
+
+\subsection*{Wind input of Janssen and dissipation of WAM4}
+
+The attribute \verb|input_scheme| selects the source terms.
+The default 'wamdi' uses the input and dissipation of wim\_simple.
+The value 'janssen' uses the wind input of Janssen (1991) and the dissipation of WAM4 (Bidlot et al.\ 2007).
+These are the source terms of ecWAM for \verb|IPHYS| $=0$.
+They are ported from the routines \verb|sinput_jan|, \verb|sdissip_jan|, \verb|stresso|, \verb|tau_phi_hf|, \verb|z0wave|, \verb|fkmean|, \verb|femeanws| and \verb|frcutindex| of ecWAM.
+The nonlinear transfer is that of wim\_simple in both cases.
+
+The friction velocity $u_*$ and its direction $\theta_u$ are prescribed, as in wim\_simple.
+ecWAM computes $u_*$ from the wind speed and the roughness.
+This part of ecWAM is not ported.
+
+The input is $S_{in} = \gamma_{in} E$ with the growth rate
+\beq
+ \gamma_{in} = \frac{\beta_{max}}{\kappa^2} \frac{\rho_a}{\rho_w}\, \sigma\, x^2 \mu \lk \ln \mu \rk^4
+\eeq
+Here $x = (u_*/c + z_\alpha) \cos(\theta - \theta_u)$ and $\ln \mu = \ln(k z_0) + \kappa / x$.
+$\kappa = 0.4$ is the constant of von K\'arm\'an.
+The input is zero where $\cos(\theta - \theta_u) \le 0.01$ or $\ln \mu \ge 0$.
+The cells with input define the wind sea used below.
+
+The roughness length depends on the momentum that the waves take from the wind,
+\beq
+ z_0 = \frac{\alpha}{g} \frac{u_*^3}{\sqrt{u_*^2 - \tau_w}}
+\eeq
+with the constant $\alpha$ of Charnock.
+The momentum flux $\tau_w$ into the waves is divided by the density of air $\rho_a$.
+It is the input of momentum over all frequency bins plus the analytic tail described below,
+\beeq
+ \tau_w = \frac{\rho_w}{\rho_a} \left| \int \gamma_{in} E\, \sigma\, \v s\, d\theta\, d\nu + \v \tau_{tail} \right|
+\eeeq
+It is limited to $u_*^2/(1+\epsilon_1)$.
+Without waves $\tau_w = 0$ and $z_0 = \alpha u_*^2/g$ is the roughness of Charnock.
+
+$z_0$ and $\tau_w$ depend on each other.
+In each source step $z_0$, $\gamma_{in}$ and $\tau_w$ are therefore computed \verb|janssen_ncall| times in turn, as ecWAM does.
+The first pass starts from $\tau_w$ of the previous step.
+
+The dissipation is $S_{out} = \gamma_d E$ with
+\beq
+ \gamma_d = c_{dis}\, 2 \pi \nu_1\, E_{tot}^2\, \bar k^4\, X \lk (1-\delta) + \delta X \rk ~,~~ X = k/\bar k
+\eeq
+It does not depend on direction.
+$E_{tot}$ is the total energy, $\nu_1$ the mean frequency weighted with $\nu$ and $\bar k$ the mean wavenumber from the moment with $\sqrt k$.
+
+The means are sums over the frequency bins plus an analytic tail $E_N (\nu_N/\nu)^5$ beyond the last bin $\nu_N$,
+\beeq
+ E_{tot} &=& \sum E_d \Delta \nu + \nu_N E_N /4 \\
+ \nu_1 &=& \lk \sum \nu E_d \Delta \nu + \nu_N^2 E_N/3 \rk / E_{tot} \\
+ \bar k &=& \lk \lk \sum \sqrt{k}\, E_d \Delta \nu + \frac{2 \pi}{\sqrt g} \nu_N^2 E_N/3 \rk / E_{tot} \rk^2
+\eeeq
+with $E_d = \int E\, d\theta$ and $E_N$ of the last bin.
+
+The prognostic range ends at $2.5 \max(\bar \nu, \bar \nu_{ws})$, at the nearest bin in $\ln \nu$.
+Here $\bar \nu$ is the mean frequency weighted with $1/\nu$ and $\bar \nu_{ws}$ the same mean over the wind sea.
+The lowest frequency bin is always prognostic.
+The term of Pierson and Moskowitz in the cut-off of wim\_simple is not used, as in ecWAM.
+
+Beyond the prognostic range the spectrum is $E_c (\nu_c/\nu)^5$, as in wim\_simple.
+The stress and the energy flux of this tail are computed as in \verb|tau_phi_hf| of ecWAM.
+The integral over the tail uses the rule of Simpson with \verb|jtot_tauhf| $=19$ points in $\ln(\omega \sqrt{z_0/g})$.
+It runs from $\max(\omega_c, x_0 g/u_*)$ to $\omega = \sqrt{g/z_0}$.
+$x_0$ is the value of $u_*/c$ below which the growth rate vanishes for the roughness of Charnock.
+The growth in the tail is the one along the wind times $\cos^2(\theta - \theta_u)$ for $\cos(\theta - \theta_u) > 0$.
+
+The tail of $\tau_w$ starts at the last frequency bin of the model.
+The frequency ghost bin is still zero when the input is computed.
+The tails of the stress and of $\Phi_{oc}$ with \verb|tail_flux| $=$ 'input' start at the ghost bin, as in wim\_simple.
+\verb|calc_stress_work| puts the tail stress into the ocean cells point by point of the rule of Simpson, with the kernel $2 k_j e^{2 k_j z}$ of each point $j$.
+
+The port differs from ecWAM in three points.
+The widths of the first and last frequency bins are those of wim\_simple, while ecWAM uses half bins there.
+This changes the means by $0.05$ to $0.5\,\%$.
+The tail of $\tau_w$ starts at the last model bin, as stated above.
+The tail stress is booked along each direction $\v s(\theta)$.
+Its component along the wind is the stress of ecWAM, and ecWAM drops the component across the wind.
+
+The following parts of ecWAM are not ported.
+These are the gustiness, the negative input, the normalisation of the growth rate, the roughness of gravity-capillary waves, the sheltering and the viscous dissipation.
+The viscous term is in the code with $c_{disvis} = 0$, as in ecWAM for \verb|IPHYS| $=0$.
+
+$\tau_w$ and $z_0$ are carried from step to step.
+They are not part of the restart of the model.
+A restart starts with $\tau_w = 0$, i.e.\ with the roughness of Charnock.
+The iteration of $z_0$ and $\tau_w$ corrects this within the first step.
+
+The port is compared with the routines of ecWAM compiled with f2py.
+The test is \verb|janssen_ref_test.py| in \verb|development/|.
+All quantities agree to round-off.
+
+\section*{Model parameters and options}
+
+The parameters and options of wim\_simple are also those of wim\_realistic.
+The tables list only the differences.
+
+\begin{longtable}{@{}llp{7.6cm}@{}}
+\hline
+Attribute & Default & Meaning \\
+\hline
+\endhead
+\verb|dxt|, \verb|dyt| & required & widths of the cells, a number or an array without halo.
+  Degrees with \verb|coord_degree|, metres otherwise.
+  Replace \verb|dx| and \verb|dy| of wim\_simple, which are still accepted \\
+\verb|coord_degree| & off & longitude and latitude in degrees instead of Cartesian coordinates \\
+\verb|x_origin|, \verb|y_origin| & $0$ & position of the first interior $U$ point \\
+\verb|radius| & $6370\,$km & radius of the earth (m) \\
+\verb|input_scheme| & 'wamdi' & source terms. 'wamdi' as in wim\_simple, 'janssen' the input of Janssen and the dissipation of WAM4 \\
+\hline
+\end{longtable}
+
+\noindent
+With \verb|input_scheme| $=$ 'janssen' the following constants are read.
+Their defaults are those of ecWAM for \verb|IPHYS| $=0$.
+
+\begin{longtable}{@{}llp{8.6cm}@{}}
+\hline
+Attribute & Default & Meaning \\
+\hline
+\endhead
+\verb|betamax| & $1.20$ & $\beta_{max}$ of the input \\
+\verb|zalp| & $0.008$ & $z_\alpha$ of the input \\
+\verb|alpha_charnock| & $0.0065$ & constant $\alpha$ of Charnock \\
+\verb|kappa| & $0.40$ & constant of von K\'arm\'an \\
+\verb|cdis| & $-1.33$ & $c_{dis}$ of the dissipation \\
+\verb|delta_sdis| & $0.5$ & $\delta$ of the dissipation \\
+\verb|cdisvis| & $0$ & viscous dissipation \\
+\verb|rnu| & $1.5 \cdot 10^{-6}$ & kinematic viscosity (m$^2$/s) of the viscous dissipation \\
+\verb|eps1| & $10^{-5}$ & $\epsilon_1$ in the limit of $\tau_w$ \\
+\verb|tailfactor| & $2.5$ & factor of the prognostic cut-off \\
+\verb|janssen_ncall| & $2$ & number of passes of $z_0$, $\gamma_{in}$ and $\tau_w$ per step \\
+\verb|jtot_tauhf| & $19$ & number of points of the tail integral \\
+\verb|rho_a| & $1.225$ & density of air (kg/m$^3$) \\
+\verb|rho_w| & $1000$ & density of water (kg/m$^3$) \\
+\hline
+\end{longtable}
+
+\noindent
+The densities \verb|rho_a| and \verb|rho_w| act only in the source terms of Janssen.
+The input of wim\_simple and the tails of the coupling use $1.225/1000$.
+
+\subsection*{Snapshot diagnostics}
+
+The snapshot classes are those of wim\_simple.
+They write the coordinates $x^t$ and $y^t$ of the grid, in degrees with \verb|coord_degree|.
+The fields are those of wim\_simple.
+
+\subsection*{Tests}
+
+The tests are in \verb|pyOM3/wim_realistic/development/|.
+\verb|reduction_test.py| compares wim\_realistic on a uniform Cartesian grid with wim\_simple.
+The action agrees bit for bit, and to $10^{-15}$ with the energy fixer.
+\verb|sphere_test.py| tests the propagation on the sphere.
+The total action is conserved to $10^{-16}$ over three days.
+A wave packet follows the great circle to $0.15^\circ$ in position and $0.6^\circ$ in direction after $36^\circ$ of arc.
+The error of a uniform state decreases with the second power of the grid spacing.
+The absolute energy closes to $2 \cdot 10^{-16}$ with a sheared current.
+\verb|janssen_ref_test.py| compares the source terms of Janssen with ecWAM, see above.
+
+\subsection*{Limits}
+
+\begin{itemize}
+\item The domain must end before the poles.
+\item The widths of the cells must vary smoothly, also across a periodic seam.
+\item The terms with $\v U$ in the turning on the sphere are not tested by a dynamic test.
+\item \verb|calc_phioc_work| works only with a number $\Delta z$.
+\item With \verb|input_scheme| $=$ 'janssen' and \verb|tail_flux| $=$ 'wamdi' the tails of the stress use the dissipation of wim\_simple.
+\item $\tau_w$ and $z_0$ of the scheme of Janssen are not part of the restart.
+\end{itemize}
+
+\end{document}

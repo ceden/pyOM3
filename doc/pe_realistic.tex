@@ -1,0 +1,556 @@
+\documentclass[12pt]{article}
+\usepackage{lineno}
+%\usepackage{ametsoc}
+\usepackage{natbib}
+\usepackage{a4wide}
+\usepackage{longtable}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex,colorlinks, citecolor=black,linkcolor=black,urlcolor=black]{hyperref}
+\definecolor{darkgreen}{rgb}{0.1,0.4,0.1}
+\definecolor{darkblue}{rgb}{0.1,0.1,0.3}
+
+
+
+\newif\ifdetail
+\global\detailfalse
+%\global\detailtrue
+
+\def\bem#1{\colorbox{green}{\em #1}}
+
+\newcommand{\beq}  { \begin{eqnarray} }
+\newcommand{\eeq}  { \end{eqnarray}}
+\newcommand{\beeq}  { \begin{eqnarray*} }
+\newcommand{\eeeq}  { \end{eqnarray*}}
+\newcommand{\eq }  [1]{Eq.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\eqs }  [1]{Eqs.~(\ref{#1})}
+\newcommand{\sect}  [1]{Sec.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\fig}  [1]{Fig.~\ref{#1}}   % Fig. #1
+\renewcommand{\v}[1]{{\mbox{\boldmath$ #1 $}}}  % Vektor durch Fettdruck
+\newcommand{\m}    [1]{{\bf  #1 }}              % Matrix in sans serif
+\newcommand{\gz}[1] {{{d #1} \over {dz}}}
+\newcommand{\pt}[1]{{\partial_t #1}}
+\newcommand{\ptt}[1]{{\partial_{tt} #1}}
+\newcommand{\pttt}[1]{{\partial_{ttt} #1}}
+\newcommand{\pttx}[1]{{{\partial^3 #1} \over {\partial t^2 \partial x}}}
+\newcommand{\ptty}[1]{{{\partial^3 #1} \over {\partial t^2 \partial y}}}
+\newcommand{\ptx}[1]{{{\partial^2 #1} \over {\partial t \partial x}}}
+\newcommand{\pty}[1]{{{\partial^2 #1} \over {\partial t \partial y}}}
+\newcommand{\pz}[1]{{\partial_z #1}}
+\newcommand{\pzz}[1]{{\partial_{zz} #1}}
+\newcommand{\px}[1]{{\partial_x #1}}
+\newcommand{\py}[1]{{\partial_y #1}}
+\newcommand{\pxi}[1]{{\partial_i #1}}
+\newcommand{\pxj}[1]{{\partial_j #1}}
+\newcommand{\pxk}[1]{{\partial_k #1}}
+\newcommand{\pb}[1]{{{\partial #1} \over {\partial b}}}
+%\newcommand{\pxy}[1]{{{\partial^2 #1} \over {\partial x \partial y}}}
+\newcommand{\pxy}[1]{\partial_{xy} #1}
+\newcommand{\pyy}[1]{\partial_{yy} #1}
+\newcommand{\pxx}[1]{\partial_{xx} #1}
+\newcommand{\kx}{{\bf k} \times}
+\newcommand{\dt}[1]{{{d #1} \over {d t}}}
+\newcommand{\Dt}[1]{{{D #1} \over {D t}}}
+\newcommand{\Div}[1]{ \nabla \cdot #1 }
+\renewcommand{\div}[1]{ \nabla_{yz} \cdot #1 }
+\newcommand{\Bar}[1]{ \overline{ #1} }
+\newcommand{\rvec} [1]{
+    \raisebox{-1.5ex}{$\stackrel{\textstyle #1}{\neg}$} }% rotierter Vektor
+\newcommand{\nablq}   {\rvec\nabla}                    % rotated nabla operator
+\newcommand{\Vec}[1]{\left(\begin{array}{c} #1 \end{array}\right) }
+%\renewcommand{\mho}{\mathcal{W}}
+\newcommand{\pn}[1]{{{\partial #1} \over {\partial n}}}
+\newcommand{\pnn}[1]{{{\partial #1} \over {\partial m}}}
+\newcommand{\ps}[1]{{{\partial #1} \over {\partial s}}}
+\newcommand{\p}{{\partial}}
+\newcommand{\vn}{{\v \nabla}}
+\newcommand{\lk}{\left(}
+\newcommand{\rk}{\right)}
+
+\newcommand{\tl}{\tilde}
+
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+
+\newcommand{\ep}{\epsilon}
+
+\begin{document}
+
+ \section*{The realistic primitive equation model pe\_realistic}
+
+pe\_realistic solves the same equations as pe\_simple with the same time stepping.
+This text describes only the differences to pe\_simple.
+Everything that is not mentioned here is as described in the documentation of pe\_simple.
+
+The differences are the following.
+The grid spacings may vary in all three directions.
+The horizontal coordinates may be longitude and latitude on the sphere, as in pyOM2.
+The equation of state may be the one of TEOS-10.
+Isoneutral mixing is available.
+Horizontal momentum friction uses the discrete operators of pyOM2.
+Tracer advection can be taken out of the Adams--Bashforth step.
+
+pyOM2 is the reference for all discrete operators that are new here.
+They were ported from pyOM2 and compared with pyOM2 in twin experiments.
+The tests and their results are listed in \verb|pyOM3/pe_realistic/README_test_pe_realistic.md|.
+
+The domain decomposition, the halo exchange and the iterative solver for the surface pressure are not part of the package.
+They are imported from pe\_simple.
+The grid is built by the class \verb|grid| in \verb|grid.py|.
+
+\subsection*{Grid}
+
+The model domain consists of $n_x \times n_y \times n_z$ cells.
+The horizontal coordinates $x$ and $y$ are either Cartesian coordinates in metres or longitude and latitude in degrees.
+The attribute \verb|coord_degree| selects longitude and latitude.
+The vertical coordinate $z$ is in metres.
+
+The widths of the cells are given by the attributes \verb|dxt|, \verb|dyt| and \verb|dzt|.
+Each of them is either a number or an array of length $n_x$, $n_y$ or $n_z$ without halo points.
+The numbers \verb|dx|, \verb|dy| and \verb|dz| of pe\_simple are accepted instead.
+Without either of them the model stops with an error.
+
+A cell has its centre at a $T$ point and its faces at $U$ points.
+In $x$ the cell $i$ has the centre $x^t_i$, the width $\Delta x^t_i$ and the eastern face $x^u_i$.
+The distance between the centres $x^t_i$ and $x^t_{i+1}$ is $\Delta x^u_i$.
+The same holds in $y$ with $y^t_j$, $\Delta y^t_j$, $y^u_j$, $\Delta y^u_j$.
+In $z$ the face on top of cell $k$ is the $W$ point $z^w_k$, and the distance between the centres $z^t_k$ and $z^t_{k+1}$ is $\Delta z^w_k$.
+
+The grid is built from the widths as in pyOM2 (\verb|u_centered_grid| of \verb|numerics.f90|).
+The faces are summed from the widths.
+The centres follow from the faces by
+\beq \label{eq:ucentred}
+ x^u_i = x^u_{i-1} + \Delta x^t_i ~,~~
+ x^t_{i+1} = 2 x^u_i - x^t_i ~,~~
+ \Delta x^u_i = x^t_{i+1} - x^t_i
+\eeq
+with the start $x^t_0 = x^u_0 - \Delta x^t_0/2$ and the end $\Delta x^u_n = 2 \Delta x^t_n - \Delta x^u_{n-1}$ at the last cell $n$.
+This recursion keeps the discrete gradient and divergence adjoint on a stretched grid.
+
+On a stretched grid $x^t_i$ is not the midpoint between the faces $x^u_{i-1}$ and $x^u_i$.
+This follows from \eq{eq:ucentred}.
+It matters wherever a depth is taken from $z^t$, for instance in the equation of state below.
+
+In $x$ and $y$ the widths are first extended by the halo points.
+In a periodic direction the halo widths are copies of their periodic images.
+In a closed direction they repeat the width of the edge cell.
+The recursion \eq{eq:ucentred} then runs over the extended array.
+The first interior $U$ point is placed at \verb|x_origin| and \verb|y_origin| (default 0).
+In a periodic direction the halo coordinates are copies of the coordinates of their periodic images.
+They are used only for the metric factors below.
+
+In $z$ the recursion \eq{eq:ucentred} runs over the $n_z$ interior cells only, as in pyOM2.
+The coordinates are then extended linearly into the halo, and the halo widths repeat the edge widths.
+The array \verb|dzt| is given from the bottom to the surface.
+The cell $k$ = \verb|halo| is the lowest cell and the cell $k$ = \verb|Nz-halo-1| is the surface cell, as in pe\_simple.
+
+The end of the recursion, $\Delta z^w_n = 2 \Delta z^t_n - \Delta z^w_{n-1}$, can be zero or negative.
+This happens for instance when $\Delta z^t$ grows by a constant ratio from cell to cell.
+The model then stops with an error.
+$\Delta z^t$ must therefore vary smoothly.
+
+The origin of $z$ is the bottom face of the lowest cell by default.
+$z$ is then the height above the bottom, as in pe\_simple.
+With the attribute \verb|set_zero_at_surface| the origin is the surface face instead, as in pyOM2.
+
+With \verb|coord_degree| the coordinates $x$ and $y$ are longitude $\lambda$ and latitude $\phi$ in degrees.
+The widths are given in degrees as well.
+The coordinates are built from the widths in degrees.
+After that the widths are converted to metres with the factor $a \pi / 180$.
+The radius of the earth is $a = 6370\,$km (attribute \verb|radius|).
+$\pi$ is the double precision value.
+pyOM2 uses a single precision value, which gives relative differences of $3 \cdot 10^{-8}$ in all metric quantities.
+
+The metric factors are $\cos \phi$ at the $T$ rows (\verb|cost|), $\cos \phi$ at the $U$ rows (\verb|cosu|) and $\tan \phi/a$ at the $T$ rows (\verb|tantr|).
+In Cartesian coordinates they are 1, 1 and 0.
+The horizontal areas of the cells are
+\beq
+ A^t = \cos \phi^t\, \Delta x^t \Delta y^t ~,~~
+ A^u = \cos \phi^t\, \Delta x^u \Delta y^t ~,~~
+ A^v = \cos \phi^u\, \Delta x^t \Delta y^u
+\eeq
+for the $T$, $U$ and $V$ cells, with $\Delta x$ and $\Delta y$ in metres.
+
+The attributes \verb|dx|, \verb|dy| and \verb|dz| are set to None after the grid is built.
+Code from pe\_simple that still uses them therefore stops with an error.
+
+The grid arrays are one-dimensional.
+With MPI every process holds its part including the halo points.
+With JAX every shard holds its own halo points, as all fields do in pe\_simple.
+With JAX $n_x$ and $n_y$ must be divisible by the number of shards in $x$ and $y$.
+
+\subsection*{Discrete operators}
+
+All operators of pe\_simple are written in flux form.
+In pe\_realistic every flux is multiplied by the width of the face it crosses.
+Every flux divergence is divided by the volume of the cell.
+On a uniform Cartesian grid every operator reduces to the one of pe\_simple.
+This is tested to round-off.
+
+The vertical velocity at the top face of cell $k$ follows from continuity,
+\beq
+ w_k = - \sum_{k' \le k} \Delta z^t_{k'} \lk
+ \frac{u_i - u_{i-1}}{\cos \phi^t_j\, \Delta x^t_i}
+ + \frac{\cos \phi^u_j\, v_j - \cos \phi^u_{j-1}\, v_{j-1}}{\cos \phi^t_j\, \Delta y^t_j} \rk
+\eeq
+with $u$ and $v$ of cell $k'$ and the sum over the wet cells of the column.
+
+The tracer fluxes are those of pe\_simple.
+The meridional flux is multiplied by $\cos \phi^u$.
+The flux divergence is divided by $\cos \phi^t \Delta x^t$, $\cos \phi^t \Delta y^t$ and $\Delta z^t$.
+The Superbee scheme uses the Courant numbers $|u| \Delta t /(\cos \phi^t \Delta x^t)$, $|\cos \phi^u v| \Delta t / (\cos \phi^t \Delta y^t)$ and $|w| \Delta t / \Delta z^t$.
+
+The momentum advection is that of pe\_simple with volume transports.
+The transports through the faces are $u \Delta z^t \Delta y^t$, $v \Delta z^t \cos \phi^u \Delta x^t$ and $w A^t$.
+The divergence is divided by the volume $A^u \Delta z^t$ of the $U$ cell or $A^v \Delta z^t$ of the $V$ cell.
+
+The Coriolis force averages $f v$ to the $U$ point and $f u$ to the $V$ point with the widths of the cells as weights, as in pyOM2,
+\beq
+ (\pt u)_{cor} &=& \frac{1}{4 \Delta x^u_i} \lk
+   f_i\, \Delta x^t_i \lk v_{i,j} + v_{i,j-1} \rk
+ + f_{i+1}\, \Delta x^t_{i+1} \lk v_{i+1,j} + v_{i+1,j-1} \rk \rk
+ \\
+ (\pt v)_{cor} &=& - \frac{1}{4 \cos \phi^u_j\, \Delta y^u_j} \lk
+   f_j \cos \phi^t_j \Delta y^t_j \lk u_{i,j} + u_{i-1,j} \rk \right. \nonumber \\
+ && \left. + f_{j+1} \cos \phi^t_{j+1} \Delta y^t_{j+1} \lk u_{i,j+1} + u_{i-1,j+1} \rk \rk
+\eeq
+with the Coriolis parameter $f$ at the $T$ points.
+On a uniform grid this is the average of pe\_simple.
+
+On the sphere the momentum equations contain the metric terms $+u v \tan \phi /a$ and $-u^2 \tan \phi /a$.
+They are discretised with the same weights as the Coriolis force,
+\beq
+ (\pt u)_{met} &=& \frac{1}{8 \Delta x^u_i} \lk
+   \lk \frac{\tan \phi}{a}\, \Delta x^t (u_i + u_{i-1})(v_j + v_{j-1}) \rk_i
+ + \lk \cdots \rk_{i+1} \rk
+ \\
+ (\pt v)_{met} &=& - \frac{1}{8 \cos \phi^u_j\, \Delta y^u_j} \lk
+   \lk \frac{\tan \phi}{a} \cos \phi^t \Delta y^t (u_i + u_{i-1})^2 \rk_j
+ + \lk \cdots \rk_{j+1} \rk
+\eeq
+where $(\cdots)$ repeats the bracket before it at the next $T$ point.
+In Cartesian coordinates both terms vanish.
+
+The pressure gradients are $-(p_{i+1}-p_i)/(\cos \phi^t \Delta x^u_i)$ and $-(p_{j+1}-p_j)/\Delta y^u_j$.
+This holds for the hydrostatic pressure $p_h$ and for the surface pressure $p_s$.
+
+The hydrostatic pressure is integrated downward from the surface cell with the distances $\Delta z^w$,
+\beq
+ p_h(n_z) = \frac{g}{2 \rho_0} \rho(n_z)\, \Delta z^w(n_z) ~,~~
+ p_h(k) = p_h(k+1) + \frac{g}{2 \rho_0} \lk \rho(k+1) + \rho(k) \rk \Delta z^w(k)
+\eeq
+where $n_z$ denotes the surface cell here.
+
+The surface pressure of the rigid lid and of the implicit free surface follows from the vertically integrated continuity equation, as in pe\_simple.
+The depth of the water column at the $U$ and $V$ points is $h^u = \sum \Delta z^t$ and $h^v = \sum \Delta z^t$ over the wet $U$ and $V$ cells.
+The discrete equation for $p_s$ is
+\beeq
+ && \frac{1}{\cos \phi^t \Delta x^t_i} \lk
+   \frac{h^u_i (p_{i+1} - p_i)}{\cos \phi^t \Delta x^u_i}
+ - \frac{h^u_{i-1} (p_i - p_{i-1})}{\cos \phi^t \Delta x^u_{i-1}} \rk \\
+ &+& \frac{1}{\cos \phi^t_j \Delta y^t_j} \lk
+   \frac{\cos \phi^u_j h^v_j (p_{j+1} - p_j)}{\Delta y^u_j}
+ - \frac{\cos \phi^u_{j-1} h^v_{j-1} (p_j - p_{j-1})}{\Delta y^u_{j-1}} \rk
+ = \frac{1}{\Delta t}\, \vn \cdot \int \v u^* dz
+\eeeq
+with the divergence on the right discretised as for $w$ above.
+The implicit free surface adds $-p_s/(g \Delta t^2)$ on the left as in pe\_simple.
+The equation is solved with the conjugate-gradient solver of pe\_simple.
+
+The rigid lid does not converge on a domain that is periodic in $x$ and contains land.
+pyOM2 uses a streamfunction with island integrals there, which pe\_realistic does not have.
+Such domains need the implicit free surface.
+
+The vertical mixing of tracers and momentum uses the widths $\Delta z^t$ and the distances $\Delta z^w$,
+\beeq
+ (\pt T)_{mix} = \frac{1}{\Delta z^t_k} \lk
+   \kappa_k \frac{T_{k+1} - T_k}{\Delta z^w_k}
+ - \kappa_{k-1} \frac{T_k - T_{k-1}}{\Delta z^w_{k-1}} \rk
+\eeeq
+with the coefficient $\kappa_k$ at the top face of cell $k$.
+The stability limit of the explicit scheme becomes $4 \max(\kappa, A_v) \Delta t / \min(\Delta z^t \Delta z^w) \le 1/2$.
+
+\subsection*{Horizontal friction}
+
+Horizontal momentum friction uses the operators of pyOM2 (\verb|harmonic_friction.f90| and \verb|biharmonic_friction.f90|).
+They place the fluxes and the metric factors on the rows of the $U$ and $V$ points.
+pe\_simple uses an operator at the $T$ points for $u$ and $v$ instead.
+On a grid with varying $\Delta y$ or on the sphere that operator is not exact for $u$ and $v$.
+
+For $u$ the harmonic operator with coefficient $A$ is
+\beeq
+ F_u &=& \frac{f^x_i - f^x_{i-1}}{\cos \phi^t_j\, \Delta x^u_i}
+       + \frac{f^y_j - f^y_{j-1}}{\cos \phi^t_j\, \Delta y^t_j} \\
+ f^x_i &=& A \, (\cos \phi^t_j)^p \, \frac{u_{i+1} - u_i}{\cos \phi^t_j\, \Delta x^t_{i+1}} ~,~~
+ f^y_j = A \, (\cos \phi^u_j)^p \cos \phi^u_j \, \frac{u_{j+1} - u_j}{\Delta y^u_j}
+\eeeq
+A flux exists only between two wet $U$ cells.
+
+For $v$ the harmonic operator is
+\beeq
+ F_v &=& \frac{f^x_i - f^x_{i-1}}{\cos \phi^u_j\, \Delta x^t_i}
+       + \frac{f^y_j - f^y_{j-1}}{\cos \phi^u_j\, \Delta y^u_j} \\
+ f^x_i &=& A \, (\cos \phi^u_j)^p \, \frac{v_{i+1} - v_i}{\cos \phi^u_j\, \Delta x^u_i} ~,~~
+ f^y_j = A \, (\cos \phi^t_{j+1})^p \cos \phi^t_{j+1} \, \frac{v_{j+1} - v_j}{\Delta y^t_{j+1}}
+\eeeq
+A flux exists only between two wet $V$ cells.
+
+The harmonic friction is $\v u \leftarrow \v u + \Delta t\, (F_u, F_v)$ with $A$ = \verb|Ah|.
+The exponent $p$ is \verb|hor_friction_cosPower| (default 0).
+It is applied only in the rigid-lid and implicit free-surface scheme.
+
+The biharmonic friction applies the harmonic operator twice, $\v u \leftarrow \v u - \Delta t\, F(F(\v u))$.
+Each pass uses $A = \sqrt{A_{hbi}}$ with $A_{hbi}$ = \verb|Ahbi|.
+The exponent $p$ is \verb|biha_friction_cosPower| (default 0).
+Since $(\cos \phi)^p$ enters each pass, the viscosity scales with $(\cos \phi)^{2p}$.
+In the split-explicit scheme the biharmonic friction enters the forcing of the external mode as the tendency $-F(F(\v u))$ of the same operator.
+
+The biharmonic mixing of tracers (\verb|Khbi|) uses the operator at the $T$ points with the metric factors of the tracer fluxes above.
+
+The bottom friction is that of pe\_simple.
+The thickness of the bottom cell is $\Delta z^t$ of that cell instead of $\Delta z$.
+
+\subsection*{Split-explicit external mode}
+
+The split-explicit scheme is that of pe\_simple.
+The Coriolis force on the transports uses the weights of the Coriolis force above.
+The pressure gradient and the divergence of the transports carry the metric factors above.
+
+On the sphere the external mode also contains the metric terms.
+They are the vertical integrals of $+u v \tan \phi/a$ and $-u^2 \tan \phi /a$ with $u = U/h^u$ and $v = V/h^v$.
+They are discretised as the metric terms above and multiplied by $h^u$ and $h^v$.
+The metric terms of the baroclinic part are already part of the Coriolis tendency of the three-dimensional velocity.
+
+\subsection*{Equation of state}
+
+The attribute \verb|eq_of_state| selects the equation of state.
+The value 0 means that temperature is buoyancy.
+The value 1 is the linear equation of state.
+The value 5 is the 48-term equation of state of TEOS-10 (GSW), as in pyOM2.
+The value 100 is the ideal gas of the atmosphere.
+The density is the anomaly to $\rho_0 = 1024\,$kg/m$^3$, as in pyOM2.
+
+The pressure in the equation of state of TEOS-10 is the depth of the cell below the surface face in dbar, as in pyOM2.
+It is $z^w$ of the surface face minus $z^t$ of the cell.
+It is not $z^t + \Delta z^t/2$, since $z^t$ is not the midpoint of the cell on a stretched grid.
+The value 100 needs the default origin of $z$ at the bottom.
+
+$N^2$ for the value 5 uses the adiabatic displacement as in pe\_simple.
+The density is evaluated once per time step as in pe\_simple.
+
+\subsection*{TKE closure}
+
+The TKE closure is that of pe\_simple with the following changes.
+The mixing length sweeps use the widths $\Delta z^t$ instead of $\Delta z$.
+The surface value of \verb|mxl_choice| $=1$ is limited by $\ell_{min} + z_0 + \Delta z^t$ of the surface cell.
+The vertical shear and $N^2$ use the distances $\Delta z^w$.
+The surface $W$ cell has the thickness $\Delta z^w/2$ of the surface face.
+
+The shear production $K_{diss}$ is computed at the $U$ and $V$ points and averaged to the $T$ points.
+The average is weighted with the areas, as in pyOM2,
+\beq
+ K^t_i = \frac{A^u_i K^u_i + A^u_{i-1} K^u_{i-1}}{2 A^t_i}
+\eeq
+and correspondingly in $y$ with $A^v$.
+An average without the areas would change $K_{diss}$ by 6\% at $60^\circ$ latitude.
+
+\subsection*{Isoneutral mixing}
+
+Isoneutral mixing is switched on by \verb|enable_neutral_diffusion|.
+It is a port of \verb|isoneutral.f90| and \verb|isoneutral_diffusion.f90| of pyOM2.
+It uses the triads of Griffies et al., as pyOM2 does.
+
+The isoneutral slopes follow from the gradients of temperature and salinity and the derivatives of density.
+For \verb|eq_of_state| $=0$ the derivative with respect to temperature is $-\rho_0/g$.
+pyOM2 uses zero there.
+For the value 1 the derivatives are the constants of the linear equation of state.
+For the value 5 they are the derivatives of the TEOS-10 equation of state.
+The value 100 is not possible.
+
+Steep slopes are tapered with
+\beq
+ \tau(s) = \frac{1}{2} \lk 1 + \tanh \frac{s_c - |s|}{\Delta s} \rk
+\eeq
+with $s_c$ = \verb|iso_slopec| (default $10^{-3}$) and $\Delta s$ = \verb|iso_dslope| (default $8 \cdot 10^{-4}$).
+
+The diffusivity is the three-dimensional field \verb|K_iso|.
+It is set to the constant \verb|K_iso_0| at the start unless the configuration has set the field.
+The horizontal diffusivity in the tensor is $\max(K_{steep}, K_{iso}\, \tau)$ with $K_{steep}$ = \verb|K_iso_steep|.
+The field can be changed during the run, for instance by another parameterisation.
+
+With \verb|enable_skew_diffusion| the skew flux of Gent and McWilliams is added, as in pyOM2.
+Its diffusivity is the three-dimensional field \verb|K_gm|.
+It is set to the constant \verb|K_gm_0| at the start unless the configuration has set the field.
+On the lateral faces the triads then use $K_{iso} - K_{gm}$.
+On the top faces they use $K_{iso} + K_{gm}$.
+
+The horizontal and mixed parts of the tensor are applied with a forward Euler step.
+The vertical part $K_{33}$ is applied with the implicit vertical diffusion of the model.
+Isoneutral mixing acts on temperature and, for an equation of state with salinity, on salinity.
+
+At the start the model checks the stability of the explicit part, as pyOM2 does.
+The quantity
+\beeq
+ \delta = \min \lk \frac{\cos \phi^t \Delta x^t \Delta z^t}{4 K_{iso,0} \Delta t},\ \frac{\Delta y^t \Delta z^t}{4 K_{iso,0} \Delta t} \rk
+\eeeq
+is the steepest slope that is stable.
+The model stops with an error if $\delta$ is smaller than $s_c$.
+
+The following parts of pyOM2 are not ported.
+These are the dissipation diagnostics of the isoneutral and skew fluxes, the treatment in the mixed layer and the friction of the TEM formulation.
+
+\subsection*{Tracer advection outside the Adams--Bashforth step}
+
+With thin cells on a fine horizontal grid the vertical Courant number $|w| \Delta t/\Delta z^t$ can limit the time step.
+The Superbee scheme is stable up to a Courant number of 1 in a forward step.
+Inside the Adams--Bashforth step with the weights $1.6$ and $-0.6$ it becomes unstable above about $0.45$.
+The attribute \verb|vadv_sub_cycling| $= M$ therefore takes the tracer advection out of the Adams--Bashforth step.
+The default $M = 0$ keeps the advection in the Adams--Bashforth step.
+
+With $M > 0$ the advection uses the velocities $u$, $v$ and $w$ at the end of the time step.
+It consists of a step in $x$, a step in $y$ and $M$ steps in $z$ with the time step $\Delta t/M$.
+Each of them is a forward step of the Superbee scheme, as in MITgcm.
+The vertical Courant number may then be as large as $M$.
+The Adams--Bashforth step adds only the forcing of the tracers.
+The option needs \verb|superbee_advection|.
+
+All of the advection has to leave the Adams--Bashforth step, not the vertical part alone.
+Horizontal and vertical advection cancel in a flow along isopycnals.
+A step in which one of them is forward and the other is part of the Adams--Bashforth step is unstable in such a flow.
+For the same reason the vertical advection of momentum stays in the Adams--Bashforth step.
+
+The velocities at the end of the time step are needed.
+With the velocities at the start of the time step the forward tracer step and the Adams--Bashforth step of momentum amplify internal waves.
+
+A step in one direction changes a uniform tracer, since the flow in that direction alone is not free of divergence.
+Each step therefore carries the volume $\varrho$ that the cell would have after the steps done so far (Easter 1993, Lin and Rood 1996).
+It starts with $\varrho = 1$ and changes in each step in $x$ as
+\beeq
+ \varrho \leftarrow \varrho - \frac{\Delta t}{\cos \phi^t \Delta x^t} \lk u_i - u_{i-1} \rk
+\eeeq
+and correspondingly in $y$ and $z$.
+The fluxes are formed with the tracer value $T = q/\varrho$ and change the tracer content $q$.
+The content is conserved to round-off, and a uniform tracer stays uniform.
+
+The flux through the surface face is handled in the steps in $z$.
+It is zero, or $w\, T$ of the surface cell with \verb|free_surface_tracer_flux|.
+Its mean over the $M$ steps is kept in \verb|vadv_fs_flux| for a configuration that books the tracer budget.
+
+The option adds no new state to the restart.
+The tendencies \verb|dtemp| and \verb|dsalt| then contain the forcing only.
+The first step after switching the option on or off should therefore not use the old tendencies.
+
+\subsection*{Time step}
+
+The order of the calls in a time step of the split-explicit scheme is
+\begin{enumerate}
+\item diffusivities of the TKE closure (\verb|set_tke_diffusivities|)
+\item momentum tendencies, Coriolis force and hydrostatic pressure (\verb|momentum_tendency_expl|)
+\item forcing of the configuration (\verb|set_forcing|)
+\item bottom friction
+\item external mode with sub cycling (\verb|solve_expl_surface|)
+\item vertical friction
+\item vertical velocity
+\item tracer advection and biharmonic tracer mixing, or the advection outside the Adams--Bashforth step
+\item Adams--Bashforth update of the tracers
+\item isoneutral mixing
+\item vertical mixing of the tracers
+\item density
+\item TKE step (\verb|integrate_tke|)
+\end{enumerate}
+
+The order of the calls in a time step of the rigid lid and of the implicit free surface is
+\begin{enumerate}
+\item diffusivities of the TKE closure
+\item tracer advection and biharmonic tracer mixing
+\item momentum tendencies and hydrostatic pressure (\verb|momentum_tendency_impl|)
+\item forcing of the configuration (\verb|set_forcing|)
+\item biharmonic and harmonic momentum friction
+\item Adams--Bashforth update of the velocities
+\item direct forcing of the configuration (\verb|set_forcing_direct|)
+\item surface pressure and its gradient (\verb|solve_for_pressure|)
+\item vertical friction
+\item bottom friction
+\item vertical velocity
+\item Adams--Bashforth update of the tracers, or the advection outside the Adams--Bashforth step
+\item isoneutral mixing
+\item vertical mixing of the tracers
+\item density
+\item TKE step
+\end{enumerate}
+In both schemes the steps are those of pe\_simple, with the isoneutral mixing, the harmonic friction and the advection outside the Adams--Bashforth step added.
+
+\section*{Model parameters and options}
+
+The parameters and options of pe\_simple are also those of pe\_realistic.
+The tables list only the differences.
+
+\subsection*{Required parameters}
+
+\begin{longtable}{@{}llp{8.4cm}@{}}
+\hline
+Attribute & Unit & Meaning \\
+\hline
+\endhead
+\verb|dxt|, \verb|dyt| & m or $^\circ$ & widths of the cells in $x$ and $y$, a number or an array without halo.
+  Degrees with \verb|coord_degree|. Replace \verb|dx| and \verb|dy| of pe\_simple, which are still accepted \\
+\verb|dzt| & m & widths of the cells in $z$, a number or an array without halo, from the bottom to the surface.
+  Replaces \verb|dz| of pe\_simple, which is still accepted \\
+\verb|eq_of_state| & --- & equation of state, $0$, $1$, $5$ (TEOS-10) or $100$ \\
+\hline
+\end{longtable}
+
+\noindent
+The configuration must set the Coriolis parameter with \verb|set_coriolis|.
+The field \verb|coriolis_t| is zero otherwise.
+
+\subsection*{Options with defaults}
+
+\begin{longtable}{@{}llp{7.6cm}@{}}
+\hline
+Attribute & Default & Meaning \\
+\hline
+\endhead
+\verb|coord_degree| & off & longitude and latitude in degrees instead of Cartesian coordinates \\
+\verb|x_origin|, \verb|y_origin| & $0$ & position of the first interior $U$ point \\
+\verb|radius| & $6370\,$km & radius of the earth (m) \\
+\verb|set_zero_at_surface| & off & origin of $z$ at the surface face instead of the bottom face \\
+\verb|Ah| & unset & harmonic momentum friction (m$^2$/s), active if present.
+  Rigid lid and implicit free surface only \\
+\verb|hor_friction_cosPower| & $0$ & exponent $p$ of $(\cos \phi)^p$ in the harmonic friction \\
+\verb|biha_friction_cosPower| & $0$ & exponent $p$ of $(\cos \phi)^p$ in each pass of the biharmonic friction \\
+\verb|enable_neutral_diffusion| & off & isoneutral mixing \\
+\verb|enable_skew_diffusion| & off & skew flux of Gent and McWilliams \\
+\verb|K_iso_0| & $0$ & isoneutral diffusivity (m$^2$/s), initial value of \verb|K_iso| \\
+\verb|K_gm_0| & $0$ & skew diffusivity (m$^2$/s), initial value of \verb|K_gm| \\
+\verb|K_iso_steep| & $0$ & lower limit of the tapered horizontal diffusivity (m$^2$/s) \\
+\verb|iso_slopec| & $10^{-3}$ & slope at which the taper is one half \\
+\verb|iso_dslope| & $8 \cdot 10^{-4}$ & width of the taper \\
+\verb|K_iso|, \verb|K_gm| & unset & three-dimensional diffusivities, set from \verb|K_iso_0| and \verb|K_gm_0| if not given \\
+\verb|vadv_sub_cycling| & $0$ & number $M$ of vertical steps of the tracer advection outside the Adams--Bashforth step.
+  $0$ keeps the advection in the Adams--Bashforth step \\
+\hline
+\end{longtable}
+
+\subsection*{Snapshot diagnostics}
+
+The snapshot classes \verb|snap_nc4| and \verb|snap_raw| are those of pe\_simple.
+They write the coordinates of the grid above.
+These are $x^t$, $x^u$, $y^t$, $y^u$, $z^t$ and $z^w$, in degrees with \verb|coord_degree|.
+$z^w$ is written under the name \verb|zu|.
+
+\subsection*{Limits}
+
+\begin{itemize}
+\item The grid must not include the poles. The zonal width $\cos \phi\, \Delta x$ goes to zero there, and $\tan \phi$ grows without bound.
+\item The rigid lid does not converge on a domain that is periodic in $x$ and contains land.
+\item TEM friction, the EKE model and IDEMIX of pyOM2 are not part of pe\_realistic.
+\item With varying $\Delta x^t$ in a periodic direction pe\_realistic and pyOM2 build different $x^t$ and $\Delta x^u$ in the halo.
+\item $\Delta z^t$ must vary smoothly, see the grid above.
+\end{itemize}
+
+\end{document}
