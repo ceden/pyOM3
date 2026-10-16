@@ -51,14 +51,30 @@ class advection(boundary):
                - OM.np.abs(self.v) * ((1.0 - cr) + CFL * cr) * rj * 0.5)
         
           CFL = OM.np.abs(self.w * self.dt / self.dz)          
-          rj  = self.apply_bc( (self.rollz(var,-1) - var) )
+          rj  = self.apply_vertical_flux_bc( self.apply_bc( (self.rollz(var,-1) - var) ) )
           rjm = self.rollz(rj, 1) 
           rjp = self.rollz(rj,-1)                     
           cr = _limiter( OM.np.where(self.w>0.0, rjm, rjp)/OM.np.where(OM.np.abs(rj) < eps, eps, rj))
-          fz =  (self.w * (self.rollz(var,-1) + var) * 0.5 
-               - OM.np.abs(self.w) * ((1.0 - cr) + CFL * cr) * rj * 0.5)
+          fz_imp = - OM.np.abs(self.w) * ((1.0 - cr) + CFL * cr) * rj * 0.5
+          fz =  self.w * (self.rollz(var,-1) + var) * 0.5 + fz_imp
 
+          # The flux at the lower halo face (index 0) needs the slope one
+          # face further down, which the single halo row does not hold
+          # (the roll wraps to the opposite halo). Each face is therefore
+          # taken from the block that owns it: the halo-face flux is
+          # replaced by the neighbour's flux of the same face. Without this
+          # the two blocks used different fluxes at their common face
+          # (non-conservative, decomposition dependent), and the periodic
+          # seam in x was wrong even on one PE.
+          fx = self.apply_bc(fx)
+          fy = self.apply_bc(fy)
+          fz = self.apply_bc(fz)
           fz = self.apply_vertical_flux_bc(fz)          
+          # vertical implicit subgrid buoyancy flux of the limiter (the part
+          # beyond the centred flux), <w'b'> on the w-grid (interior faces
+          # are exact, the halo is not used); the LES TKE closure uses it as
+          # buoyancy production when les_mix_b is False
+          self.b_flux_implicit_z = self.Ro*self.apply_vertical_flux_bc(fz_imp)
           return  - self.Ro*((fx  - self.rollx( fx,1) )/self.dx 
                            + (fy  - self.rolly( fy,1) )/self.dy 
                            + (fz  - self.rollz( fz,1) )/self.dz )
@@ -87,7 +103,7 @@ class advection(boundary):
           fy = self.v*(self.rolly(var,-1) + var - oneSixth*(rjjp+rjjm ))*0.5   \
                      +OM.np.abs(self.v)*0.5*oneSixth*(rjjp-rjjm )
 
-          rj  = self.apply_bc( (self.rollz(var,-1) - var) )
+          rj  = self.apply_vertical_flux_bc( self.apply_bc( (self.rollz(var,-1) - var) ) )
           rjm = self.rollz(rj, 1) 
           rjp = self.rollz(rj,-1) 
           rjjp = rjp-rj 
@@ -95,6 +111,10 @@ class advection(boundary):
           fz = self.w*(self.rollz(var,-1) + var - oneSixth*(rjjp+rjjm ))*0.5   \
                      +OM.np.abs(self.w)*0.5*oneSixth*(rjjp-rjjm )
          
+          # halo-face fluxes from the owning block, see superbee
+          fx = self.apply_bc(fx)
+          fy = self.apply_bc(fy)
+          fz = self.apply_bc(fz)
           fz = self.apply_vertical_flux_bc(fz)          
           return  - self.Ro*((fx  - self.rollx( fx,1) )/self.dx 
                            + (fy  - self.rolly( fy,1) )/self.dy 
@@ -138,7 +158,6 @@ class advection(boundary):
           east  = 0.25*(w + self.rollx(w,-1))*(self.rollz(u,-1) + u)
           north = 0.25*(w + self.rolly(w,-1))*(self.rollz(v,-1) + v)
           top   = 0.25*(w + self.rollz(w,-1))*(self.rollz(w,-1) + w)
-          top = self.apply_vertical_flux_bc(top, flux_on_wgrid = True)
           return -self.dsqr*self.Ro*( (east  - self.rollx(east,1)  )/self.dx 
                                      +(north - self.rolly(north,1) )/self.dy 
                                      +(top   - self.rollz(top,1)   )/self.dz )

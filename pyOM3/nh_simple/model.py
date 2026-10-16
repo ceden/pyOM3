@@ -56,7 +56,7 @@ class model(main,advection,diabatic,pressure):
           if hasattr(self,'Ah') and hasattr(self,'Av'):
              self.u += self.dt*self.harmonic(self.u,self.Ah,self.Av)
              self.v += self.dt*self.harmonic(self.v,self.Ah,self.Av)
-             self.w += self.dt*self.harmonic(self.w,self.Ah,self.Av) 
+             self.w += self.dt*self.harmonic(self.w,self.Ah,self.Av,on_wgrid=True) 
           if hasattr(self,'Ah') and not hasattr(self,'Av'):
              self.u += self.dt*self.harmonic_h_only(self.u,self.Ah)
              self.v += self.dt*self.harmonic_h_only(self.v,self.Ah)
@@ -64,7 +64,7 @@ class model(main,advection,diabatic,pressure):
           if not hasattr(self,'Ah') and hasattr(self,'Av'): 
              self.u += self.dt*self.harmonic_v_only(self.u,self.Av)
              self.v += self.dt*self.harmonic_v_only(self.v,self.Av)
-             self.w += self.dt*self.harmonic_v_only(self.w,self.Av) 
+             self.w += self.dt*self.harmonic_v_only(self.w,self.Av,on_wgrid=True) 
  
           if hasattr(self,'Kh') and hasattr(self,'Kv'):
              self.b += self.dt*self.harmonic(self.b,self.Kh,self.Kv)
@@ -72,9 +72,17 @@ class model(main,advection,diabatic,pressure):
           if hasattr(self,'Ahbi') and hasattr(self,'Avbi'):
              self.u += self.dt*self.biharmonic(self.u,self.Ahbi,self.Avbi)
              self.v += self.dt*self.biharmonic(self.v,self.Ahbi,self.Avbi)
-             self.w += self.dt*self.biharmonic(self.w,self.Ahbi,self.Avbi) 
+             self.w += self.dt*self.biharmonic(self.w,self.Ahbi,self.Avbi,on_wgrid=True) 
           if hasattr(self,'Khbi') and hasattr(self,'Kvbi'):
              self.b += self.dt*self.biharmonic(self.b,self.Khbi,self.Kvbi)  
+
+          # the explicit friction and mixing increments above also changed the
+          # halo points (with wrapped data): refresh them before anything
+          # reads a neighbour (the LES closure in set_forcing does)
+          self.u = self.apply_bc(self.u)
+          self.v = self.apply_bc(self.v)
+          self.w = self.apply_vertical_flux_bc( self.apply_bc(self.w) )
+          self.b = self.apply_bc(self.b)
 
           # allow for user defined forcing 
           if hasattr(self,'set_forcing'): self.set_forcing(tau)

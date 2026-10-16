@@ -34,6 +34,33 @@
  les_freeslip_strain (default True) zeroes the vertical shear seen by
  the closure at the rigid lids, consistent with the zero-flux BC.
 
+ Subgrid TKE sources beyond shear and buoyancy production (TKE closure
+ only, all on the w-grid):
+   les_stokes_prod = None | 'A' | 'B'   Stokes production of subgrid TKE
+       from the subgrid momentum flux <u'w'> = -fz of les_mix_momentum and
+       the Stokes shear of self.u_S, self.v_S (horizontally uniform):
+         'A'  -<u'w'> . dz u_S          (gradient-force choice phi with u.u_S,
+                                         McWilliams et al. 1997)
+         'B'  u_S . dz <u'w'>           (Leibovich 1980 choice of phi)
+       Both integrate to the same column total (summation by parts, the
+       subgrid flux vanishes at the lids). Diagnosed in les_mix_momentum
+       and used in the next step, like buoy_prod.
+   self.tke_source   optional volume source [m^2/s^3], set by the
+       configuration (e.g. wave breaking); added to the TKE tendency.
+ With les_mix_b = False and a flux-limited buoyancy advection (superbee),
+ the buoyancy production is the vertical implicit subgrid flux of the
+ limiter, self.b_flux_implicit_z (stored by buoyancy_advection_superbee),
+ instead of zero.
+ The TKE closure caps its viscosities and diffusivities with the same
+ direction-aware stability limits as the Smagorinsky closure, and caps the
+ TKE diffusivity c_eke*diff by min(dx,dy,dz)^2/(4 dt).
+ les_mix_momentum stores the applied vertical subgrid fluxes
+ (les_flux_uz, les_flux_vz, U-W and V-W edges, du/dt = dz flux;
+ les_mix_buoyancy likewise les_flux_bz on the w-grid) and the
+ resolved kinetic energy removed by the closure [m^2/s^3] for
+ diagnostics, les_ke_loss = -(u du + v dv)/dt (T levels) and
+ les_ke_loss_w = -w dw/dt (w-grid), with du the closure increment.
+
  Based on boundary class, mix into the model class or hook via
  set_forcing, see suggestions at the bottom of this file.
 """
@@ -78,6 +105,7 @@ class les(_base):
                                                  # needs self.u_S/v_S
              les_freeslip_strain       = True,   # zero str13/str23 at
                                                  # the rigid lids
+             les_stokes_prod           = None,   # None | 'A' | 'B'
              les_mix_b                 = True,   # explicit SGS buoyancy
                                                  # diffusion; set False when
                                                  # a flux-limited advection
@@ -109,6 +137,13 @@ class les(_base):
              self.tke_diss   = buf.copy()
              self.shear_prod = buf.copy()   # w-grid
              self.buoy_prod  = buf.copy()   # w-grid
+             self.stokes_prod = buf.copy()  # w-grid
+             if self.les_stokes_prod not in (None,'A','B'):
+                raise ValueError("les_stokes_prod must be None, 'A' or 'B'")
+             if self.les_stokes_prod is not None and not (
+                     hasattr(self,'u_S') and hasattr(self,'v_S')):
+                raise ValueError('les_stokes_prod requires self.u_S '
+                                 'and self.v_S')
 
           if self.enable_ducros_96:
              self.filteru = buf.copy()
@@ -146,14 +181,14 @@ class les(_base):
           else:
              u, v, w = self.u, self.v, self.w
 
-          if self.enable_smagorinsky or self.enable_tke_closure:
+          if self.enable_smagorinsky:
              strains = self.les_strain(u,v,w)
           else:
              strains = None
 
           if self.enable_ducros_96:      self.les_ducros96(u,v,w)
           if self.enable_smagorinsky:    self.les_smagorinsky(strains)
-          if self.enable_tke_closure:    self.les_tke_closure(strains)
+          if self.enable_tke_closure:    self.les_tke_closure()
           if self.enable_peclet_bound:   self.les_peclet_bound()
 
           # valid halo values for the +-1 stencils of the mixing fluxes
@@ -168,8 +203,12 @@ class les(_base):
           if self.les_mix_b:
              self.les_mix_buoyancy()
           elif self.enable_tke_closure:
-             # no explicit buoyancy flux -> no resolved buoyancy production
-             self.buoy_prod = 0.0*self.buoy_prod
+             # no explicit buoyancy flux: the subgrid buoyancy flux is the
+             # implicit one of a flux-limited advection scheme, if any
+             if hasattr(self,'b_flux_implicit_z'):
+                self.buoy_prod = self.b_flux_implicit_z
+             else:
+                self.buoy_prod = 0.0*self.buoy_prod
           return
 
 
@@ -369,12 +408,11 @@ class les(_base):
       # ------------------------------------------------------------------
       # prognostic TKE closure (Deardorff type)
       # ------------------------------------------------------------------
-      def les_tke_closure(self,strains):
+      def les_tke_closure(self):
           """
           prognostic TKE with stratification limited length scale,
           shear and buoyancy production from the previous time step
           """
-          str11,str22,str33,str12,str13,str23 = strains
           dx, dy, dz, dt = self.dx, self.dy, self.dz, self.dt
           eps = self.les_epsln
 
@@ -395,21 +433,26 @@ class les(_base):
                            *OM.np.maximum(0.,self.tke)
                            /OM.np.maximum(eps,self.les_len) )
 
-          # diffusive fluxes of TKE, diff is known from last time step
-          fx = self.c_eke*0.5*(self.diff + self.rollx(self.diff,-1)) \
+          # diffusive fluxes of TKE, diff is known from last time step,
+          # TKE diffusivity capped for stability of the explicit step
+          Ktke = OM.np.minimum(self.c_eke*self.diff, min(dx,dy,dz)**2/(4.*dt))
+          fx = 0.5*(Ktke + self.rollx(Ktke,-1)) \
                               *(self.rollx(self.tke,-1) - self.tke)/dx
-          fy = self.c_eke*0.5*(self.diff + self.rolly(self.diff,-1)) \
+          fy = 0.5*(Ktke + self.rolly(Ktke,-1)) \
                               *(self.rolly(self.tke,-1) - self.tke)/dy
-          fz = self.c_eke*0.5*(self.diff + self.rollz(self.diff,-1)) \
+          fz = 0.5*(Ktke + self.rollz(Ktke,-1)) \
                               *(self.rollz(self.tke,-1) - self.tke)/dz
           fz = self.apply_vertical_flux_bc(fz)
 
-          # time tendency of tke: diffusion, production, dissipation
+          # time tendency of tke: diffusion, production, dissipation,
+          # Stokes production and an external volume source
+          forc = self.shear_prod + self.buoy_prod
+          if self.les_stokes_prod is not None: forc = forc + self.stokes_prod
+          if hasattr(self,'tke_source'):       forc = forc + self.tke_source
           self.tke = self.tke + dt*( (fx - self.rollx(fx,1))/dx
                                    + (fy - self.rolly(fy,1))/dy
                                    + (fz - self.rollz(fz,1))/dz
-                                   - self.tke_diss
-                                   + self.shear_prod + self.buoy_prod )
+                                   - self.tke_diss + forc )
           self.tke = OM.np.maximum(self.tke, self.tke_min)
           self.tke     = self.apply_bc(self.tke)      # also zeros vertical
           self.les_len = self.apply_bc(self.les_len)  # halos if closed in z
@@ -427,33 +470,18 @@ class les(_base):
                           *0.5*(self.diff + self.rollz(self.diff,1)) )
           self.kappav  = self.kappah
 
-          # halos needed for the -1 point stencils of the shear production
-          self.visc_12 = self.apply_bc(self.visc_12)
-          self.visc_13 = self.apply_bc(self.visc_13)
-          self.visc_23 = self.apply_bc(self.visc_23)
+          # stability caps, as in les_smagorinsky
+          self.visc_00 = OM.np.minimum(self.visc_00, min(dx,dy,dz)**2/(4.*dt))
+          self.visc_12 = OM.np.minimum(self.visc_12, min(dx,dy)**2/(4.*dt))
+          self.visc_13 = OM.np.minimum(self.visc_13, min(dx,dz)**2/(4.*dt))
+          self.visc_23 = OM.np.minimum(self.visc_23, min(dy,dz)**2/(4.*dt))
+          self.kappah  = OM.np.minimum(self.kappah,  min(dx,dy)**2/(8.*dt))
+          self.kappav  = OM.np.minimum(self.kappav,  dz**2/(4.*dt))
 
-          # shear production; first part at T points (aloc), with the
-          # deviatoric -2/3 tke S_ii contribution
-          tke_c  = 0.5*(self.tke + self.rollz(self.tke,1))
-          s12sum = ( str12 + self.rollx(str12,1) + self.rolly(str12,1)
-                          + self.rollx(self.rolly(str12,1),1) )
-          v12avg = 0.25*( self.visc_12 + self.rollx(self.visc_12,1)
-                        + self.rolly(self.visc_12,1)
-                        + self.rollx(self.rolly(self.visc_12,1),1) )
-          aloc = ( 2.0*self.visc_00*str11**2 - (2./3.)*tke_c*str11
-                 + 2.0*self.visc_00*str22**2 - (2./3.)*tke_c*str22
-                 + 2.0*self.visc_00*str33**2 - (2./3.)*tke_c*str33
-                 + s12sum**2*v12avg )
-
-          s13sum = str13 + self.rollx(str13,1)
-          s23sum = str23 + self.rolly(str23,1)
-          v13avg = 0.5*(self.visc_13 + self.rollx(self.visc_13,1))
-          v23avg = 0.5*(self.visc_23 + self.rolly(self.visc_23,1))
-          self.shear_prod = ( 0.5*(self.rollz(aloc,-1) + aloc)
-                            + s13sum**2*v13avg + s23sum**2*v23avg )
-
-          # buoy_prod is diagnosed from the buoyancy flux in
-          # les_mix_buoyancy and used in the next time step
+          # shear_prod is the energy les_mix_momentum removes from the
+          # resolved flow (les_shear_production), and buoy_prod is diagnosed
+          # from the buoyancy flux in les_mix_buoyancy; both are used in the
+          # next time step
           return
 
 
@@ -503,28 +531,124 @@ class les(_base):
           fy = self.visc_12*(self.rolly(u,-1) - u)/dy
           fz = self.visc_13*(self.rollz(u,-1) - u)/dz
           fz = self.apply_vertical_flux_bc(fz)
-          self.u = self.u + dt*( (fx - self.rollx(fx,1))/dx
-                               + (fy - self.rolly(fy,1))/dy
-                               + (fz - self.rollz(fz,1))/dz )
+          du = dt*( (fx - self.rollx(fx,1))/dx
+                  + (fy - self.rolly(fy,1))/dy
+                  + (fz - self.rollz(fz,1))/dz )
+          self.u = self.u + du
+          self.les_flux_uz = fz
+          self.les_ke_loss = -(u + 0.5*du)*du/dt
+          tke = self.enable_tke_closure
+          if tke: d_u = (fx*(self.rollx(u,-1) - u)/dx, fy*(self.rolly(u,-1) - u)/dy,
+                         fz*(self.rollz(u,-1) - u)/dz)
 
           # meridional velocity
           fx = self.visc_12*(self.rollx(v,-1) - v)/dx
           fy = self.rolly(self.visc_00,-1)*(self.rolly(v,-1) - v)/dy
           fz = self.visc_23*(self.rollz(v,-1) - v)/dz
           fz = self.apply_vertical_flux_bc(fz)
-          self.v = self.v + dt*( (fx - self.rollx(fx,1))/dx
-                               + (fy - self.rolly(fy,1))/dy
-                               + (fz - self.rollz(fz,1))/dz )
+          dv = dt*( (fx - self.rollx(fx,1))/dx
+                  + (fy - self.rolly(fy,1))/dy
+                  + (fz - self.rollz(fz,1))/dz )
+          self.v = self.v + dv
+          self.les_flux_vz = fz
+          self.les_ke_loss = self.les_ke_loss - (v + 0.5*dv)*dv/dt
+          if tke: d_v = (fx*(self.rollx(v,-1) - v)/dx, fy*(self.rolly(v,-1) - v)/dy,
+                         fz*(self.rollz(v,-1) - v)/dz)
 
           # vertical velocity
           fx = self.visc_13*(self.rollx(w,-1) - w)/dx
           fy = self.visc_23*(self.rolly(w,-1) - w)/dy
-          fz = self.rollz(self.visc_00,-1)*(self.rollz(w,-1) - w)/dz
-          fz = self.apply_vertical_flux_bc(fz, flux_on_wgrid = True)
-          self.w = self.w + dt*( (fx - self.rollx(fx,1))/dx
-                               + (fy - self.rolly(fy,1))/dy
-                               + (fz - self.rollz(fz,1))/dz )
-          self.w = self.apply_vertical_flux_bc(self.w)
+          fz = self.rollz(self.visc_00,-1)*(self.rollz(w,-1) - w)/dz     # at T levels; w = 0 at the lids, no bc needed
+          dw = dt*( (fx - self.rollx(fx,1))/dx
+                  + (fy - self.rolly(fy,1))/dy
+                  + (fz - self.rollz(fz,1))/dz )
+          self.w = self.apply_vertical_flux_bc(self.w + dw)
+          dw = self.apply_vertical_flux_bc(dw)
+          self.les_ke_loss_w = -(w + 0.5*dw)*dw/dt
+          if tke:
+             d_w = (fx*(self.rollx(w,-1) - w)/dx, fy*(self.rolly(w,-1) - w)/dy,
+                    fz*(self.rollz(w,-1) - w)/dz)
+             self.les_shear_production(d_u, d_v, d_w)
+
+          if self.enable_tke_closure and self.les_stokes_prod is not None:
+             self.les_stokes_production()
+          return
+
+
+      def les_shear_production(self, d_u, d_v, d_w):
+          """
+          Shear production of subgrid TKE = the resolved kinetic energy the
+          viscous fluxes of les_mix_momentum dissipate, flux times gradient
+          at each flux point, mapped onto the w-grid (T columns). Summed
+          over the domain this equals the energy les_mix_momentum removes,
+          sum(les_ke_loss + les_ke_loss_w), up to the O(dt) term
+          sum(du^2)/(2 dt) of the forward step (summation by parts, zero
+          flux at the lids). It includes the viscosity added by the Peclet
+          bound. Flux points:
+            u: x at T(i+1), y at corner, z at U-W edge
+            v: x at corner, y at T(j+1), z at V-W edge
+            w: x at U-W edge, y at V-W edge, z at T(k+1)
+          """
+          rx, ry, rz = self.rollx, self.rolly, self.rollz
+          corner = lambda a: 0.25*(a + rx(a,1) + ry(a,1) + rx(ry(a,1),1))
+          # T levels, T columns
+          c = ( rx(d_u[0],1) + corner(d_u[1])
+              + corner(d_v[0]) + ry(d_v[1],1)
+              + rz(d_w[2],1) )
+          # w-grid, T columns
+          e = ( 0.5*(d_u[2] + rx(d_u[2],1)) + 0.5*(d_v[2] + ry(d_v[2],1))
+              + 0.5*(d_w[0] + rx(d_w[0],1)) + 0.5*(d_w[1] + ry(d_w[1],1)) )
+          # T level k -> faces k-1/2 and k+1/2 (half each); the lower half of
+          # the bottom cell goes to its upper face (w-grid sum = T sum)
+          c = self.apply_bc(c)
+          sp = 0.5*(c + rz(c,-1))
+          if self.my_blk_z == 1 and not self.periodic_in_z:
+             h = self.halo
+             sl = (slice(None),slice(None),h) if self.fortran_ordering \
+                  else (h,slice(None),slice(None))
+             sp = OM.modify_array(sp, sl, sp[sl] + 0.5*c[sl])
+          self.shear_prod = self.apply_bc(sp + self.apply_vertical_flux_bc(e))
+          return
+
+
+      def les_stokes_production(self):
+          """
+          Stokes production of subgrid TKE on the w-grid from the vertical
+          subgrid momentum fluxes of les_mix_momentum, <u'w'> = -les_flux_uz
+          (U-W edges), <v'w'> = -les_flux_vz (V-W edges), and the Stokes
+          velocity self.u_S, self.v_S (U and V points).
+            'A'   -<u'w'> dz u_S - <v'w'> dz v_S     at the edges, then to T
+            'B'   u_S dz <u'w'> + v_S dz <v'w'>      at U/V points, then to T
+                                                     and to the w-grid
+          The fluxes vanish at the lids, so both have the same column sum.
+          """
+          dz = self.dz
+          fu, fv = self.les_flux_uz, self.les_flux_vz
+          if self.les_stokes_prod == 'A':
+             dzus = self.apply_vertical_flux_bc(
+                         (self.rollz(self.u_S,-1) - self.u_S)/dz)
+             dzvs = self.apply_vertical_flux_bc(
+                         (self.rollz(self.v_S,-1) - self.v_S)/dz)
+             a = fu*dzus
+             b = fv*dzvs
+             self.stokes_prod = 0.5*(a + self.rollx(a,1)) \
+                              + 0.5*(b + self.rolly(b,1))
+          else:
+             a = -self.u_S*(fu - self.rollz(fu,1))/dz
+             b = -self.v_S*(fv - self.rollz(fv,1))/dz
+             c = self.apply_bc( 0.5*(a + self.rollx(a,1))
+                              + 0.5*(b + self.rolly(b,1)) )
+             # T level k -> faces k-1/2 and k+1/2 (half each); the lower
+             # half of the bottom cell goes to its upper face, so the
+             # w-grid sum equals the T-level sum (same total as 'A')
+             self.stokes_prod = 0.5*(c + self.rollz(c,-1))
+             if self.my_blk_z == 1 and not self.periodic_in_z:
+                h = self.halo
+                sl = (slice(None),slice(None),h) if self.fortran_ordering \
+                     else (h,slice(None),slice(None))
+                self.stokes_prod = OM.modify_array(self.stokes_prod, sl,
+                                     self.stokes_prod[sl] + 0.5*c[sl])
+          self.stokes_prod = self.apply_bc(self.stokes_prod)
           return
 
 
@@ -547,5 +671,6 @@ class les(_base):
                                + (fy - self.rolly(fy,1))/dy
                                + (fz - self.rollz(fz,1))/dz )
 
+          self.les_flux_bz = fz
           if self.enable_tke_closure: self.buoy_prod = -fz
           return
