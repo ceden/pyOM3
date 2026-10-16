@@ -25,6 +25,8 @@ class main(boundary):
               self.snonlin_backend = 'jax' if OM.jax else 'fortran'
           if OM.jax and self.snonlin_backend == 'fortran':
               raise ValueError("snonlin_backend='fortran' needs the numpy backend")
+          if OM.jax and self.snonlin_backend == 'exact':
+              raise ValueError("snonlin_backend='exact' is numpy code and needs the numpy backend")
           if OM.jax and self.snonlin_backend == 'numpy':
               self.snonlin_backend = 'jax'      # the same DIA, written for both backends
  
@@ -41,7 +43,7 @@ class main(boundary):
           elif self.snonlin_backend == 'exact':
             from pyOM3.wim_simple.snl_exact.snonlin_exact import Snonlin as Snonlin_backend 
           else:
-            raise ValueError("snonlin_backend must be 'numpy','jax', or 'fortran', "
+            raise ValueError("snonlin_backend must be 'numpy','jax','fortran', or 'exact', "
                              "got %r" % (self.snonlin_backend,))
  
           self.Snonlin_backend = Snonlin_backend
@@ -62,12 +64,22 @@ class main(boundary):
           elif self.propagation_backend != 'numpy':
               raise ValueError("propagation_backend must be 'numpy' or 'fortran', "
                                "got %r" % (self.propagation_backend,))
-          self.Snonlin_backend.setup(self.nx_loc, self.ny_loc, self.nd, self.ft[1:-1])
-              
-          
           if not hasattr(self,'grav'):   self.grav  = 9.81
+          # the backends get the nf real (prognostic) frequencies, i.e. ft
+          # without its halo bins; the exact backend also needs the model's g
+          # (the DIA backends have no g)
+          if self.snonlin_backend == 'exact':
+              self.Snonlin_backend.g = self.grav
+          self.Snonlin_backend.setup(self.nx_loc, self.ny_loc, self.nd,
+                                     self.ft[self.halo:-self.halo])
+
+
           if not hasattr(self,'rho_o'):  self.rho_o = 1024.
+          # WAMDI dissipation coefficient gamma = -beta_o om_mean (om/om_mean)^2 alpha^2
+          self.beta_o = 2.33e-5/(0.66*4.57e-3)**2
           if not hasattr(self,'limit_growth'):   self.limit_growth = False
+          # AB2 stabilisation: tA,tB = 1.5+eps_ab, -0.5-eps_ab in loop()
+          if not hasattr(self,'eps_ab'):   self.eps_ab = 0.05
           if not hasattr(self,'mask_energy' ):   self.mask_energy  = False    
 
           # horizontal land/sea mask. set_topography defines kbot (default: all

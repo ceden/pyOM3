@@ -61,8 +61,8 @@ class main(boundary):
                depth = (nz - k - 0.5)*self.dz
                self.p0 = _move_it(depth, OM.np.zeros_like(self.u) )
           else:
-             # not yet implemented 
-             raise pyOM3Error 
+             raise ValueError('set_mean_pressure: eq_of_state %r not supported'
+                              % (self.eq_of_state,))
           return
 
          

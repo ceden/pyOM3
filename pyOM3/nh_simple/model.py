@@ -119,7 +119,10 @@ class model(main,advection,diabatic,pressure):
           tau, taum1, taum2 = 2,1,0  # pointers to time levels
           for n in range(max_steps): # time step equations 
             self.time_step(tA,tB,tC,tau,taum1,taum2)  
-            self.diagnose(n,tau)               
+            # the state is updated in place, so after the call it is at
+            # t = (n+1) dt; diagnose gets the number of completed steps
+            # and stamps t = (n+1) dt (before Oct 16 2026: n, one dt early)
+            self.diagnose(n+1,tau)               
             tau, taum1, taum2   = np__.mod(tau+1,3), np__.mod(taum1+1,3), np__.mod(taum2+1,3)
             if tA == 1. and tB == 0. and tC == 0:    tA, tB, tC = 1.5,  -0.5, 0. 
             elif tA==1.5 and tB == -0.5 and tC == 0: tA, tB, tC =  23./12. , -16./12., 5./12.
@@ -128,7 +131,8 @@ class model(main,advection,diabatic,pressure):
     
       def diagnose(self,n,tau):  
           """
-          Dummy routine for diagnostics.
+          Dummy routine for diagnostics. n is the number of completed
+          time steps, the state is at t = n dt.
           """
           t =  n*self.dt
           if self.my_pe == 0: print ("t=",t," n=",n)

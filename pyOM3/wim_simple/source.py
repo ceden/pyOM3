@@ -113,10 +113,12 @@ class source(main):
       """
       e_mean,om_mean = self.calc_emean_wamdi(E)
       alpha = e_mean*om_mean**4/self.grav**2
-      alpha_pm = 0.66*4.57e-3
-      gamma = -2.33e-5*om_mean[None,:,:]*(self.omega_t[:,None,None]/ \
+      # beta_o = 2.33e-5/alpha_pm^2 with alpha_pm = 0.66*4.57e-3 (= 2.5612);
+      # the same coefficient is used for the analytic dissipation tails in
+      # interface.py (calc_stress_work and the WAMDI tail of calc_stress)
+      gamma = -self.beta_o*om_mean[None,:,:]*(self.omega_t[:,None,None]/ \
                                   OM.np.maximum(1e-32,om_mean[None,:,:]))**2
-      gamma = gamma*(alpha[None,:,:]/alpha_pm)**2  
+      gamma = gamma*alpha[None,:,:]**2
       #gamma = OM.np.minimum(gamma, 0.0)
       return e_mean, om_mean, gamma
 

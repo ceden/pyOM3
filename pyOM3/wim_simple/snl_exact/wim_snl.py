@@ -1,16 +1,21 @@
-"""Adapter: exact WRT S_nl for WIM (offline reference / research source term).
+"""Adapter: exact WRT S_nl for WIM -- OFFLINE TOOL ONLY.
+
+wim_simple does not use this class. The in-model backend
+(snonlin_backend='exact') is snonlin_exact.Snonlin; this adapter is a second,
+stand-alone interface to the same operator (assembly.snl) for offline
+reference calculations with a given (f, theta) grid.
 
 Usage
 -----
-    from wim_snl import SnlExact
+    from pyOM3.wim_simple.snl_exact.wim_snl import SnlExact
     snl = SnlExact(f=wim.f, nd=wim.nd, g=wim.grav, cache="snl_table.npz")
     S_E = snl.tendency_E(E)      # E(f,theta) [m^2/Hz/rad]  -> dE/dt
     S_A = snl.tendency_A(A)      # A(f,theta) = E/omega     -> dA/dt
 
 Requirements and caveats
 ------------------------
-* f must be geometric (WIM's df0-ratio grid; the `uniform_f` diagnostic
-  switch must be OFF).  theta is assumed uniform over 2 pi with nd bins.
+* f must be geometric (WIM's df0-ratio grid).  theta is assumed uniform
+  over 2 pi with nd bins.
 * Cost: the interaction table scales as nf^2 * nd * npts entries.  At
   nf=62, nd=80 expect several million entries (~1 GB, build tens of
   minutes, evaluation minutes).  This is an offline truth evaluator; for
@@ -28,7 +33,7 @@ Requirements and caveats
 
 import os
 import numpy as np
-from assembly import PolarGrid, build_table, snl
+from pyOM3.wim_simple.snl_exact.assembly import PolarGrid, build_table, snl
 
 
 class SnlExact:
@@ -37,8 +42,7 @@ class SnlExact:
         f = np.asarray(f, float)
         r = f[1:] / f[:-1]
         if not np.allclose(r, r[0], rtol=1e-8):
-            raise ValueError("WIM frequency grid must be geometric "
-                             "(disable uniform_f)")
+            raise ValueError("WIM frequency grid must be geometric")
         self.ratio = float(r[0])
         self.nf_band = len(f)
         self.pad_hi = int(pad_hi)

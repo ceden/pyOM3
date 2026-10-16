@@ -1,9 +1,9 @@
 """Validation battery for the WRT assembly.
 
-Run: python3 test_assembly.py    (takes a couple of minutes)
+Run (from any directory, package import): python3 -m pyOM3.wim_simple.snl_exact.test_assembly    (takes a couple of minutes)
 """
 import numpy as np
-from assembly import PolarGrid, build_table, snl
+from pyOM3.wim_simple.snl_exact.assembly import PolarGrid, build_table, snl
 
 rng = np.random.default_rng(5)
 
@@ -66,8 +66,9 @@ def main():
     allok &= report("S(2n) = 8 S(n)", err, 1e-13)
 
     # ---- (5) k-shift self-similarity: S ~ k^{19/2} n^3 ------------------
-    # closed-locus part of the table is exactly shift-covariant (relative
-    # stencils); same-ring line loci cap at the absolute grid edge, so they
+    # closed-locus part of the table is exactly shift-covariant (the ln k
+    # stencil indices are absolute, but the geometric grid makes a k-shift
+    # an index shift); same-ring line loci cap at the absolute grid edge, so they
     # are excluded here.  Residual = compact-bump tail leakage at the
     # fixed grid boundary.
     mask = table['i3f'] != table['i1f']

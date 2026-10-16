@@ -1,0 +1,38 @@
+"""Fast part of the routine suite, all families (README_test_suite.md).
+    python3 run_fast.py            all families
+    python3 run_fast.py pe         one family
+A family whose fast part is not built yet says so and passes."""
+import sys, os, time, importlib
+HERE = os.path.dirname(os.path.abspath(__file__))
+FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'vadv', 'ab3'],   # 4 needs mpirun
+            'nh':  ['reduction', 'identities', 'restart', 'operators', 'golden'],          # nh_simple (4 needs mpirun)
+            'wim': ['reduction', 'identities', 'restart', 'operators', 'golden',
+                    'symmetry', 'sources', 'budget']}                                   # wim_simple, wim_realistic (wim_idemix: not built)
+want = sys.argv[1:] or list(FAMILIES)
+t0 = time.time(); ok = True
+for fam in want:
+    mods = FAMILIES[fam]
+    if not mods:
+        print('%s: fast part not built (see README_test_suite.md)' % fam); continue
+    sys.path.insert(0, os.path.join(HERE, fam))
+    for name in mods:
+        mod = importlib.import_module(name)
+        t = time.time(); r = mod.run(); ok &= r
+        print('   [%s/%s %.0f s]' % (fam, name, time.time() - t))
+    sys.path.pop(0)
+    for name in mods:
+        sys.modules.pop(name, None); sys.modules.pop('config', None)
+    # test 4 (decomposition) needs a launcher: mpirun on the path or MPIRUN set
+    drv = os.path.join(HERE, fam, 'run_decomposition.py')
+    if os.path.exists(drv):
+        import shutil, subprocess
+        launcher = os.environ.get('MPIRUN', '').split() or (['mpirun', '-np'] if shutil.which('mpirun') else None)
+        if launcher:
+            t = time.time()
+            r = subprocess.run([sys.executable, drv], env=dict(os.environ, MPIRUN=' '.join(launcher)))
+            ok &= (r.returncode == 0)
+            print('   [%s/decomposition %.0f s]' % (fam, time.time() - t))
+        else:
+            print('4 decomposition: skipped (no mpirun on the path; set MPIRUN)')
+print('fast suite: %s in %.0f s' % ('ALL PASS' if ok else 'FAILURES', time.time() - t0))
+sys.exit(0 if ok else 1)

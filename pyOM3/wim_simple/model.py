@@ -231,7 +231,7 @@ class model(propagation,source,interface):
             self.diagnose(n,tau)   
             if n % 100 == 0: self.check_monotonicity(n)  
             tau, taum1, taum2   = np__.mod(tau+1,3), np__.mod(taum1+1,3), np__.mod(taum2+1,3)          
-            if tA == 1. and tB == 0. and tC == 0:    tA, tB, tC = 1.5+0.05,  -0.5-0.05, 0. 
+            if tA == 1. and tB == 0. and tC == 0:    tA, tB, tC = 1.5+self.eps_ab,  -0.5-self.eps_ab, 0.
             #elif tA==1.5 and tB == -0.5 and tC == 0: tA, tB, tC =  23./12. , -16./12., 5./12.
           return    
 

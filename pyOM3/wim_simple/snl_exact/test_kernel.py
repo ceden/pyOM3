@@ -1,9 +1,9 @@
 """Validation battery for the derived canonical four-wave kernel.
 
-Run:  python3 test_kernel.py
+Run (from any directory, package import): python3 -m pyOM3.wim_simple.snl_exact.test_kernel
 """
 import numpy as np
-from kernel import T, T_selfself, T_twowave_directional, T_unidirectional
+from pyOM3.wim_simple.snl_exact.kernel import T, T_selfself, T_twowave_directional, T_unidirectional
 
 rng = np.random.default_rng(42)
 G = 9.81
@@ -127,7 +127,7 @@ def main():
 
 
     # ---- (6) cross-check vs WW3/xnl Webb-Dungey-Hui coefficient ---------
-    from kernel import xc_webb
+    from pyOM3.wim_simple.snl_exact.kernel import xc_webb
     C = 64 * np.pi ** 5 * G ** 2
     worst = 0.0
     nq = 0

@@ -1,0 +1,146 @@
+"""
+ Tracer advection and diffusion.
+
+ Based on class main.
+"""
+import pyOM3                       as OM
+from   pyOM3.pe_realistic.main        import main
+from   pyOM3.density               import get_rho
+from   functools                   import partial
+
+
+class thermodynamics(main):
+
+   
+      @partial(OM.jaxjit, static_argnums=0)
+      def update_thermodynamics_AB3(self,A,B,C,tau,taum1,taum2,temp,salt,dtemp,dsalt,p0,maskT): 
+          """
+          Update temperature and salinity using their tendencies.
+          """      
+          temp += self.dt*(A*dtemp[tau,:,:,:] + B*dtemp[taum1,:,:,:] + C*dtemp[taum2,:,:,:])*maskT 
+          temp = self.apply_bc(temp)
+          if self.eq_of_state > 0 and self.eq_of_state != 100:
+             salt += self.dt*(A*dsalt[tau,:,:,:] + B*dsalt[taum1,:,:,:] + C*dsalt[taum2,:,:,:])*maskT 
+             salt = self.apply_bc(salt) 
+          # rho is NOT updated here: as in pyOM2 the density is evaluated once
+          # per step, after the vertical mixing (model.py), and rho(tau) stays
+          # in use through the tracer update.
+          return temp,salt
+
+        
+    
+      @partial(OM.jaxjit, static_argnums=0)    
+      def tracer_advection(self,var,dvar,u,v,w,maskU,maskV,maskW,maskT,tau):  
+          """
+           Calculates tendencies due to tracer advection for general tracer var.
+           Stores tendency in dvar and overwrites at time level tau.
+          """
+          if hasattr(self,'superbee_advection'):
+             if self.superbee_advection:
+                fe,fn,ft   = self.tracer_flux_superbee(var,u,v,w,maskU,maskV,maskW)  
+             else: raise ValueError    
+          else:
+                fe,fn,ft   = self.tracer_flux_2nd(var,u,v,w,maskU,maskV,maskW)   
+              
+          # spherical/variable-grid divergence (pyOM2 adv_main.f90): the
+          # meridional flux fn already carries cosu (see the flux routines)
+          _dvar = (  (fe-self.rollx(fe,1))/(self.cost_y*self.dxt_x) 
+                   + (fn-self.rolly(fn,1))/(self.cost_y*self.dyt_y) 
+                   + (ft-self.rollz(ft,1))/self.dzt_z )*maskT 
+          return OM.modify_array(dvar, (tau,slice(None),slice(None),slice(None)), _dvar, out_sharding = self.sharding_4D)
+          
+                    
+    
+      @partial(OM.jaxjit, static_argnums=0)
+      def tracer_flux_2nd(self,var,u,v,w,maskU,maskV,maskW):
+          """ 
+          Simple 2nd order tracer fluxes.
+          """
+          fe = - u*0.5*( var + self.rollx(var,-1) )*maskU
+          fn = - self.cosu_y*v*0.5*( var + self.rolly(var,-1) )*maskV
+          ft = - w*0.5*( var + self.rollz(var,-1) )*maskW      
+                    # No advective tracer flux through the surface face (pyOM2
+          # adv_superbee.f90 / adv_main: adv_ft(:,:,nz)=0): maskW is opened
+          # there for the free-surface solver and w_surf is nonzero, but the
+          # tracer budget uses fixed cells -- a surface flux would pump tracer
+          # non-conservatively.
+          ks = -(self.halo+1)
+          if getattr(self, 'free_surface_tracer_flux', False):
+             # Option (Sep 2026): the water crossing the moving surface at
+             # w_surf carries the surface-cell tracer value, ft = -w_surf var.
+             # Then div_h(u var) + (ft_surf - ft_below)/dz = var (div_h u +
+             # dw/dz) = 0 for a uniform tracer, i.e. the top cell no longer
+             # gains -var dt div_h(u) every step under the linear free surface
+             # (pyOM2's adv_ft(:,:,nz) = 0 does; the anomaly feeds a p_h
+             # gradient in phase with d(eta)/dt that anti-damps the
+             # split-explicit barotropic mode). Off by default: pyOM2 form.
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  -w[ks]*var[ks]*maskW[ks])
+          else:
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  OM.np.zeros_like(ft[ks]))
+          return self.apply_bc(fe), self.apply_bc(fn), self.apply_bc(ft)
+          
+   
+    
+      @partial(OM.jaxjit, static_argnums=0)
+      def tracer_flux_superbee(self,var,u,v,w,maskU,maskV,maskW):
+          """
+          from MITgcm: 2nd oder scheme with Superbee flux limiter.
+          """
+          def _limiter(cr):
+              return OM.np.maximum(OM.np.clip(2 * cr, 0, 1), OM.np.clip(cr, 0, 2))
+              
+          eps = 1e-20  
+          uCFL = OM.np.abs(u * self.dt / (self.cost_y*self.dxt_x))          
+          rj  = self.apply_bc( (self.rollx(var,-1)-var)*maskU )
+          rjm = self.rollx(rj, 1) 
+          rjp = self.rollx(rj,-1)                     
+          cr = _limiter( OM.np.where(u > 0.0, rjm, rjp) / OM.np.where(OM.np.abs(rj) < eps, eps, rj)  )          
+          fe = - (u * (self.rollx(var,-1) + var) * 0.5 - OM.np.abs(u) * ((1.0 - cr) + uCFL * cr) * rj * 0.5)*maskU
+
+          uCFL = OM.np.abs(self.cosu_y*v * self.dt / (self.cost_y*self.dyt_y))          
+          rj  = self.apply_bc( (self.rolly(var,-1)-var)*maskV )
+          rjm = self.rolly(rj, 1) 
+          rjp = self.rolly(rj,-1)                     
+          cr = _limiter( OM.np.where(v > 0.0, rjm, rjp) / OM.np.where(OM.np.abs(rj) < eps, eps, rj)  )          
+          fn = - self.cosu_y*(v * (self.rolly(var,-1) + var) * 0.5 - OM.np.abs(v) * ((1.0 - cr) + uCFL * cr) * rj * 0.5)*maskV
+          
+          uCFL = OM.np.abs(w * self.dt / self.dzt_z)          
+          rj  = (self.rollz(var,-1)-var)*maskW 
+          # Zero the surface-face gradient before it enters the limiter:
+          # maskW is opened at the surface, so rj there would be the fake
+          # jump (halo 0 - var_surf), poisoning Cr of the top interior face.
+          # pyOM2 (adv_superbee.f90) gets Rjp = 0 at k = nz-1 via the
+          # kp2 = min(nz,k+2) clamp; zeroing surface rj reproduces that.
+          rj = OM.modify_array(rj, (-(self.halo+1), slice(None), slice(None)),
+                               OM.np.zeros_like(rj[-(self.halo+1)]))
+          rjm = self.rollz(rj, 1) 
+          rjp = self.rollz(rj,-1)                   
+          cr = _limiter( OM.np.where(w > 0.0, rjm, rjp) / OM.np.where(OM.np.abs(rj) < eps, eps, rj)  )          
+          ft = - (w * (self.rollz(var,-1) + var) * 0.5 - OM.np.abs(w) * ((1.0 - cr) + uCFL * cr) * rj * 0.5)*maskW
+              
+                    # No advective tracer flux through the surface face (pyOM2
+          # adv_superbee.f90 / adv_main: adv_ft(:,:,nz)=0): maskW is opened
+          # there for the free-surface solver and w_surf is nonzero, but the
+          # tracer budget uses fixed cells -- a surface flux would pump tracer
+          # non-conservatively.
+          ks = -(self.halo+1)
+          if getattr(self, 'free_surface_tracer_flux', False):
+             # Option (Sep 2026): the water crossing the moving surface at
+             # w_surf carries the surface-cell tracer value, ft = -w_surf var.
+             # Then div_h(u var) + (ft_surf - ft_below)/dz = var (div_h u +
+             # dw/dz) = 0 for a uniform tracer, i.e. the top cell no longer
+             # gains -var dt div_h(u) every step under the linear free surface
+             # (pyOM2's adv_ft(:,:,nz) = 0 does; the anomaly feeds a p_h
+             # gradient in phase with d(eta)/dt that anti-damps the
+             # split-explicit barotropic mode). Off by default: pyOM2 form.
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  -w[ks]*var[ks]*maskW[ks])
+          else:
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  OM.np.zeros_like(ft[ks]))
+          return self.apply_bc(fe), self.apply_bc(fn), self.apply_bc(ft)
+         
+          
+

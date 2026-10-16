@@ -310,11 +310,15 @@ class les(_base):
           # The original ps3D caps used geometric means, valid only for
           # near-isotropic grids: for dx >> dz they admit vertically
           # UNSTABLE viscosities (factor dx/dz too large).
+          # Forward Euler of the 3-D operator needs
+          # nu dt (1/dx^2 + 1/dy^2 + 1/dz^2) <= 1/2, so each direction is
+          # capped at 1/6 (until Oct 16 2026: 1/4, sum 3/4). The buoyancy
+          # caps 1/8 + 1/8 + 1/4 = 1/2 already satisfy this.
           kappa        = self.visc_00/self.prandtl
-          self.visc_00 = OM.np.minimum(self.visc_00, min(dx,dy,dz)**2/(4.*dt))
-          self.visc_12 = OM.np.minimum(self.visc_12, min(dx,dy)**2/(4.*dt))
-          self.visc_13 = OM.np.minimum(self.visc_13, min(dx,dz)**2/(4.*dt))
-          self.visc_23 = OM.np.minimum(self.visc_23, min(dy,dz)**2/(4.*dt))
+          self.visc_00 = OM.np.minimum(self.visc_00, min(dx,dy,dz)**2/(6.*dt))
+          self.visc_12 = OM.np.minimum(self.visc_12, min(dx,dy)**2/(6.*dt))
+          self.visc_13 = OM.np.minimum(self.visc_13, min(dx,dz)**2/(6.*dt))
+          self.visc_23 = OM.np.minimum(self.visc_23, min(dy,dz)**2/(6.*dt))
           self.kappah  = OM.np.minimum(kappa, min(dx,dy)**2/(8.*dt))
           self.kappav  = OM.np.minimum(kappa, dz**2/(4.*dt))
           return
@@ -395,11 +399,15 @@ class les(_base):
           # The original ps3D caps used geometric means, valid only for
           # near-isotropic grids: for dx >> dz they admit vertically
           # UNSTABLE viscosities (factor dx/dz too large).
+          # Forward Euler of the 3-D operator needs
+          # nu dt (1/dx^2 + 1/dy^2 + 1/dz^2) <= 1/2, so each direction is
+          # capped at 1/6 (until Oct 16 2026: 1/4, sum 3/4). The buoyancy
+          # caps 1/8 + 1/8 + 1/4 = 1/2 already satisfy this.
           kappa        = self.visc_00/self.prandtl
-          self.visc_00 = OM.np.minimum(self.visc_00, min(dx,dy,dz)**2/(4.*dt))
-          self.visc_12 = OM.np.minimum(self.visc_12, min(dx,dy)**2/(4.*dt))
-          self.visc_13 = OM.np.minimum(self.visc_13, min(dx,dz)**2/(4.*dt))
-          self.visc_23 = OM.np.minimum(self.visc_23, min(dy,dz)**2/(4.*dt))
+          self.visc_00 = OM.np.minimum(self.visc_00, min(dx,dy,dz)**2/(6.*dt))
+          self.visc_12 = OM.np.minimum(self.visc_12, min(dx,dy)**2/(6.*dt))
+          self.visc_13 = OM.np.minimum(self.visc_13, min(dx,dz)**2/(6.*dt))
+          self.visc_23 = OM.np.minimum(self.visc_23, min(dy,dz)**2/(6.*dt))
           self.kappah  = OM.np.minimum(kappa, min(dx,dy)**2/(8.*dt))
           self.kappav  = OM.np.minimum(kappa, dz**2/(4.*dt))
           return
@@ -435,7 +443,7 @@ class les(_base):
 
           # diffusive fluxes of TKE, diff is known from last time step,
           # TKE diffusivity capped for stability of the explicit step
-          Ktke = OM.np.minimum(self.c_eke*self.diff, min(dx,dy,dz)**2/(4.*dt))
+          Ktke = OM.np.minimum(self.c_eke*self.diff, min(dx,dy,dz)**2/(6.*dt))
           fx = 0.5*(Ktke + self.rollx(Ktke,-1)) \
                               *(self.rollx(self.tke,-1) - self.tke)/dx
           fy = 0.5*(Ktke + self.rolly(Ktke,-1)) \
@@ -470,11 +478,11 @@ class les(_base):
                           *0.5*(self.diff + self.rollz(self.diff,1)) )
           self.kappav  = self.kappah
 
-          # stability caps, as in les_smagorinsky
-          self.visc_00 = OM.np.minimum(self.visc_00, min(dx,dy,dz)**2/(4.*dt))
-          self.visc_12 = OM.np.minimum(self.visc_12, min(dx,dy)**2/(4.*dt))
-          self.visc_13 = OM.np.minimum(self.visc_13, min(dx,dz)**2/(4.*dt))
-          self.visc_23 = OM.np.minimum(self.visc_23, min(dy,dz)**2/(4.*dt))
+          # stability caps, as in les_smagorinsky (1/6 per direction)
+          self.visc_00 = OM.np.minimum(self.visc_00, min(dx,dy,dz)**2/(6.*dt))
+          self.visc_12 = OM.np.minimum(self.visc_12, min(dx,dy)**2/(6.*dt))
+          self.visc_13 = OM.np.minimum(self.visc_13, min(dx,dz)**2/(6.*dt))
+          self.visc_23 = OM.np.minimum(self.visc_23, min(dy,dz)**2/(6.*dt))
           self.kappah  = OM.np.minimum(self.kappah,  min(dx,dy)**2/(8.*dt))
           self.kappav  = OM.np.minimum(self.kappav,  dz**2/(4.*dt))
 
@@ -512,6 +520,12 @@ class les(_base):
           self.visc_12 = OM.np.where( Pe > self.Peclet_limit,
                  Pe/self.Peclet_limit*OM.np.maximum(self.visc_12,eps),
                  self.visc_12 )
+          # the bound raises the viscosities after the closures applied
+          # their stability caps; cap again (visc_00 is also the vertical
+          # viscosity of w, so it keeps the 3-D cap)
+          dx, dy, dz, dt = self.dx, self.dy, self.dz, self.dt
+          self.visc_00 = OM.np.minimum(self.visc_00, min(dx,dy,dz)**2/(6.*dt))
+          self.visc_12 = OM.np.minimum(self.visc_12, min(dx,dy)**2/(6.*dt))
           return
 
 

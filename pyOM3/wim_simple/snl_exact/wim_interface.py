@@ -17,7 +17,7 @@ agreement in shape and O(1) magnitude validates the whole constant chain
 """
 
 import numpy as np
-from assembly import PolarGrid, build_table, snl
+from pyOM3.wim_simple.snl_exact.assembly import PolarGrid, build_table, snl
 
 
 # ------------------------------------------------------------ conversions

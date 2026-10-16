@@ -1,9 +1,9 @@
 """Validation battery for the locus tracer.
 
-Run: python3 test_locus.py
+Run (from any directory, package import): python3 -m pyOM3.wim_simple.snl_exact.test_locus
 """
 import numpy as np
-from locus import trace_locus, locus_dimensional, zhat, grad_zhat, \
+from pyOM3.wim_simple.snl_exact.locus import trace_locus, locus_dimensional, zhat, grad_zhat, \
     axis_crossings
 
 rng = np.random.default_rng(11)

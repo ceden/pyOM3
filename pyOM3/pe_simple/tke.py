@@ -60,9 +60,11 @@ class tke:
                                                                # background diffusivity is a configuration choice
         self.tke_min    = getattr(self, 'tke_min',    0.0)   # pyOM2: no floor
         # wave-scale surface mixing length (Mellor & Blumberg 2004 type):
-        # the downward distance-limiting sweep is seeded with z0_surf + dz
-        # instead of mxl_min + dz, so the near-surface mixing length starts
-        # at O(beta*Hs) rather than O(dz). Set z0_surf (scalar or (Ny,Nx),
+        # with mxl_choice = 1 the value at the surface W face is limited to
+        # mxl_min + z0_surf + dz(top) (after the downward sweep, which uses
+        # the unlimited surface value, and before the upward sweep; the
+        # tke.f90 order). With mxl_choice = 2 it enters the surface length
+        # l0 = max(mxl_min0, kappa z0_surf). Set z0_surf (scalar or (Ny,Nx),
         # e.g. 1.6*Hs from the wave model, updated every coupling step) when
         # injecting Craig-Banner-scale surface TKE fluxes; default 0 keeps
         # the original pyOM2 behaviour. Note the pyOM2 choice-2 sweeps grow
@@ -83,7 +85,9 @@ class tke:
         #           l_k   = sqrt(l_up l_dwn)   (diffusivity, Gaspar 1990)
         #           l_eps = min(l_up, l_dwn)   (dissipation)
         #       Surface length: Charnock, l0 = kappa beta |tau|/(g rho_0)
-        #       (Mellor & Blumberg 2004, beta = 2e5 after Stacey 1999), floored
+        #       (Mellor & Blumberg 2004; NEMO uses beta = 2e5 after Stacey
+        #       1999, the default here is 2e4 as in the les1 note, l0 = 0.08 m
+        #       at 0.1 Pa), floored
         #       at mxl_min0 = kappa z0 with z0 = 0.1 m (NEMO rn_mxl0 = 0.04 m).
         #       With z0_surf > 0 (a wave model's roughness, NEMO ln_mxhsw:
         #       z0 = 1.6 Hs) it is l0 = max(mxl_min0, kappa z0_surf) instead.
@@ -91,10 +95,13 @@ class tke:
         #       condition).
         self.mxl_choice = getattr(self, 'mxl_choice', 1)
         self.mxl_kappa  = getattr(self, 'mxl_kappa',  0.4)     # von Karman
-        self.mxl_beta   = getattr(self, 'mxl_beta',   2.0e5)   # Charnock (Stacey)
+        self.mxl_beta   = getattr(self, 'mxl_beta',   2.0e4)   # Charnock (les1 note; NEMO 2e5)
         self.mxl_min0   = getattr(self, 'mxl_min0',   0.04)    # NEMO rn_mxl0
-        # surface TKE flux source: wave dissipation (phi_oc) or (|tau|)^{3/2}
+        # surface TKE flux source: wave dissipation (phi_oc) or the
+        # Craig-Banner flux alpha_cb (|tau|)^{3/2} (tau kinematic);
+        # alpha_cb = 1 is the pyOM2 boundary condition, ~100 Craig & Banner (1994)
         self.tke_surf_from_waves = getattr(self, 'tke_surf_from_waves', True)
+        self.alpha_cb            = getattr(self, 'alpha_cb', 1.0)
 
         z = OM.np.zeros((self.Nz, self.Ny, self.Nx), OM.prec)
         # initial seed as the pyOM2 configurations (tke = 1d-12); the floor
@@ -132,6 +139,13 @@ class tke:
                               OM.np.minimum(mxl[ke],
                                             self.mxl_min + self.z0_surf + dz))
 
+        # bottom condition: the lowest W point of the array (k = h, the top
+        # face of cell h) is one cell above the floor, like the lowest wet W
+        # point of every shallower column (where the dry point below is 0 and
+        # the sweep gives <= dz). Without this the deepest columns had an
+        # unlimited bottom length.
+        mxl = OM.modify_array(mxl, (h, slice(None), slice(None)),
+                              OM.np.minimum(mxl[h], dz))
         # upward sweep: mxl[k] <= mxl[k-1]+dz
         def _up(k, m):
             return OM.modify_array(m, (k, slice(None), slice(None)),
@@ -198,11 +212,16 @@ class tke:
             return OM.modify_array(m, (k, slice(None), slice(None)),
                                    OM.np.minimum(m[k], m[k + 1] + dz))
         l_up = OM.for_loop(0, ke - h, _dn, mxl * 1.0)
-        # l_dwn: limited by the distance to the bottom, upward from h
+        # l_dwn: limited by the distance to the bottom, upward from h. Bottom
+        # condition at k = h as in every shallower column (dry point below
+        # = mxl_min0, so the lowest wet W point gets <= mxl_min0 + dz);
+        # without this the deepest columns had an unlimited bottom length.
         def _up(k, m):
             return OM.modify_array(m, (k, slice(None), slice(None)),
                                    OM.np.minimum(m[k], m[k - 1] + dz))
-        l_dwn = OM.for_loop(h + 1, ke + 1, _up, mxl * 1.0)
+        l_dwn = OM.modify_array(mxl * 1.0, (h, slice(None), slice(None)),
+                                OM.np.minimum(mxl[h], self.mxl_min0 + dz))
+        l_dwn = OM.for_loop(h + 1, ke + 1, _up, l_dwn)
 
         l_k   = OM.np.sqrt(l_up * l_dwn) * self.maskW
         l_eps = OM.np.minimum(l_up, l_dwn) * self.maskW
@@ -349,11 +368,11 @@ class tke:
     # ------------------------------------------------------------------
     def _surface_forcing(self):
         """Surface TKE flux [m^3/s^3]: wave dissipation flux phi_oc from wim
-        (WP2), or the classical (|tau|)^{3/2} (tau kinematic)."""
+        (WP2), or the Craig-Banner flux alpha_cb (|tau|)^{3/2} (tau kinematic)."""
         if self.tke_surf_from_waves and hasattr(self, 'phi_oc'):
             return OM.np.maximum(0.0, self.phi_oc)
         if hasattr(self, 'taux'):
-            return OM.np.hypot(self.taux, self.tauy) ** 1.5
+            return self.alpha_cb * OM.np.hypot(self.taux, self.tauy) ** 1.5
         return self.forc_tke_surface * 0.0
 
     # ------------------------------------------------------------------

@@ -21,7 +21,7 @@ def get_rho(salt,temp,press,eq_of_state_type):
    elif eq_of_state_type == 0:
      rho = no_eq_of_state_rho(temp)    
    else:     
-     raise pyOM3Error    
+     raise ValueError('eq_of_state_type %r not supported' % (eq_of_state_type,))
    return rho
 
 
@@ -40,7 +40,7 @@ def get_drhodT(salt,temp,press):
    elif eq_of_state_type == 0:
      drhodT = 0 
    else:     
-     raise pyOM3Error    
+     raise ValueError('eq_of_state_type %r not supported' % (eq_of_state_type,))
    return drhodT
 
 
@@ -59,7 +59,7 @@ def get_drhodS(salt,temp,press):
    elif eq_of_state_type == 0:
      drhodS = 0 
    else:     
-     raise pyOM3Error    
+     raise ValueError('eq_of_state_type %r not supported' % (eq_of_state_type,))
    return drhodS
 
 

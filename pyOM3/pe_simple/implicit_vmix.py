@@ -198,13 +198,15 @@ class implicit_vmix:
     #         coefficients for both momentum and buoyancy
     #         (kappaM_tke / kappaH_tke, floors kappaM_min / kappaH_min).
     #
-    # Defaults preserve the previous behaviour: enable_implicit_vmix=True
-    # maps to vmix_scheme='implicit' with enable_conv_adjust=True.
+    # Legacy flag mapping: the class attribute enable_implicit_vmix (default
+    # False, see top of the class) selects vmix_scheme='implicit' (then with
+    # enable_conv_adjust=True) or 'explicit'; vmix_scheme set in the config
+    # overrides the flag.
     # ==================================================================
     def _vmix_options(self):
         scheme = getattr(self, 'vmix_scheme', None)
         if scheme is None:                     # legacy flag mapping
-            scheme = 'implicit' if getattr(self, 'enable_implicit_vmix', True) \
+            scheme = 'implicit' if getattr(self, 'enable_implicit_vmix', False) \
                      else 'explicit'
         conv = getattr(self, 'enable_conv_adjust', scheme == 'implicit')
         tkeo = getattr(self, 'enable_tke', False)

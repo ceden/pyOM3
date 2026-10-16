@@ -1,11 +1,11 @@
 """Physics battery for the exact S_nl: equilibrium nulls, KZ cancellation,
 and the WAM-DIA absolute-magnitude anchor.
 
-Run: python3 test_physics.py    (a few minutes)
+Run (from any directory, package import): python3 -m pyOM3.wim_simple.snl_exact.test_physics    (a few minutes)
 """
 import numpy as np
-from assembly import PolarGrid, build_table, snl
-from wim_interface import jonswap_Eft, Eft_to_nk, Snk_to_SEft, dia_snl, \
+from pyOM3.wim_simple.snl_exact.assembly import PolarGrid, build_table, snl
+from pyOM3.wim_simple.snl_exact.wim_interface import jonswap_Eft, Eft_to_nk, Snk_to_SEft, dia_snl, \
     export_for_xnl
 
 
@@ -87,8 +87,9 @@ def main():
     allok &= ok
 
     # ---- (4) export for the definitive WW3 mod_xnl4v5 diff -------------
-    export_for_xnl("/home/claude/snl_exact/xnl_reference_case.txt",
-                   grid, E, S_E)
+    import os
+    export_for_xnl(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "xnl_reference_case.txt"), grid, E, S_E)
     print("      export written: xnl_reference_case.txt "
           "(JONSWAP fp=0.3, alpha=0.0081, gamma=3.3, cos^2)")
 

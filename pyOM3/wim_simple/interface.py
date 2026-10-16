@@ -105,18 +105,25 @@ class interface(main):
                                          axis=0 )*self.dd
           ci = fak[:,None,None]*OM.np.sum( E[sl,:,:,:]*self.costh[sl,None,None,None]
                                         ,axis=0 )*self.dd
-          # surface amplitude at the cut-off bin (before the depth factor is
-          # applied), used for the analytic high-frequency tail below.
+          # surface amplitude at the cut-off (before the depth factor is
+          # applied), used for the analytic high-frequency tail below. The
+          # resolved sum below covers the last real bin mc up to its upper
+          # face fu[mc], so the tail starts at f_c = fu[mc], not at the bin
+          # centre ft[mc] (that would count the upper half bin twice). The
+          # f^-5 tail amplitude at fu[mc] follows from the bin value:
+          # omega^3 E(f) = omega_t^3 E_c (f/ft)^3 (f/ft)^-5, i.e. a factor
+          # (ft[mc]/fu[mc])^2.
           mc   = -self.halo-1                     # last prognostic (real) freq bin
-          si_c = self._xy(si[mc])
-          ci_c = self._xy(ci[mc])
+          r_c  = (self.ft[mc]/self.fu[mc])**2
+          si_c = self._xy(si[mc])*r_c
+          ci_c = self._xy(ci[mc])*r_c
           si = si[None,:,:,:]*exp[:,:,None,None] 
           ci = ci[None,:,:,:]*exp[:,:,None,None] 
           
           us = OM.np.sum(self._xy(si[:,sl])*self.dft[None,sl,None,None], axis=1)
           vs = OM.np.sum(self._xy(ci[:,sl])*self.dft[None,sl,None,None], axis=1)
  
-          # contribution by the high-frequency f^-5 Phillips tail (f > f_c).
+          # contribution by the high-frequency f^-5 Phillips tail (f > f_c = fu[mc]).
           # Exact closed form of u_S^hi(z) = (2/g) int s F(f_c,theta) omega_c^3
           #   [ exp(2 z omega_c^2/g)
           #     - omega_c sqrt(-2 pi z/g) erfc(omega_c sqrt(-2 z/g)) ] dtheta ,
@@ -134,8 +141,8 @@ class interface(main):
           # with I(inf) = f_c/(3a) = f_c g/(6 omega_c^2), so the discrete tail
           # transport equals the exact integral (2 pi/3) f_c^2 int s F dtheta.
           # Each cell receives ( I(-z_bot) - I(-z_top) )/dz in place of B(-z_c).
-          fc = self.ft[mc]
-          wc = self.omega_t[mc]                   # omega_c = 2 pi f_c         
+          fc = self.fu[mc]                        # upper face of the last real bin
+          wc = self.omega_u[mc]                   # omega_c = 2 pi f_c
           if OM.jax is None:  from scipy.special     import erfc
           else:               from jax.scipy.special import erfc
           a = 2*wc**2/self.grav
@@ -305,7 +312,7 @@ class interface(main):
               tx = OM.modify_array(tx, (-1,), tx[-1] + cx/dz)
               ty = OM.modify_array(ty, (-1,), ty[-1] + cy/dz)
               return self._out(OM.np.stack([tx, ty]))
-          fac = 2*fc**5*2.56/self.grav**5*self.e_mean**2*self.om_mean**7
+          fac = 2*fc**5*self.beta_o/self.grav**5*self.e_mean**2*self.om_mean**7
           fac = self._xy(fac)[None]*(2*OM.np.pi)**5*exp[:,None,None]
 
           si = OM.np.sum( self._xy(self.E[sl,-self.halo]) \
@@ -428,7 +435,7 @@ class interface(main):
               Ec = self._xy(self.E[sl, -self.halo])
               taux = OM.np.sum(Ec*self.sinth[sl,None,None]*self.dd,axis=0)
               tauy = OM.np.sum(Ec*self.costh[sl,None,None]*self.dd,axis=0)
-              fac = 2.56/self.grav**4*self.e_mean**2*self.om_mean**7*self.ft[-self.halo]**4
+              fac = self.beta_o/self.grav**4*self.e_mean**2*self.om_mean**7*self.ft[-self.halo]**4
               fac = fac*(2*OM.np.pi)**3
               tx = tx + self._xy(fac)*taux
               ty = ty + self._xy(fac)*tauy

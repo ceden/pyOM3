@@ -46,7 +46,15 @@ Physics/consistency notes
   extended grid to machine precision.
 * fl is the role-1 diagonal derivative (WAM semantics); it is invariant
   under the E <-> n conversion, so it can be used directly in
-  E += S dt / (1 - dt fl).
+  E += S dt / (1 - dt fl).  In mode='conservative' it is the derivative of
+  the DIRECT rate at k1, not of the returned (redistributed) transfer --
+  about a factor 2 apart at and above the peak. It only serves as the
+  semi-implicit factor.
+* With pad_hi > 0 an equilibrium band spectrum (constant A) gives a
+  non-zero band transfer through the tail interactions (order 0.2 of the
+  gross rate); the operator itself (pad_hi = 0) keeps the equilibrium to
+  machine precision.
+* g: set Snonlin.g before setup(); wim_simple.main hands over its grav.
 """
 
 import os
