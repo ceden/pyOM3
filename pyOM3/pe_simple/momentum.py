@@ -70,10 +70,22 @@ class momentum(main):
           Simple 2nd order zonal momentum fluxes. u1 is advected by u,v,w.
           u1 and u can be identical
           """
-          fe = - ( u*maskU + self.rollx(u*maskU,-1) )*0.25*(u1 + self.rollx(u1,-1) )*maskU*self.rollx(maskU,-1)
-          fn = - ( v*maskV + self.rollx(v*maskV,-1) )*0.25*(u1 + self.rolly(u1,-1) )*maskU*self.rolly(maskU,-1)
-          ft = - ( w*maskW + self.rollx(w*maskW,-1) )*0.25*(u1 + self.rollz(u1,-1) )*maskU*self.rollz(maskU,-1)
-          return self.apply_bc(fe), self.apply_bc(fn), self.apply_bc(ft)  
+          # pyOM2/MITgcm convention: fluxes are NOT masked by U/V-cell pairs;
+          # the transports (masked) carry the boundary condition, keeping the
+          # energy-conserving self-flux at the last wet face next to walls.
+          # Only the top face is closed explicitly (pyOM2: flux_top(:,:,nz)=0),
+          # since maskW is opened at the surface for the free-surface solver.
+          fe = - ( u*maskU + self.rollx(u*maskU,-1) )*0.25*(u1 + self.rollx(u1,-1) )
+          fn = - ( v*maskV + self.rollx(v*maskV,-1) )*0.25*(u1 + self.rolly(u1,-1) )
+          ft = - ( w*maskW + self.rollx(w*maskW,-1) )*0.25*(u1 + self.rollz(u1,-1) )
+          ft = OM.modify_array(ft, (-(self.halo+1), slice(None), slice(None)),
+                                OM.np.zeros_like(ft[-(self.halo+1)]))
+          # no apply_bc on the fluxes: the halo-slot fluxes (e.g. the western
+          # wall face fe[-1]) are legitimate face fluxes computed from already
+          # halo-exchanged inputs, and the divergence at the first interior
+          # point needs them (pyOM2 computes flux_east from is_pe-1 and keeps
+          # it); apply_bc would zero them for non-cyclic domains.
+          return fe, fn, ft  
 
     
       @partial(OM.jaxjit, static_argnums=0)
@@ -82,10 +94,22 @@ class momentum(main):
           Simple 2nd order meridional momentum fluxes. v1 is advected by u,v,w.
           v1 and v can be identical
           """           
-          fe = - ( u*maskU + self.rolly(u*maskU,-1) )*0.25*(v1 + self.rollx(v1,-1) )*maskV*self.rollx(maskV,-1)
-          fn = - ( v*maskV + self.rolly(v*maskV,-1) )*0.25*(v1 + self.rolly(v1,-1) )*maskV*self.rolly(maskV,-1)
-          ft = - ( w*maskW + self.rolly(w*maskW,-1) )*0.25*(v1 + self.rollz(v1,-1) )*maskV*self.rollz(maskV,-1)
-          return self.apply_bc(fe), self.apply_bc(fn), self.apply_bc(ft)  
+          # pyOM2/MITgcm convention: fluxes are NOT masked by U/V-cell pairs;
+          # the transports (masked) carry the boundary condition, keeping the
+          # energy-conserving self-flux at the last wet face next to walls.
+          # Only the top face is closed explicitly (pyOM2: flux_top(:,:,nz)=0),
+          # since maskW is opened at the surface for the free-surface solver.
+          fe = - ( u*maskU + self.rolly(u*maskU,-1) )*0.25*(v1 + self.rollx(v1,-1) )
+          fn = - ( v*maskV + self.rolly(v*maskV,-1) )*0.25*(v1 + self.rolly(v1,-1) )
+          ft = - ( w*maskW + self.rolly(w*maskW,-1) )*0.25*(v1 + self.rollz(v1,-1) )
+          ft = OM.modify_array(ft, (-(self.halo+1), slice(None), slice(None)),
+                                OM.np.zeros_like(ft[-(self.halo+1)]))
+          # no apply_bc on the fluxes: the halo-slot fluxes (e.g. the western
+          # wall face fe[-1]) are legitimate face fluxes computed from already
+          # halo-exchanged inputs, and the divergence at the first interior
+          # point needs them (pyOM2 computes flux_east from is_pe-1 and keeps
+          # it); apply_bc would zero them for non-cyclic domains.
+          return fe, fn, ft  
 
     
       @partial(OM.jaxjit, static_argnums=0)          

@@ -22,8 +22,10 @@ class thermodynamics(main):
           if self.eq_of_state > 0 and self.eq_of_state != 100:
              salt += self.dt*(A*dsalt[tau,:,:,:] + B*dsalt[taum1,:,:,:] + C*dsalt[taum2,:,:,:])*maskT 
              salt = self.apply_bc(salt) 
-          rho = get_rho(salt,temp,p0,self.eq_of_state)    
-          return temp,salt,rho
+          # rho is NOT updated here: as in pyOM2 the density is evaluated once
+          # per step, after the vertical mixing (model.py), and rho(tau) stays
+          # in use through the tracer update.
+          return temp,salt
 
         
     
@@ -54,6 +56,26 @@ class thermodynamics(main):
           fe = - u*0.5*( var + self.rollx(var,-1) )*maskU
           fn = - v*0.5*( var + self.rolly(var,-1) )*maskV
           ft = - w*0.5*( var + self.rollz(var,-1) )*maskW      
+                    # No advective tracer flux through the surface face (pyOM2
+          # adv_superbee.f90 / adv_main: adv_ft(:,:,nz)=0): maskW is opened
+          # there for the free-surface solver and w_surf is nonzero, but the
+          # tracer budget uses fixed cells -- a surface flux would pump tracer
+          # non-conservatively.
+          ks = -(self.halo+1)
+          if getattr(self, 'free_surface_tracer_flux', False):
+             # Option (Sep 2026): the water crossing the moving surface at
+             # w_surf carries the surface-cell tracer value, ft = -w_surf var.
+             # Then div_h(u var) + (ft_surf - ft_below)/dz = var (div_h u +
+             # dw/dz) = 0 for a uniform tracer, i.e. the top cell no longer
+             # gains -var dt div_h(u) every step under the linear free surface
+             # (pyOM2's adv_ft(:,:,nz) = 0 does; the anomaly feeds a p_h
+             # gradient in phase with d(eta)/dt that anti-damps the
+             # split-explicit barotropic mode). Off by default: pyOM2 form.
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  -w[ks]*var[ks]*maskW[ks])
+          else:
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  OM.np.zeros_like(ft[ks]))
           return self.apply_bc(fe), self.apply_bc(fn), self.apply_bc(ft)
           
    
@@ -83,11 +105,38 @@ class thermodynamics(main):
           
           uCFL = OM.np.abs(w * self.dt / self.dz)          
           rj  = (self.rollz(var,-1)-var)*maskW 
+          # Zero the surface-face gradient before it enters the limiter:
+          # maskW is opened at the surface, so rj there would be the fake
+          # jump (halo 0 - var_surf), poisoning Cr of the top interior face.
+          # pyOM2 (adv_superbee.f90) gets Rjp = 0 at k = nz-1 via the
+          # kp2 = min(nz,k+2) clamp; zeroing surface rj reproduces that.
+          rj = OM.modify_array(rj, (-(self.halo+1), slice(None), slice(None)),
+                               OM.np.zeros_like(rj[-(self.halo+1)]))
           rjm = self.rollz(rj, 1) 
           rjp = self.rollz(rj,-1)                   
           cr = _limiter( OM.np.where(w > 0.0, rjm, rjp) / OM.np.where(OM.np.abs(rj) < eps, eps, rj)  )          
           ft = - (w * (self.rollz(var,-1) + var) * 0.5 - OM.np.abs(w) * ((1.0 - cr) + uCFL * cr) * rj * 0.5)*maskW
               
+                    # No advective tracer flux through the surface face (pyOM2
+          # adv_superbee.f90 / adv_main: adv_ft(:,:,nz)=0): maskW is opened
+          # there for the free-surface solver and w_surf is nonzero, but the
+          # tracer budget uses fixed cells -- a surface flux would pump tracer
+          # non-conservatively.
+          ks = -(self.halo+1)
+          if getattr(self, 'free_surface_tracer_flux', False):
+             # Option (Sep 2026): the water crossing the moving surface at
+             # w_surf carries the surface-cell tracer value, ft = -w_surf var.
+             # Then div_h(u var) + (ft_surf - ft_below)/dz = var (div_h u +
+             # dw/dz) = 0 for a uniform tracer, i.e. the top cell no longer
+             # gains -var dt div_h(u) every step under the linear free surface
+             # (pyOM2's adv_ft(:,:,nz) = 0 does; the anomaly feeds a p_h
+             # gradient in phase with d(eta)/dt that anti-damps the
+             # split-explicit barotropic mode). Off by default: pyOM2 form.
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  -w[ks]*var[ks]*maskW[ks])
+          else:
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  OM.np.zeros_like(ft[ks]))
           return self.apply_bc(fe), self.apply_bc(fn), self.apply_bc(ft)
          
           

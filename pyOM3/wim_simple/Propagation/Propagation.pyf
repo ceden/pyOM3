@@ -1,0 +1,150 @@
+python module Propagation
+  interface
+    subroutine grad_x(var, m, rj, h, nx, ny, nf, nd)
+      integer, intent(hide), depend(var) :: nx = shape(var,0)
+      integer, intent(hide), depend(var) :: ny = shape(var,1)
+      integer, intent(hide), depend(var) :: nf = shape(var,2)
+      integer, intent(hide), depend(var) :: nd = shape(var,3)
+      real(8), intent(in)    :: var(nx,ny,nf,nd), m(nx,ny)
+      real(8), intent(inout) :: rj(nx,ny,nf,nd)
+      integer, intent(in)    :: h
+    end subroutine grad_x
+    subroutine grad_y(var, m, rj, h, nx, ny, nf, nd)
+      integer, intent(hide), depend(var) :: nx = shape(var,0)
+      integer, intent(hide), depend(var) :: ny = shape(var,1)
+      integer, intent(hide), depend(var) :: nf = shape(var,2)
+      integer, intent(hide), depend(var) :: nd = shape(var,3)
+      real(8), intent(in)    :: var(nx,ny,nf,nd), m(nx,ny)
+      real(8), intent(inout) :: rj(nx,ny,nf,nd)
+      integer, intent(in)    :: h
+    end subroutine grad_y
+    subroutine grad_f(var, rj, h, nx, ny, nf, nd)
+      integer, intent(hide), depend(var) :: nx = shape(var,0)
+      integer, intent(hide), depend(var) :: ny = shape(var,1)
+      integer, intent(hide), depend(var) :: nf = shape(var,2)
+      integer, intent(hide), depend(var) :: nd = shape(var,3)
+      real(8), intent(in)    :: var(nx,ny,nf,nd)
+      real(8), intent(inout) :: rj(nx,ny,nf,nd)
+      integer, intent(in)    :: h
+    end subroutine grad_f
+    subroutine grad_d(var, rj, h, nx, ny, nf, nd)
+      integer, intent(hide), depend(var) :: nx = shape(var,0)
+      integer, intent(hide), depend(var) :: ny = shape(var,1)
+      integer, intent(hide), depend(var) :: nf = shape(var,2)
+      integer, intent(hide), depend(var) :: nd = shape(var,3)
+      real(8), intent(in)    :: var(nx,ny,nf,nd)
+      real(8), intent(inout) :: rj(nx,ny,nf,nd)
+      integer, intent(in)    :: h
+    end subroutine grad_d
+    subroutine flux_x(var, rj, vel, den, m, dt, fx, h, nx, ny, nf, nd)
+      integer, intent(hide), depend(var) :: nx = shape(var,0)
+      integer, intent(hide), depend(var) :: ny = shape(var,1)
+      integer, intent(hide), depend(var) :: nf = shape(var,2)
+      integer, intent(hide), depend(var) :: nd = shape(var,3)
+      real(8), intent(in)    :: var(nx,ny,nf,nd), rj(nx,ny,nf,nd), vel(nx,ny,nf,nd)
+      real(8), intent(in)    :: den(nx,ny), m(nx,ny), dt
+      real(8), intent(inout) :: fx(nx,ny,nf,nd)
+      integer, intent(in)    :: h
+    end subroutine flux_x
+    subroutine flux_y(var, rj, vel, den, pref, m, dt, fy, h, nx, ny, nf, nd)
+      integer, intent(hide), depend(var) :: nx = shape(var,0)
+      integer, intent(hide), depend(var) :: ny = shape(var,1)
+      integer, intent(hide), depend(var) :: nf = shape(var,2)
+      integer, intent(hide), depend(var) :: nd = shape(var,3)
+      real(8), intent(in)    :: var(nx,ny,nf,nd), rj(nx,ny,nf,nd), vel(nx,ny,nf,nd)
+      real(8), intent(in)    :: den(nx,ny), pref(ny), m(nx,ny), dt
+      real(8), intent(inout) :: fy(nx,ny,nf,nd)
+      integer, intent(in)    :: h
+    end subroutine flux_y
+    subroutine flux_f(var, rj, vel, den, dt, ff, h, nx, ny, nf, nd)
+      integer, intent(hide), depend(var) :: nx = shape(var,0)
+      integer, intent(hide), depend(var) :: ny = shape(var,1)
+      integer, intent(hide), depend(var) :: nf = shape(var,2)
+      integer, intent(hide), depend(var) :: nd = shape(var,3)
+      real(8), intent(in)    :: var(nx,ny,nf,nd), rj(nx,ny,nf,nd), vel(nx,ny,nf,nd)
+      real(8), intent(in)    :: den(nf), dt
+      real(8), intent(inout) :: ff(nx,ny,nf,nd)
+      integer, intent(in)    :: h
+    end subroutine flux_f
+    subroutine flux_d(var, rj, vel, den, dt, fd, h, nx, ny, nf, nd)
+      integer, intent(hide), depend(var) :: nx = shape(var,0)
+      integer, intent(hide), depend(var) :: ny = shape(var,1)
+      integer, intent(hide), depend(var) :: nf = shape(var,2)
+      integer, intent(hide), depend(var) :: nd = shape(var,3)
+      real(8), intent(in)    :: var(nx,ny,nf,nd), rj(nx,ny,nf,nd), vel(nx,ny,nf,nd)
+      real(8), intent(in)    :: den, dt
+      real(8), intent(inout) :: fd(nx,ny,nf,nd)
+      integer, intent(in)    :: h
+    end subroutine flux_d
+    subroutine divergence(fx, fy, ff, fd, denx, deny, dft, dd, mt, da, nx, ny, nf, nd)
+      integer, intent(hide), depend(fx) :: nx = shape(fx,0)
+      integer, intent(hide), depend(fx) :: ny = shape(fx,1)
+      integer, intent(hide), depend(fx) :: nf = shape(fx,2)
+      integer, intent(hide), depend(fx) :: nd = shape(fx,3)
+      real(8), intent(in)    :: fx(nx,ny,nf,nd), fy(nx,ny,nf,nd), ff(nx,ny,nf,nd), fd(nx,ny,nf,nd)
+      real(8), intent(in)    :: denx(nx,ny), deny(nx,ny), dft(nf), dd, mt(nx,ny)
+      real(8), intent(inout) :: da(nx,ny,nf,nd)
+    end subroutine divergence
+    subroutine mkadv_vel(xdot, ydot, u, v, dudf, dvdf, cg, ft, sth, cth, hascur, hasdf, nx, ny, nf, nd)
+      integer, intent(hide), depend(xdot) :: nx = shape(xdot,0)
+      integer, intent(hide), depend(xdot) :: ny = shape(xdot,1)
+      integer, intent(hide), depend(xdot) :: nf = shape(xdot,2)
+      integer, intent(hide), depend(xdot) :: nd = shape(xdot,3)
+      real(8), intent(inout) :: xdot(nx,ny,nf,nd), ydot(nx,ny,nf,nd)
+      real(8), intent(in)    :: u(nx,ny,nf), v(nx,ny,nf), dudf(nx,ny,nf), dvdf(nx,ny,nf)
+      real(8), intent(in)    :: cg(nf), ft(nf), sth(nd), cth(nd)
+      integer, intent(in)    :: hascur, hasdf
+    end subroutine mkadv_vel
+    subroutine mkadv_rates(dd_out, fd_out, dudx, dvdx, dudy, dvdy, u, v, cg, ft, sth, cth, sthu, cthu, tantr, sph, nx, ny, nf, nd)
+      integer, intent(hide), depend(dd_out) :: nx = shape(dd_out,0)
+      integer, intent(hide), depend(dd_out) :: ny = shape(dd_out,1)
+      integer, intent(hide), depend(dd_out) :: nf = shape(dd_out,2)
+      integer, intent(hide), depend(dd_out) :: nd = shape(dd_out,3)
+      real(8), intent(inout) :: dd_out(nx,ny,nf,nd), fd_out(nx,ny,nf,nd)
+      real(8), intent(in)    :: dudx(nx,ny,nf), dvdx(nx,ny,nf), dudy(nx,ny,nf), dvdy(nx,ny,nf)
+      real(8), intent(in)    :: u(nx,ny,nf), v(nx,ny,nf)
+      real(8), intent(in)    :: cg(nf), ft(nf), sth(nd), cth(nd), sthu(nd), cthu(nd), tantr(ny)
+      integer, intent(in)    :: sph
+    end subroutine mkadv_rates
+    subroutine mkadv_post(fd, dd, fbnd, dbnd, mt, doclip, domask, nx, ny, nf, nd)
+      integer, intent(hide), depend(fd) :: nx = shape(fd,0)
+      integer, intent(hide), depend(fd) :: ny = shape(fd,1)
+      integer, intent(hide), depend(fd) :: nf = shape(fd,2)
+      integer, intent(hide), depend(fd) :: nd = shape(fd,3)
+      real(8), intent(inout) :: fd(nx,ny,nf,nd), dd(nx,ny,nf,nd)
+      real(8), intent(in)    :: fbnd(nf), dbnd, mt(nx,ny)
+      integer, intent(in)    :: doclip, domask
+    end subroutine mkadv_post
+    subroutine efix_terms(a, fx, fy, ff, fd, u, v, om, kf, sth, cth, dft, dd, wx, wy, divx, divy, area, mox, moy, do_open, h, p, q, dn, w, nx, ny, nf, nd)
+      integer, intent(hide), depend(a) :: nx = shape(a,0)
+      integer, intent(hide), depend(a) :: ny = shape(a,1)
+      integer, intent(hide), depend(a) :: nf = shape(a,2)
+      integer, intent(hide), depend(a) :: nd = shape(a,3)
+      real(8), intent(in)    :: a(nx,ny,nf,nd), fx(nx,ny,nf,nd), fy(nx,ny,nf,nd)
+      real(8), intent(in)    :: ff(nx,ny,nf,nd), fd(nx,ny,nf,nd)
+      real(8), intent(in)    :: u(nx,ny,nf), v(nx,ny,nf)
+      real(8), intent(in)    :: om(nf), kf(nf), sth(nd), cth(nd), dft(nf), dd
+      real(8), intent(in)    :: wx(nx,ny), wy(nx,ny), area(nx,ny), mox(nx,ny), moy(nx,ny)
+      integer, intent(in)    :: divx, divy, do_open, h
+      real(8), intent(inout) :: p(nx,ny,nf,nd), q(nx,ny,nf,nd), dn(nx,ny,nf,nd), w(nx,ny,nf,nd)
+    end subroutine efix_terms
+    subroutine efix_apply(ff, w, lam, mt, nx, ny, nf, nd)
+      integer, intent(hide), depend(ff) :: nx = shape(ff,0)
+      integer, intent(hide), depend(ff) :: ny = shape(ff,1)
+      integer, intent(hide), depend(ff) :: nf = shape(ff,2)
+      integer, intent(hide), depend(ff) :: nd = shape(ff,3)
+      real(8), intent(inout) :: ff(nx,ny,nf,nd)
+      real(8), intent(in)    :: w(nx,ny,nf,nd), lam(nx,ny), mt(nx,ny)
+    end subroutine efix_apply
+    subroutine coastflux(fx, fy, var, xdot, ydot, mox, moy, pref, nx, ny, nf, nd)
+      integer, intent(hide), depend(fx) :: nx = shape(fx,0)
+      integer, intent(hide), depend(fx) :: ny = shape(fx,1)
+      integer, intent(hide), depend(fx) :: nf = shape(fx,2)
+      integer, intent(hide), depend(fx) :: nd = shape(fx,3)
+      real(8), intent(inout) :: fx(nx,ny,nf,nd), fy(nx,ny,nf,nd)
+      real(8), intent(in)    :: var(nx,ny,nf,nd), xdot(nx,ny,nf,nd), ydot(nx,ny,nf,nd)
+      real(8), intent(in)    :: mox(nx,ny), moy(nx,ny), pref(ny)
+    end subroutine coastflux
+  end interface
+
+end python module Propagation

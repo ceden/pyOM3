@@ -58,8 +58,8 @@ class pressure(main,solver):
           
           mp = maskM * self.rolly(maskM,-1) # i+1
           mm = maskM * self.rolly(maskM, 1) 
-          cf = OM.add_to_array(cf,( 0+1, 0+1,a,a), - mp*hv/self.dx**2 )
-          cf = OM.add_to_array(cf,( 1+1, 0+1,a,a), + mp*hv/self.dx**2 )
+          cf = OM.add_to_array(cf,( 0+1, 0+1,a,a), - mp*hv/self.dy**2 )
+          cf = OM.add_to_array(cf,( 1+1, 0+1,a,a), + mp*hv/self.dy**2 )
           cf = OM.add_to_array(cf,( 0+1, 0+1,a,a), - mm*self.rolly(hv,1)/self.dy**2 )
           cf = OM.add_to_array(cf,(-1+1, 0+1,a,a), + mm*self.rolly(hv,1)/self.dy**2 )
           

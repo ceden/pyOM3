@@ -9,6 +9,7 @@ from   pyOM3.wim_simple.propagation import propagation
 from   pyOM3.wim_simple.source      import source
 from   pyOM3.wim_simple.interface   import interface
 import numpy                 as np__
+from   functools             import partial
 
 
 class model(propagation,source,interface):
@@ -16,13 +17,62 @@ class model(propagation,source,interface):
           
       def time_step(self,tA,tB,tC,tau,taum1,taum2):
           """
-          performs a single time step
+          performs a single time step: the propagation (mk_advection and
+          add_propagation), the Adams-Bashforth update of the action with
+          the outflow book-keeping and the positivity floor (_ab_update),
+          then the source terms (_source_update). The two bodies are jitted
+          under JAX; this wrapper reads and writes the attributes, so the
+          time-varying fields (wind, currents) are ARGUMENTS of the compiled
+          code and never trace-time constants (see propagation.py).
           """
           self.xdot, self.ydot, self.fdot, self.ddot = \
                 self.mk_advection(self.xdot, self.ydot, self.fdot, self.ddot)
           self.dA =  self.add_propagation(self.A, self.dA,
                                           self.xdot, self.ydot, self.fdot, self.ddot, tau)
-          self.A += self.dt*(tA*self.dA[tau,:] + tB*self.dA[taum1,:] + tC*self.dA[taum2,:])
+          self.A, self.A_clip, self.clip_mass, self._clip_tot, dlA, dlE, dlO = \
+                self._ab_update(self.A, self.dA, tA, tB, tC, tau, taum1, taum2,
+                                self._lossA_lv, self._lossE_lv, self._lossO_lv, self.shard_consts())
+          if getattr(self, 'open_coasts', False):
+              self.loss_A, self.loss_E, self.loss_Eabs = \
+                  self.loss_A + dlA, self.loss_E + dlE, self.loss_Eabs + dlO
+          if getattr(self, 'floor_action', True):
+              self._floor_warning()
+
+          (self.A, self.E, self.e_mean, self.om_mean, self.gamma_in, self.gamma_diss,
+           self.S_nl, freq_mask, self.E_pre_src, self.dE_src, self.dE_in,
+           self.dE_ds, self.dE_nl, self.dE_tail, src_state, src_aux) = \
+                self._source_update(self.A, self.ustar, self.udir, self.get_source_state(),
+                                    self.shard_consts())
+          self.set_source_state(src_state, src_aux)
+          if freq_mask is not None: self.freq_mask = freq_mask   # exists only with mask_energy
+          return
+
+
+      @partial(OM.jaxjit, static_argnums=(0,))
+      def _ab_update(self,A,dA,tA,tB,tC,tau,taum1,taum2,lA,lE,lO,consts):
+          """
+          Adams-Bashforth update of the action, the outflow book-keeping
+          and the positivity floor. Returns the new A (halo-filled), the
+          clipped action per bin, the clip mass and the total action (the
+          floor's gauge, both over the real cells) and the three outflow
+          increments of this step. consts: the sharded run constants
+          (main.shard_consts), bound to self while tracing.
+          """
+          with self.bind_consts(consts):
+              return self._ab_update_body(A,dA,tA,tB,tC,tau,taum1,taum2,lA,lE,lO)
+
+      def _ab_update_body(self,A,dA,tA,tB,tC,tau,taum1,taum2,lA,lE,lO):
+          A += self.dt*(tA*dA[tau,:] + tB*dA[taum1,:] + tC*dA[taum2,:])     # in place on numpy
+          # OUTFLOW BOOK-KEEPING for open_coasts, with the SAME Adams-Bashforth
+          # weights that step the state. The rate at each time level is stored
+          # by propagation.open_coast_loss; combining only the tau level would
+          # leave the budget open at the order of the time scheme.
+          if getattr(self, 'open_coasts', False):
+              dlA = self.dt*(tA*lA[tau] + tB*lA[taum1] + tC*lA[taum2])
+              dlE = self.dt*(tA*lE[tau] + tB*lE[taum1] + tC*lE[taum2])
+              dlO = self.dt*(tA*lO[tau] + tB*lO[taum1] + tC*lO[taum2])
+          else:
+              dlA = dlE = dlO = 0.0
           # POSITIVITY FLOOR (day-212.7 detonation, option floor_action,
           # default ON): the flux limiter preserves A >= 0 only under SSP
           # time stepping; AB2+eps at CFL 0.22 with wall reflection grew
@@ -34,44 +84,78 @@ class model(propagation,source,interface):
           # WAM-standard guard. HONEST GAUGE: the clip mass (action the floor
           # removes, = the spurious action it injects, = the energy-
           # consistency cost) is measured BEFORE clipping, stored in
-          # self.clip_mass, and warned about when above round-off scale.
-          # Switching floor_action=False restores the raw scheme (and, at
-          # CFL > ~0.13 with reflection, the known detonation).
+          # self.clip_mass, and warned about when above round-off scale
+          # (_floor_warning). Switching floor_action=False restores the raw
+          # scheme (and, at CFL > ~0.13 with reflection, the known detonation).
           if getattr(self, 'floor_action', True):
               sl_ = slice(self.halo, -self.halo)
-              _Ai = self.A[sl_, sl_, sl_, sl_]
-              self.clip_mass = -float(OM.np.sum(OM.np.minimum(_Ai, 0.0)))
-              _tot = float(OM.np.sum(OM.np.abs(_Ai)))
-              if self.clip_mass > 1e-10 * max(_tot, 1e-30):
-                  self._floor_warns = getattr(self, '_floor_warns', 0) + 1
-                  if self._floor_warns <= 20:
-                      print('WARNING pe %d: action floor clipped %.3e '
-                            '(%.1e of total action) -- AB2/limiter positivity '
-                            'violation active%s'
-                            % (getattr(self, 'my_pe', 0), self.clip_mass,
-                               self.clip_mass / max(_tot, 1e-30),
-                               '' if self._floor_warns < 20
-                               else ' (suppressing further warnings)'),
-                            flush=True)
-              self.A = OM.np.maximum(self.A, 0.0)
-          self.A = self.apply_bc(self.A)  
+              _Ai = self.interior_xy(A[sl_, sl_])          # real bins and cells
+              A_clip = OM.np.minimum(A, 0.0)      # the action the floor removes, per bin (booking)
+              clip_mass = -OM.np.sum(OM.np.minimum(_Ai, 0.0))
+              clip_tot  =  OM.np.sum(OM.np.abs(_Ai))
+              A = OM.np.maximum(A, 0.0)
+          else:
+              A_clip, clip_mass, clip_tot = None, 0.0, 0.0
+          A = self.apply_bc(A)
+          return A, A_clip, clip_mass, clip_tot, dlA, dlE, dlO
 
-          self.E =  self.A*self.omega_t[None,:,None,None] 
 
-          z0 = getattr(self,'z0',0.0002)
-          self.gamma_in = self.Sinput(self.ustar,self.udir,z0=z0)
-          self.e_mean, self.om_mean, self.gamma_diss = self.Sdiss(self.E)  
-          gamma = self.gamma_in + self.gamma_diss[None,:,:,:]
-          _Snonlin, dSdE = self.Snonlin(self.E)  
-          self.S_nl = _Snonlin        # stored for the tail cascade credit
+      def _floor_warning(self):
+          """
+          the warning of the positivity floor. On numpy every step (as
+          before); under JAX the comparison is a device-to-host sync, so it
+          is made every floor_check_steps (default 100) steps only, with the
+          clip mass of that step.
+          """
+          if OM.jax:
+              n = getattr(self, '_floor_step', 0)
+              self._floor_step = n + 1
+              if n % getattr(self, 'floor_check_steps', 100): return
+          clip_mass, _tot = float(self.clip_mass), float(self._clip_tot)
+          if clip_mass > 1e-10 * max(_tot, 1e-30):
+              self._floor_warns = getattr(self, '_floor_warns', 0) + 1
+              if self._floor_warns <= 20:
+                  print('WARNING pe %d: action floor clipped %.3e '
+                        '(%.1e of total action) -- AB2/limiter positivity '
+                        'violation active%s'
+                        % (getattr(self, 'my_pe', 0), clip_mass,
+                           clip_mass / max(_tot, 1e-30),
+                           '' if self._floor_warns < 20
+                           else ' (suppressing further warnings)'),
+                        flush=True)
+          return
+
+
+      @partial(OM.jaxjit, static_argnums=(0,))
+      def _source_update(self,A,ustar,udir,src_state,consts):
+          """
+          The source terms: input, dissipation, DIA, the implicit update
+          with the growth limiter, the land mask, the diagnostic tail and
+          the halo refresh. Returns the new A and E, the booking fields and
+          the source state (source.py, the hooks of a scheme with state).
+          consts: the sharded run constants (main.shard_consts), bound to
+          self while tracing.
+          """
+          with self.bind_consts(consts):
+              return self._source_update_body(A,ustar,udir,src_state)
+
+      def _source_update_body(self,A,ustar,udir,src_state):
+          E =  A*self.omega_t[None,:,None,None] 
+
+          gamma_in, src_state, aux = self.source_input(ustar,udir,E,src_state)
+          e_mean, om_mean, gamma_diss, aux = self.source_diss(E,aux)  
+          gamma = gamma_in + gamma_diss[None,:,:,:]
+          _Snonlin, dSdE = self.Snonlin(E)  
+          S_nl = _Snonlin             # stored for the tail cascade credit
                                       # (interface.calc_stress/_phioc, tail_flux='input')
           dSdE += gamma 
-          S     = _Snonlin + gamma*self.E
+          S     = _Snonlin + gamma*E
 
+          S_unlimited = S
           if self.limit_growth:
-            ustar_eff = OM.np.maximum(self.ustar, 0.01)     # keep the cap strictly positive  
+            ustar_eff = OM.np.maximum(ustar, 0.01)     # keep the cap strictly positive  
             limit = 1e-7*self.grav*ustar_eff[None,:,:] \
-                         /self.ft[:,None,None]**4*self.om_mean[None,:,:]/(2*OM.np.pi)
+                         /self.ft[:,None,None]**4*om_mean[None,:,:]/(2*OM.np.pi)
             S = OM.np.minimum(S,limit[None,:,:,:]) 
               
           sl = slice(self.halo,-self.halo,None)
@@ -85,8 +169,21 @@ class model(propagation,source,interface):
               dSdE_imp = OM.np.minimum(dSdE, 0.0)
           else:
               dSdE_imp = dSdE
-          self.E = OM.add_to_array(self.E, (sl,sl,sl,sl),
-                                   (S*self.dt/(1 - self.dt*dSdE_imp))[sl,sl,sl,sl]) 
+          # ENERGY BOOKING of the APPLIED source increments (test 14, the
+          # coupler's energy budget): the implicit factor and the limiter act
+          # on the sum, so the three sources share the applied increment in
+          # proportion to their explicit rates; dE_in + dE_ds + dE_nl = dE_src
+          # to round-off, and the sum over the spectrum of dE_src is the energy
+          # the sources changed in this step. The tail overwrite below and the
+          # action floor above are booked separately (dE_tail, A_clip).
+          # Booked BEFORE the update: add_to_array works in place with numpy.
+          dE_src = S*self.dt/(1 - self.dt*dSdE_imp)
+          _fac = OM.np.where(S_unlimited != 0.0, dE_src/OM.np.where(S_unlimited != 0.0, S_unlimited, 1.0), 0.0)
+          E_pre_src = OM.np.array(E)           # a copy: the explicit rates refer to it
+          dE_in  = gamma_in*E*_fac
+          dE_ds  = gamma_diss[None,:,:,:]*E*_fac
+          dE_nl  = _Snonlin*_fac
+          E = self.interior_add(E, dE_src)      # real bins and cells only
                     
           # waves do not exist on land: zero the wave energy on land cells so the
           # source terms leave nothing behind there and land cannot contaminate
@@ -94,14 +191,33 @@ class model(propagation,source,interface):
           # (Ny,Nx), broadcast over the (d,f) axes. Parallels pe_simple's *maskT
           # on the tracer state and our *maskTp on the propagation tendency.
           if hasattr(self,'maskTp'):
-            self.E = self.E * self.maskTp[None,None,:,:]
+            E = E * self.maskTp[None,None,:,:]
 
+          dE_tail = 0.0*E
+          freq_mask = None
           if self.mask_energy:
-            self.freq_mask = self.frcutindex(self.om_mean/(2*OM.np.pi),self.ustar)
-            self.E = imphftail(self.freq_mask,self.E,self.ft)
+            freq_mask = self.source_cutoff(om_mean/(2*OM.np.pi),ustar,aux)
+            _E_before = E
+            E = imphftail(freq_mask,E,self.ft)
+            dE_tail = E - _E_before                 # the tail overwrite (booking)
                 
-          self.A = self.E/self.omega_t[None,:,None,None]          
-          return
+          # HALO REFRESH after the source update, SPATIAL AXES ONLY. The
+          # advective update above ends with apply_bc, but the source update
+          # changes the interior only, so without a refresh the x/y halo rows
+          # of A lag the interior by one source increment and the next step's
+          # advection computes the periodic seam fluxes from stale neighbour
+          # values (edge rows drift ~1e-3 per step in a y-uniform forced run).
+          # The FREQUENCY GHOST BINS must NOT be refreshed: imphftail fills
+          # them with the imposed f^-5 continuation each step BY DESIGN, and
+          # both the f-advection boundary flux and the tail diagnostics
+          # (calc_stress anchor at bin -halo) consume exactly those values.
+          # A blanket apply_bc here wiped them and collapsed the tail input
+          # (tau_o/tau_a 0.66 -> 0.37 at the stress-notebook config), hence
+          # keep_f_ghosts.
+          A = self.apply_bc(E/self.omega_t[None,:,None,None], keep_f_ghosts=True)
+          E = A*self.omega_t[None,:,None,None]
+          return (A, E, e_mean, om_mean, gamma_in, gamma_diss, S_nl, freq_mask,
+                  E_pre_src, dE_src, dE_in, dE_ds, dE_nl, dE_tail, src_state, aux)
     
     
       def loop(self,max_steps=1000000):         
@@ -142,8 +258,13 @@ class model(propagation,source,interface):
           non-negative, False otherwise; prints a warning on PE 0 if verbose.
           """
           sl   = slice(self.halo, -self.halo)
-          amin = float(OM.np.min(self.A[sl, sl, sl, sl]))
-          amax = float(OM.np.max(self.A[sl, sl, sl, sl]))
+          if OM.jax:                       # the inline shard halos are no interior
+              A4 = self.A[sl, sl]
+              amin = float(OM.np.min(OM.np.where(self.maskI > 0, A4,  OM.np.inf)))
+              amax = float(OM.np.max(OM.np.where(self.maskI > 0, A4, -OM.np.inf)))
+          else:
+              amin = float(OM.np.min(self.A[sl, sl, sl, sl]))
+              amax = float(OM.np.max(self.A[sl, sl, sl, sl]))
           comm = getattr(self, 'comm', None)
           if comm is not None and comm.Get_size() > 1:
               from mpi4py import MPI

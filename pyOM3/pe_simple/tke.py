@@ -11,9 +11,8 @@ as in tke.f90.
 Provides (mixin class `tke`, add to the model class bases like the other
 pe_simple components):
   init_tke()                allocate fields, set constants
-  set_tke_diffusivities()   sqrttke, mixing length (tke_mxl_choice=2),
+  set_tke_diffusivities()   sqrttke, mixing length (mxl_choice, see below),
                             kappaM/kappaH with Ri-dependent Prandtl number,
-                            convective kappaH=1 where N^2<0
   integrate_tke()           implicit TKE step: shear production K_diss_v,
                             buoyancy destruction P_diss_v, linearised
                             dissipation, vertical diffusion alpha_tke*kappaM,
@@ -55,10 +54,11 @@ class tke:
         self.c_eps      = getattr(self, 'c_eps',      0.7)
         self.alpha_tke  = getattr(self, 'alpha_tke',  1.0)
         self.mxl_min    = getattr(self, 'mxl_min',    1e-12)
-        self.kappaM_min = getattr(self, 'kappaM_min', 1e-5)   # background visc.
+        self.kappaM_min = getattr(self, 'kappaM_min', 0.0)    # pyOM2 default 0
         self.kappaM_max = getattr(self, 'kappaM_max', 100.0)
-        self.kappaH_min = getattr(self, 'kappaH_min', 1e-5)   # background diff.
-        self.tke_min    = getattr(self, 'tke_min',    1e-12)
+        self.kappaH_min = getattr(self, 'kappaH_min', 0.0)    # pyOM2: no floor; a
+                                                               # background diffusivity is a configuration choice
+        self.tke_min    = getattr(self, 'tke_min',    0.0)   # pyOM2: no floor
         # wave-scale surface mixing length (Mellor & Blumberg 2004 type):
         # the downward distance-limiting sweep is seeded with z0_surf + dz
         # instead of mxl_min + dz, so the near-surface mixing length starts
@@ -69,11 +69,37 @@ class tke:
         # the length 1:1 with distance (no von Karman factor), so beta
         # absorbs kappa_vk.
         self.z0_surf    = getattr(self, 'z0_surf',    0.0)
+        # MIXING LENGTH: which set of limits is applied to sqrt(2 tke)/N.
+        #   mxl_choice = 1 (default)  pyOM2 tke.f90 tke_mxl_choice = 2, the
+        #       MITgcm/OPA form: downward sweep with the UNLIMITED surface
+        #       value, then the surface W point limited to
+        #       mxl_min + z0_surf + dz(top), then the upward sweep. One length
+        #       for both the diffusivity and the dissipation.
+        #   mxl_choice = 2  NEMO 4.2 nn_mxl = 3 with ln_mxl0 = .true.: the
+        #       surface value is set FIRST, so it bounds the whole
+        #       near-surface profile, and the two sweeps are kept apart,
+        #           l_up   limited by the distance to the surface,
+        #           l_dwn  limited by the distance to the bottom,
+        #           l_k   = sqrt(l_up l_dwn)   (diffusivity, Gaspar 1990)
+        #           l_eps = min(l_up, l_dwn)   (dissipation)
+        #       Surface length: Charnock, l0 = kappa beta |tau|/(g rho_0)
+        #       (Mellor & Blumberg 2004, beta = 2e5 after Stacey 1999), floored
+        #       at mxl_min0 = kappa z0 with z0 = 0.1 m (NEMO rn_mxl0 = 0.04 m).
+        #       With z0_surf > 0 (a wave model's roughness, NEMO ln_mxhsw:
+        #       z0 = 1.6 Hs) it is l0 = max(mxl_min0, kappa z0_surf) instead.
+        #       The lowest wet level is seeded with mxl_min0 (NEMO's bottom
+        #       condition).
+        self.mxl_choice = getattr(self, 'mxl_choice', 1)
+        self.mxl_kappa  = getattr(self, 'mxl_kappa',  0.4)     # von Karman
+        self.mxl_beta   = getattr(self, 'mxl_beta',   2.0e5)   # Charnock (Stacey)
+        self.mxl_min0   = getattr(self, 'mxl_min0',   0.04)    # NEMO rn_mxl0
         # surface TKE flux source: wave dissipation (phi_oc) or (|tau|)^{3/2}
         self.tke_surf_from_waves = getattr(self, 'tke_surf_from_waves', True)
 
         z = OM.np.zeros((self.Nz, self.Ny, self.Nx), OM.prec)
-        self.tke        = z + self.tke_min * self.maskW
+        # initial seed as the pyOM2 configurations (tke = 1d-12); the floor
+        # tke_min is a separate thing and 0 by default
+        self.tke        = z + getattr(self, 'tke_init', 1e-12) * self.maskW
         self.kappaM_tke = z + self.kappaM_min
         self.kappaH_tke = z + self.kappaH_min
         self.K_diss_v   = z * 1.0
@@ -95,14 +121,16 @@ class tke:
 
         # downward sweep (from below the surface face): mxl[k] <= mxl[k+1]+dz
         ke = Nz - h - 1                                   # surface W face
-        mxl = OM.modify_array(mxl, (ke, slice(None), slice(None)),
-                              OM.np.minimum(mxl[ke],
-                                            self.mxl_min + self.z0_surf + dz))
+        # ORDER AS tke.f90: downward sweep first (using the UNLIMITED surface
+        # value), then the surface limit, then the upward sweep
         def _dn(i, m):
             k = ke - 1 - i                                # ke-1 .. h
             return OM.modify_array(m, (k, slice(None), slice(None)),
                                    OM.np.minimum(m[k], m[k + 1] + dz))
         mxl = OM.for_loop(0, ke - h, _dn, mxl)
+        mxl = OM.modify_array(mxl, (ke, slice(None), slice(None)),
+                              OM.np.minimum(mxl[ke],
+                                            self.mxl_min + self.z0_surf + dz))
 
         # upward sweep: mxl[k] <= mxl[k-1]+dz
         def _up(k, m):
@@ -113,12 +141,88 @@ class tke:
         return OM.np.maximum(mxl, self.mxl_min)
 
     # ------------------------------------------------------------------
+    def surface_mxl(self):
+        """Surface mixing length l0 of mxl_choice = 2 [m], on the T grid.
+        Charnock (NEMO ln_mxl0): l0 = kappa beta |tau|/(g rho_0), with tau
+        the KINEMATIC surface stress taux/tauy the configuration applies
+        (|tau|/rho_0), averaged U/V -> T. With z0_surf > 0 the wave form
+        l0 = kappa z0_surf is used instead. Always at least mxl_min0."""
+        z0 = self.z0_surf
+        if not OM.np.isscalar(z0) or z0 > 0.0:
+            return OM.np.maximum(self.mxl_min0, self.mxl_kappa*z0) \
+                   + OM.np.zeros((self.Ny, self.Nx))
+        tau = getattr(self, 'tau_modulus', None)
+        if tau is None and hasattr(self, 'taux'):
+            # |tau| WITHOUT a U/V -> T average, exactly as _surface_forcing
+            # builds the surface TKE flux: the average would read the halo of
+            # a field the configuration sets without a halo exchange, which
+            # made the run depend on the PE layout. A configuration that has
+            # the T-point modulus can hand it over as `tau_modulus`.
+            tau = OM.np.hypot(self.taux, self.tauy)
+        if tau is not None:
+            l0 = self.mxl_kappa*self.mxl_beta*tau/self.grav
+            l0 = OM.np.maximum(self.mxl_min0, l0)
+            # The HALO of l0 must be right: mxl of the halo row enters the
+            # U/V -> T averages of implicit_vfric, and the configuration sets
+            # taux/tauy without a halo exchange, so the run would depend on
+            # the PE layout. One exchange per step is avoided by taking the
+            # halo from the stress the configuration exchanged itself: set
+            # tau_halo_ok = True when taux/tauy carry a valid halo (as
+            # set_forcing leaves them), then no apply_bc is needed here.
+            if not getattr(self, 'tau_halo_ok', False):
+                l0 = self.apply_bc(l0)
+            return l0
+        return self.mxl_min0 + OM.np.zeros((self.Ny, self.Nx))
+
+    @partial(OM.jaxjit, static_argnums=0)
+    def _mxl_nemo(self, sqrttke, nsqr, l0):
+        """Mixing length, NEMO 4.2 nn_mxl = 3 with ln_mxl0 = .true.
+        Returns (l_k, l_eps): the geometric mean and the minimum of the
+        surface- and bottom-limited lengths. See init_tke for the reference."""
+        h, Nz, dz = self.halo, self.Nz, self.dz
+        ke = Nz - h - 1                                   # surface W face
+        mxl = OM.np.sqrt(2.0) * sqrttke \
+              / OM.np.sqrt(OM.np.maximum(1e-12, nsqr))
+        # floor everywhere, DRY CELLS INCLUDED: the bottom sweep then starts
+        # from mxl_min0 below the deepest wet level, which is NEMO's bottom
+        # condition l(bottom) = rn_mxl0
+        mxl = OM.np.maximum(mxl, self.mxl_min0)
+        # SURFACE FIRST (this is the difference to mxl_choice = 1): l0 bounds
+        # the whole near-surface profile through the sweep below
+        mxl = OM.modify_array(mxl, (ke, slice(None), slice(None)),
+                              OM.np.minimum(mxl[ke], l0))
+
+        # l_up: limited by the distance to the surface, downward from ke
+        def _dn(i, m):
+            k = ke - 1 - i                                # ke-1 .. h
+            return OM.modify_array(m, (k, slice(None), slice(None)),
+                                   OM.np.minimum(m[k], m[k + 1] + dz))
+        l_up = OM.for_loop(0, ke - h, _dn, mxl * 1.0)
+        # l_dwn: limited by the distance to the bottom, upward from h
+        def _up(k, m):
+            return OM.modify_array(m, (k, slice(None), slice(None)),
+                                   OM.np.minimum(m[k], m[k - 1] + dz))
+        l_dwn = OM.for_loop(h + 1, ke + 1, _up, mxl * 1.0)
+
+        l_k   = OM.np.sqrt(l_up * l_dwn) * self.maskW
+        l_eps = OM.np.minimum(l_up, l_dwn) * self.maskW
+        fl = OM.np.maximum(self.mxl_min, 1e-30)
+        return (OM.np.maximum(l_k, fl), OM.np.maximum(l_eps, fl))
+
+    # ------------------------------------------------------------------
     def set_tke_diffusivities(self):
         """kappaM = min(kappaM_max, c_k*mxl*sqrt(tke)), kappaH = kappaM/Pr(Ri),
-        convective kappaH = 1 where N^2 < 0 (replaces convective_kappa)."""
+        kappaM_min/kappaH_min floors, zero flux through the surface face."""
         sqrttke = OM.np.sqrt(OM.np.maximum(0.0, self.tke))
         nsqr    = self.calc_nsqr(self.temp, self.salt, self.rho, self.maskW)
-        mxl     = self._mxl_choice2(sqrttke, nsqr)
+        if self.mxl_choice == 2:
+            mxl, mxl_eps = self._mxl_nemo(sqrttke, nsqr, self.surface_mxl())
+        elif self.mxl_choice == 1:
+            mxl = self._mxl_choice2(sqrttke, nsqr)
+            mxl_eps = mxl
+        else:
+            raise ValueError('mxl_choice must be 1 (pyOM2) or 2 (NEMO), got %r'
+                             % (self.mxl_choice,))
 
         kappaM = OM.np.minimum(self.kappaM_max, self.c_k * mxl * sqrttke)
         Ri     = nsqr / OM.np.maximum(1e-12,
@@ -127,15 +231,20 @@ class tke:
         kappaH = kappaM / Pr
         kappaM = OM.np.maximum(self.kappaM_min, kappaM)
         kappaH = OM.np.maximum(self.kappaH_min, kappaH)
-        # convective adjustment as in tke.f90: kappaH = 1 where unstable
-        kappaH = OM.np.where(nsqr < 0.0, OM.np.maximum(kappaH, 1.0), kappaH)
+        # NO extra convective branch: with the TKE closure on, unstable
+        # columns get Pr = 1 (Ri < 0), kappaH = kappaM, exactly as pyOM2's
+        # tke.f90. A kappaH = 1 override where N^2 < 0 was here until
+        # Sep 8 2026 and was a bug (convective adjustment on top of TKE).
         # no diffusive flux through the surface face (cf. convective_kappa)
         ks = -self.halo - 1
         kappaH = OM.modify_array(kappaH, (ks, slice(None), slice(None)),
                                  OM.np.zeros_like(kappaH[ks]))
         self.kappaM_tke = kappaM * self.maskW
         self.kappaH_tke = kappaH * self.maskW
-        self.mxl, self.sqrttke, self.Nsqr = mxl, sqrttke, nsqr
+        # mxl is the length of the DIFFUSIVITY (l_k), mxl_eps that of the
+        # DISSIPATION (l_eps); they differ only for mxl_choice = 2
+        self.mxl, self.mxl_eps = mxl, mxl_eps
+        self.sqrttke, self.Nsqr = sqrttke, nsqr
         return
 
     # ------------------------------------------------------------------
@@ -159,6 +268,15 @@ class tke:
         sign-indefinite); K_diss_v = K_diss_E + K_diss_L."""
         kmu = 0.5 * (self.kappaM_tke + self.rollx(self.kappaM_tke, -1))  # T->U
         kmv = 0.5 * (self.kappaM_tke + self.rolly(self.kappaM_tke, -1))  # T->V
+        # a momentum flux exists only across a face BETWEEN TWO WET U (V)
+        # cells (pyOM2 vertical_friction.f90: flux_top * maskU(k+1)*maskU(k)).
+        # Without this, a U column shallower than its deeper T neighbour had
+        # a nonzero kmu at its bottom face: the solver dragged the lowest wet
+        # cell against the dry cell below (spurious bottom friction on every
+        # topographic step) and the dissipation booked at that face fell half
+        # into a dry T cell and was lost (5-7% of K_diss_v in global4).
+        kmu = kmu * self.maskU * self.rollz(self.maskU, -1)
+        kmv = kmv * self.maskV * self.rollz(self.maskV, -1)
         # NO momentum flux through the surface face: pe_simple's maskW is 1
         # there, so without this the implicit solve couples the top cell to
         # the zero-velocity z-halo above -- a phantom no-slip lid with drag
@@ -219,7 +337,13 @@ class tke:
         else:
             self.K_diss_L = OM.np.zeros_like(self.K_diss_E)
         self.K_diss_v = self.K_diss_E + self.K_diss_L
-        self.u, self.v = u_new, v_new
+        # halo refresh: implicit_vdiff returns ue_new with fresh halos, but
+        # the u_S part added back (uS_U from rollx of the haloed u_S) is not
+        # valid in the outermost halo column, and the next step's advection,
+        # w and tendencies read u there. Found by the coupled global4 restart
+        # test: identical A/B state except this halo -> 6e-5 in u after one
+        # step (the restart's apply_bc repaired what the run had wrong).
+        self.u, self.v = self.apply_bc(u_new), self.apply_bc(v_new)
         return
 
     # ------------------------------------------------------------------
@@ -234,7 +358,7 @@ class tke:
 
     # ------------------------------------------------------------------
     @partial(OM.jaxjit, static_argnums=0)
-    def _tke_solve(self, tke, forc, forc_surf, sqrttke, mxl, kappaM):
+    def _tke_solve(self, tke, forc, forc_surf, sqrttke, mxl_eps, kappaM):
         """One backward-Euler TKE step: general Thomas solve, coefficients
         exactly as tke.f90 (uniform dz; surface W cell 0.5*dz thick)."""
         h, Nz, dz, dt = self.halo, self.Nz, self.dz, self.dt
@@ -245,8 +369,14 @@ class tke:
         delta = dt / dz * self.alpha_tke * 0.5 * (kappaM + self.rollz(kappaM, -1))
         delta = OM.modify_array(delta, (ke, slice(None), slice(None)),
                                 OM.np.zeros_like(delta[ke]))
+        # TKE diffuses only between two WET W levels (pyOM2: a_tri(ks) = 0,
+        # delta defined for k = ks..ke-1). Without this the lowest wet level
+        # exchanged TKE with the dry level below it (held at zero): a leak of
+        # TKE into the ground at every column bottom (found Sep 9 2026 by the
+        # TKE budget identity).
+        delta = delta * self.maskW * self.rollz(self.maskW, -1)
 
-        diss = dt * self.c_eps * sqrttke / mxl             # linearised sink
+        diss = dt * self.c_eps * sqrttke / mxl_eps         # linearised sink
         a = -self.rollz(delta, 1) / dz                     # couples k, k-1
         c = -delta / dz                                    # couples k, k+1
         b = 1.0 + delta / dz + self.rollz(delta, 1) / dz + diss
@@ -298,16 +428,47 @@ class tke:
         # transfer is kappaH * N^2(b^{n+1}) -- the same taup1 rule as K_diss_v.
         # Using the pre-mixing N^2 overdrains the TKE whenever
         # kappaH*dt/dz^2 is not small (alpha_tke=30 regimes).
+        # self.rho is the density of the UPDATED tracers: model.py evaluates it
+        # once per step, after the vertical mixing and before this call
+        # (pyOM2: calc_eq_of_state(taup1) before the P_diss_v block).
+        from pyOM3.density import gsw_drhodTS, \
+            linear_eq_of_state_drhodT, linear_eq_of_state_drhodS
         nsqr_new = self.calc_nsqr(self.temp, self.salt, self.rho, self.maskW)
-        self.P_diss_v = self.kappaH_tke * nsqr_new * self.maskW
+        P = self.kappaH_tke * nsqr_new * self.maskW
+        # SURFACE BUOYANCY FLUX (pyOM2 thermodynamics.f90, both branches):
+        #   P_diss_v(nz) = -g/rho_0 * forc_rho_surface,
+        #   forc_rho_surface = drho/dT * forc_temp_surface + drho/dS * forc_salt_surface
+        # with the surface tracer FLUXES (K m/s, psu m/s, positive into the
+        # ocean) the configuration provides as forc_temp_surface /
+        # forc_salt_surface. Surface cooling (buoyancy loss) is thus a TKE
+        # source: this is the convective TKE production. Without the two
+        # attributes the term is zero (as it was here before Sep 8 2026).
+        if hasattr(self, 'forc_temp_surface'):
+            ks = -self.halo - 1
+            eos = self.eq_of_state
+            if eos == 0:                       # temp IS buoyancy b, rho = -b*rho_0/g
+                drT, drS = -1024.0/9.81, 0.0
+            elif eos == 1:
+                drT, drS = linear_eq_of_state_drhodT(), linear_eq_of_state_drhodS()
+            elif eos == 5:
+                p_s = None if self.p0 is None else self.p0[ks]
+                drT, drS = gsw_drhodTS(self.salt[ks], self.temp[ks], p_s)
+            else:
+                drT, drS = 0.0, 0.0
+            frho = drT * self.forc_temp_surface
+            if hasattr(self, 'forc_salt_surface'):
+                frho = frho + drS * self.forc_salt_surface
+            P = OM.modify_array(P, (ks, slice(None), slice(None)),
+                                -self.grav / self.rho_0 * frho * self.maskT[ks])
+        self.P_diss_v = P
         forc = self.K_diss_v - self.P_diss_v
         self.forc_tke_surface = self._surface_forcing()
 
         tke_new = self._tke_solve(self.tke, forc, self.forc_tke_surface,
-                                  self.sqrttke, self.mxl, self.kappaM_tke)
+                                  self.sqrttke, self.mxl_eps, self.kappaM_tke)
 
         # dissipation diagnostic (with the UPDATED tke, as in tke.f90)
-        self.tke_diss = self.c_eps / self.mxl * self.sqrttke * tke_new * self.maskW
+        self.tke_diss = self.c_eps / self.mxl_eps * self.sqrttke * tke_new * self.maskW
 
         # surface correction: if the surface cell went negative (strong
         # buoyancy drain), add the missing TKE and book it (tke.f90)
@@ -317,5 +478,9 @@ class tke:
         tke_new = OM.modify_array(tke_new, (ke, slice(None), slice(None)),
                                   OM.np.maximum(tke_new[ke], 0.0))
 
-        self.tke = self.apply_bc(OM.np.maximum(tke_new, self.tke_min * self.maskW))
+        # tke.f90 has NO floor (only the negative surface value is zeroed
+        # above); a floor is applied only if tke_min > 0 is asked for
+        if self.tke_min > 0.0:
+            tke_new = OM.np.maximum(tke_new, self.tke_min * self.maskW)
+        self.tke = self.apply_bc(tke_new)
         return

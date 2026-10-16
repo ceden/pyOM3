@@ -18,48 +18,26 @@ import os,shutil
 
 
 class snap_nc4(model):
-    
+
+      def _snap_coords(self, nx, ny, nz):
+          """coordinates written to the snapshot file: (xt,yt,zt,xu,yu,zu),
+          cell centres / faces in metres on the uniform grid; pe_realistic
+          overrides with the grid coordinates of grid.calc_grid. nx,ny,nz
+          are the global extents (get_full_domain_extent is collective, so
+          it is called by the caller on all PEs)."""
+          return ((0.5+np__.arange(nx))*self.dx, (0.5+np__.arange(ny))*self.dy,
+                  (0.5+np__.arange(nz))*self.dz, (1.0+np__.arange(nx))*self.dx,
+                  (1.0+np__.arange(ny))*self.dy, (1.0+np__.arange(nz))*self.dz)
+
       def prepare_for_run(self, snap_file_name = 'snap.cdf', show_each_time_step = True ):
           """
-          Initialisation of the netcdf file.
+          Initialisation of the netcdf file. The body lives in the
+          module-level _snap_nc4_prepare so pe_realistic can share it: a
+          zero-argument super() inside a shared method binds to the class
+          it was defined in, so this chaining line must stay per package.
           """
           super().prepare_for_run()
-          
-          nx,ny = self.get_full_domain_extent()
-          nz = self.Nz - 2*self.halo
-          self.snap_file_name = snap_file_name
-          self.show_each_time_step = show_each_time_step
-          self.tot_congr_itts = 0
-          
-          if self.my_pe == 0:
-             id = NF(snap_file_name,mode='w')    
-             id.createDimension('xt',nx)
-             id.createDimension('yt',ny)
-             id.createDimension('zt',nz)
-             id.createDimension('xu',nx)
-             id.createDimension('yu',ny)
-             id.createDimension('zu',nz)
-             id.createDimension('time',None)
-          
-             id.createVariable('time', OM.prec ,('time',) )
-             id.createVariable('xt',   OM.prec ,('xt',) )[:] = (0.5+np__.arange(nx))*self.dx
-             id.createVariable('yt',   OM.prec ,('yt',) )[:] = (0.5+np__.arange(ny))*self.dy
-             id.createVariable('zt',   OM.prec ,('zt',) )[:] = (0.5+np__.arange(nz))*self.dz   
-             id.createVariable('xu',   OM.prec ,('xu',) )[:] = (1.0+np__.arange(nx))*self.dx
-             id.createVariable('yu',   OM.prec ,('yu',) )[:] = (1.0+np__.arange(ny))*self.dy
-             id.createVariable('zu',   OM.prec ,('zu',) )[:] = (1.0+np__.arange(nz))*self.dz
-    
-             id.createVariable('temp', OM.prec ,('time','zt','yt','xt') )
-             if self.eq_of_state > 0 and self.eq_of_state != 100:  
-                id.createVariable('salt', OM.prec ,('time','zt','yt','xt') )
-             id.createVariable('u',    OM.prec ,('time','zt','yt','xu') )
-             id.createVariable('v',    OM.prec ,('time','zt','yu','xt') )
-             id.createVariable('w',    OM.prec ,('time','zu','yt','xt') )
-             id.createVariable('p_h',  OM.prec ,('time','zt','yt','xt') )
-             id.createVariable('rho',  OM.prec ,('time','zt','yt','xt') )  
-             id.createVariable('p_s',  OM.prec ,('time','yt','xt') )  
-             id.close()    
-          return
+          return _snap_nc4_prepare(self, snap_file_name, show_each_time_step)
 
     
       def diagnose(self,n,tau):  
@@ -134,35 +112,20 @@ class snap_nc4(model):
                                                slice(self.xs_pe-1,self.xe_pe))] = self.unpad( self.p_s[tau,:,:])                      
                     
                     fid.close() 
-                 
-             
+             if self.my_pe == 0:   print(" --> done") 
+
 
 class snap_raw(model):
 
-    
+      _snap_coords = snap_nc4._snap_coords
+
       def prepare_for_run(self, snap_file_name = 'raw_snap', show_each_time_step = True ):
           """
-          Initialise the output directory and write grid files.
+          Initialise the output directory and write grid files (body in the
+          module-level _snap_raw_prepare, shared with pe_realistic).
           """
           super().prepare_for_run()
-          nx,ny = self.get_full_domain_extent()
-          nz = self.Nz - 2*self.halo     
-          self.snap_file_name = snap_file_name
-          self.show_each_time_step = show_each_time_step
-          self.tot_congr_itts = 0
-          
-          if self.my_pe == 0:             
-             if os.path.isdir(snap_file_name):  shutil.rmtree(snap_file_name, ignore_errors=False)
-             os.mkdir(snap_file_name)              
-             for pe in range(self.n_pes_x*self.n_pes_y): os.mkdir(snap_file_name+'/pe=%i'%pe)  
-             OM.np.save(snap_file_name+'/xt.npy',  OM.np.arange(nx,dtype=OM.prec)*self.dx + self.dx/2.)
-             OM.np.save(snap_file_name+'/yt.npy',  OM.np.arange(ny,dtype=OM.prec)*self.dy + self.dy/2.)
-             OM.np.save(snap_file_name+'/zt.npy',  OM.np.arange(nz,dtype=OM.prec)*self.dz + self.dz/2 )          
-             OM.np.save(snap_file_name+'/xu.npy',  OM.np.arange(nx,dtype=OM.prec)*self.dx + self.dx )
-             OM.np.save(snap_file_name+'/yu.npy',  OM.np.arange(ny,dtype=OM.prec)*self.dy + self.dy )
-             OM.np.save(snap_file_name+'/zu.npy',  OM.np.arange(nz,dtype=OM.prec)*self.dz + self.dz )  
-             OM.np.save(snap_file_name+'/decomposition.npy',  OM.np.array([self.n_pes_x,self.n_pes_y]) )   
-          return
+          return _snap_raw_prepare(self, snap_file_name, show_each_time_step)
 
 
       def diagnose(self,n,tau):  
@@ -204,3 +167,64 @@ class snap_raw(model):
 
 
  
+
+
+def _snap_nc4_prepare(self, snap_file_name, show_each_time_step):
+    """netCDF body of snap_nc4.prepare_for_run, shared with pe_realistic"""
+    
+    nx,ny = self.get_full_domain_extent()
+    nz = self.Nz - 2*self.halo
+    self.snap_file_name = snap_file_name
+    self.show_each_time_step = show_each_time_step
+    self.tot_congr_itts = 0
+    
+    if self.my_pe == 0:
+       id = NF(snap_file_name,mode='w')    
+       id.createDimension('xt',nx)
+       id.createDimension('yt',ny)
+       id.createDimension('zt',nz)
+       id.createDimension('xu',nx)
+       id.createDimension('yu',ny)
+       id.createDimension('zu',nz)
+       id.createDimension('time',None)
+    
+       id.createVariable('time', OM.prec ,('time',) )
+       xt,yt,zt,xu,yu,zu = self._snap_coords(nx,ny,nz)
+       id.createVariable('xt',   OM.prec ,('xt',) )[:] = np__.asarray(xt)
+       id.createVariable('yt',   OM.prec ,('yt',) )[:] = np__.asarray(yt)
+       id.createVariable('zt',   OM.prec ,('zt',) )[:] = np__.asarray(zt)
+       id.createVariable('xu',   OM.prec ,('xu',) )[:] = np__.asarray(xu)
+       id.createVariable('yu',   OM.prec ,('yu',) )[:] = np__.asarray(yu)
+       id.createVariable('zu',   OM.prec ,('zu',) )[:] = np__.asarray(zu)
+    
+       id.createVariable('temp', OM.prec ,('time','zt','yt','xt') )
+       if self.eq_of_state > 0 and self.eq_of_state != 100:  
+          id.createVariable('salt', OM.prec ,('time','zt','yt','xt') )
+       id.createVariable('u',    OM.prec ,('time','zt','yt','xu') )
+       id.createVariable('v',    OM.prec ,('time','zt','yu','xt') )
+       id.createVariable('w',    OM.prec ,('time','zu','yt','xt') )
+       id.createVariable('p_h',  OM.prec ,('time','zt','yt','xt') )
+       id.createVariable('rho',  OM.prec ,('time','zt','yt','xt') )  
+       id.createVariable('p_s',  OM.prec ,('time','yt','xt') )  
+       id.close()    
+    return
+
+    
+
+
+def _snap_raw_prepare(self, snap_file_name, show_each_time_step):
+    """directory body of snap_raw.prepare_for_run, shared with pe_realistic"""
+    nx,ny = self.get_full_domain_extent()
+    nz = self.Nz - 2*self.halo     
+    self.snap_file_name = snap_file_name
+    self.show_each_time_step = show_each_time_step
+    self.tot_congr_itts = 0
+    
+    if self.my_pe == 0:             
+       if os.path.isdir(snap_file_name):  shutil.rmtree(snap_file_name, ignore_errors=False)
+       os.mkdir(snap_file_name)              
+       for pe in range(self.n_pes_x*self.n_pes_y): os.mkdir(snap_file_name+'/pe=%i'%pe)  
+       for name, c in zip(('xt','yt','zt','xu','yu','zu'), self._snap_coords(nx,ny,nz)):
+           OM.np.save(snap_file_name+'/%s.npy'%name, OM.np.asarray(c))
+       OM.np.save(snap_file_name+'/decomposition.npy',  OM.np.array([self.n_pes_x,self.n_pes_y]) )   
+    return

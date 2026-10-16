@@ -47,15 +47,23 @@ class implicit_vmix:
 
     @partial(OM.jaxjit, static_argnums=0)
     def calc_nsqr(self, temp, salt, rho, maskW):
-        if self.eq_of_state not in self._NSQR_SUPPORTED_EOS:
+        if self.eq_of_state in self._NSQR_SUPPORTED_EOS:
+            # pressure-independent EOS: raw density difference
+            rho_up = get_rho(self.rollz(salt, -1), self.rollz(temp, -1), None, self.eq_of_state)
+        elif self.eq_of_state == 5:
+            # pressure-dependent EOS (GSW): adiabatic displacement as in
+            # pyOM2 numerics.f90 -- the parcel from k+1 is evaluated at the
+            # level-k pressure p0[k] and compared with the in-situ rho[k].
+            rho_up = get_rho(self.rollz(salt, -1), self.rollz(temp, -1), self.p0, self.eq_of_state)
+        else:
             raise NotImplementedError(
-                "convective adjustment / Nsqr only implemented for a "
-                "pressure-independent equation of state (eq_of_state in "
-                f"{self._NSQR_SUPPORTED_EOS}); got eq_of_state={self.eq_of_state}. "
-                "A pressure-dependent EOS needs an adiabatic-displacement Nsqr, "
-                "which is not implemented here.")
-        rho_up = get_rho(self.rollz(salt, -1), self.rollz(temp, -1), None, self.eq_of_state)
-        return -self.grav / self.rho_0 / self.dz * (rho_up - rho) * maskW
+                "Nsqr not implemented for eq_of_state="
+                f"{self.eq_of_state}.")
+        nsqr = -self.grav / self.rho_0 / self.dz * (rho_up - rho) * maskW
+        # surface face: no cell above, copy the face below (pyOM2 numerics.f90,
+        # Nsqr(:,:,nz) = Nsqr(:,:,nz-1)); the rolled halo value is meaningless
+        ke = -self.halo - 1
+        return OM.modify_array(nsqr, (ke, slice(None), slice(None)), nsqr[ke - 1])
 
     # ------------------------------------------------------------------
     # convective diffusivity on the W grid:
@@ -102,6 +110,12 @@ class implicit_vmix:
 
         # delta[k] = dt/dz * kappaH[k]  (kappaH on top face of cell k)
         delta = dt / dz * kappaH
+        # Zero-flux surface BC, unconditional (pyOM2: delta(nz)=0): maskW is
+        # opened at the surface level for the free-surface solver, so callers
+        # passing coef*maskW would otherwise exchange tracer/momentum with the
+        # zero halo above the surface (a spurious surface leak).
+        delta = OM.modify_array(delta, (-(self.halo + 1), slice(None), slice(None)),
+                                OM.np.zeros_like(delta[-(self.halo + 1)]))
 
         # Sub/super/diagonal of (I - dt d_z kappaH d_z), interior cells only.
         # lower a[k]  couples k to k-1  : -delta[k-1]/dz
@@ -257,6 +271,13 @@ class implicit_vmix:
             self.u, self.v = self.apply_bc(self.u), self.apply_bc(self.v)
             return
         kav = Av * self.maskW
+        # Zero-stress surface BC: maskW is opened at the surface level for the
+        # free-surface (w) solver, but the implicit friction operator must not
+        # exchange momentum through the surface face (pyOM2: delta(nz)=0 in
+        # implicit_vert_friction); the wind stress enters as explicit forcing
+        # instead. Same convention as convective_kappa for the tracers.
+        kav = OM.modify_array(kav, (-self.halo - 1, slice(None), slice(None)),
+                              OM.np.zeros_like(kav[-self.halo - 1]))
         self.u = self.implicit_vdiff(self.u, kav, self.maskU)
         self.v = self.implicit_vdiff(self.v, kav, self.maskV)
         return

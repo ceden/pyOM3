@@ -1,6 +1,10 @@
 """
-snonlin_np.py
--------------
+snonlin_jax.py
+--------------
+The DIA of snonlin_np.py in the fully vectorised form for the JAX backend
+(no scatter, see source() and _vec_tables()). The setup tables are those
+of snonlin_np.py. Below the original module docstring of the loop form.
+
 Vectorized NumPy translation of the WAM discrete-interaction-approximation
 (DIA) for the nonlinear 4-wave transfer, i.e. a drop-in replacement for the
 compiled Fortran extension pyOM3.wim_simple.Snonlin (Snonlin.f90).
@@ -81,6 +85,7 @@ class _Snonlin:
         self.delth = 2.0 * _PI / self.kl
         self._nlweigt()
         self._init_snonlin()
+        self._vec_tables()               # the vectorised tables (host numpy, outside any trace)
         return None
 
     # ------------------------------------------------------------- nlweigt
@@ -371,141 +376,145 @@ class _Snonlin:
             self.c_fklam12[r] = FKLAM12; self.c_fklam22[r] = FKLAM22
             self.c_af11[r] = self.af11[rM]
 
+    # ------------------------------------------------------- vectorised tables
+    def _vec_tables(self):
+        """
+        Tables of the vectorised source (built once, host numpy). The
+        Fortran/numpy loop over MC (centre frequency) and KH (mirror half)
+        becomes one group axis g = 2*(MC-1) + KH of length G = 2*MLSTHG:
+
+          gather tables (G,KL) of directions and (G,1) of frequencies for
+          the eight interpolation points F[K1,IP] ... F[K21,IM1] and the
+          centre F[K,IC], the per-group coefficients GW1..8, AF11, the tail
+          factor, and the DESTINATION of every contribution as a weight
+          matrix W (G,ML) per (direction table, quantity): the contribution
+          of group g to output frequency m is Q_perm[g] * W[g,m], where
+          Q_perm is the quantity with the directions permuted into their
+          destination bins (K -> K2[g,K] etc.). The three branches of the
+          loop (interior / high / low frequency) are the validity masks
+          folded into W (zero where the Fortran skips the term), and the
+          accumulation over g is a matrix product instead of 2 x 9 scatters
+          per group.
+        """
+        kl, ml = self.kl, self.ml
+        G = 2*self.mlsthg
+        MFR1STFR = -self.mfrstlw + 1
+        MFRLSTFR = ml - self.kfrh + MFR1STFR
+        Kall = np.arange(kl)
+        T = {}
+        T['K1'] = np.zeros((G, kl), int); T['K11'] = np.zeros((G, kl), int)
+        T['K2'] = np.zeros((G, kl), int); T['K21'] = np.zeros((G, kl), int)
+        T['Kall'] = np.tile(Kall, (G, 1))
+        for nm in ('IC', 'IP', 'IP1', 'IM', 'IM1'):
+            T[nm] = np.zeros((G, 1), int)
+        gw = np.zeros((8, G)); af = np.zeros(G); tail = np.ones(G)
+        # weight matrices: (direction table, quantity) -> (G, ML)
+        W = {k: np.zeros((G, ml)) for k in ('all_AD', 'all_DELAD', 'K2_AD', 'K21_AD', 'K1_AD',
+                                            'K11_AD', 'K2_DELAM', 'K21_DELAM', 'K1_DELAP', 'K11_DELAP')}
+        for MC in range(1, self.mlsthg + 1):
+            r = MC - 1
+            interior = (MC > MFR1STFR) and (MC < MFRLSTFR)
+            high = (MC >= MFRLSTFR)
+            low = not (interior or high)
+            MCi = MC - 1; MP = self.d_mp[r] - 1; MP1 = self.d_mp1[r] - 1
+            MM = self.d_mm[r] - 1; MM1 = self.d_mm1[r] - 1
+            # the branch logic of source(): which destinations receive
+            ok_mm  = interior or high
+            ok_mm1 = interior or (high and MM1 + 1 <= ml) or (low and MM1 + 1 >= 1)
+            ok_c   = interior or low or (high and MM1 + 1 <= ml and MCi + 1 <= ml)
+            ok_mp  = interior or low or (high and MM1 + 1 <= ml and MCi + 1 <= ml and MP + 1 <= ml)
+            ok_mp1 = ok_mp and (interior or low or MP1 + 1 <= ml)
+            for KH in (0, 1):
+                g = 2*r + KH
+                T['K1'][g] = self.k1w[:, KH]; T['K11'][g] = self.k11w[:, KH]
+                T['K2'][g] = self.k2w[:, KH]; T['K21'][g] = self.k21w[:, KH]
+                T['IC'][g] = self.d_ic[r] - 1; T['IP'][g] = self.d_ip[r] - 1
+                T['IP1'][g] = self.d_ip1[r] - 1; T['IM'][g] = self.d_im[r] - 1
+                T['IM1'][g] = self.d_im1[r] - 1
+                gw[:, g] = self.c_gw[:, r]; af[g] = self.c_af11[r]
+                tail[g] = 1.0 if interior else self.c_ftail[r]
+                def put(key, m, c):
+                    assert 0 <= m < ml, (key, MC, m)
+                    W[key][g, m] += c
+                if ok_c:
+                    put('all_AD', MCi, -2.0); put('all_DELAD', MCi, -2.0)
+                if ok_mm:
+                    put('K2_AD', MM, self.c_fklamm1[r]);  put('K2_DELAM', MM, self.c_fklam12[r])
+                    put('K21_AD', MM, self.c_fklamm2[r]); put('K21_DELAM', MM, self.c_fklam22[r])
+                if ok_mm1:
+                    put('K2_AD', MM1, self.c_fklamma[r]);  put('K2_DELAM', MM1, self.c_fklama2[r])
+                    put('K21_AD', MM1, self.c_fklammb[r]); put('K21_DELAM', MM1, self.c_fklamb2[r])
+                if ok_mp:
+                    put('K1_AD', MP, self.c_fklamp1[r]);  put('K1_DELAP', MP, self.c_fklap12[r])
+                    put('K11_AD', MP, self.c_fklamp2[r]); put('K11_DELAP', MP, self.c_fklap22[r])
+                if ok_mp1:
+                    put('K1_AD', MP1, self.c_fklampa[r]);  put('K1_DELAP', MP1, self.c_fklapa2[r])
+                    put('K11_AD', MP1, self.c_fklampb[r]); put('K11_DELAP', MP1, self.c_fklapb2[r])
+        # inverse permutations: X_perm[g, D[g,k]] = X[g,k]  <=>  X_perm = X[g, Dinv[g]]
+        Dinv = {k: np.argsort(T[k], axis=1) for k in ('K1', 'K11', 'K2', 'K21')}
+        self._vec = dict(T=T, gw=gw, af=af, tail=tail, W=W, Dinv=Dinv, G=G)
+        return self._vec
+
     # ---------------------------------------------------------------- source
     def source(self, F):
         """
         F : (nx, ny, kl, ml). Returns SL, FL with same shape.
-        Vectorized over (nx, ny) and over direction K; loops over MC and KH.
 
-        Backend-agnostic: uses OM.np for array ops and OM.add_to_array for the
-        scatter-add, so it runs under numpy or jax. The per-call direction index
-        arrays contain no duplicates (each scatter writes KL distinct
-        directions at one frequency), so the add_to_array numpy fallback
-        (arr[idx] += val, which does not accumulate duplicate indices) is exact;
-        accumulation across successive scatters is correct because each is a
-        separate add.
+        Vectorised over (nx, ny), the direction K AND the (MC, KH) groups
+        (see _vec_tables): nine gathers of F with 2-D index tables, the
+        quadruplet arithmetic on (nx,ny,G,kl) arrays, eight permutation
+        gathers along the direction axis and ten matrix products over the
+        group axis that place every contribution in its destination
+        frequency. No scatter: the result is deterministic
+        on the GPU and the memory traffic is a few passes over the
+        G-expanded array (2.5 x F) instead of two scatter-adds per group
+        (the loop form, ~280 full-array passes per step at 25 frequencies).
+        On a CPU the loop form is faster (its per-group slices stay in the
+        cache); the JAX backend is for the GPU.
+
+        Same arithmetic as the Fortran/numpy loop (snonlin_np.py), the sums
+        over the groups in a different order (round-off).
         """
         F = OM.np.asarray(F, dtype=OM.prec)
         nx, ny, kl, ml = F.shape
         assert kl == self.kl and ml == self.ml, (F.shape, self.kl, self.ml)
+        V = self._vec
+        T, W, Dinv = V['T'], V['W'], V['Dinv']
+        gw = V['gw'][:, :, None]                                # (8, G, 1)
+        af, tail = V['af'][:, None], V['tail'][:, None]        # (G, 1)
+        gi = np.arange(V['G'])[:, None]                         # (G, 1) group index
 
-        SL = OM.np.zeros_like(F)
-        FL = OM.np.zeros_like(F)
+        def g(K, M):                                            # F[:, :, K[g,k], M[g]] -> (nx,ny,G,kl)
+            return F[:, :, T[K], T[M]]
 
-        MFR1STFR = -self.mfrstlw + 1
-        MFRLSTFR = ml - self.kfrh + MFR1STFR
+        SAP = gw[0]*g('K1', 'IP') + gw[1]*g('K11', 'IP') + gw[2]*g('K1', 'IP1') + gw[3]*g('K11', 'IP1')
+        SAM = gw[4]*g('K2', 'IM') + gw[5]*g('K21', 'IM') + gw[6]*g('K2', 'IM1') + gw[7]*g('K21', 'IM1')
+        FIJ = g('Kall', 'IC')*tail
+        FAD1 = FIJ*(SAP + SAM)
+        FAD2 = FAD1 - 2.0*SAP*SAM
+        FAD1 = FAD1 + FAD2
+        FCEN = af*FIJ
+        AD    = FAD2*FCEN
+        DELAD = FAD1*af
+        DELAP = (FIJ - 2.0*SAM)*self.dal1*FCEN
+        DELAM = (FIJ - 2.0*SAP)*self.dal2*FCEN
 
-        Kall = np.arange(kl)                      # 0-based direction vector (host)
+        def perm(X, K):                                         # X[g, k] -> destination bin K[g, k]
+            return X[:, :, gi, Dinv[K]]
 
-        def scat(arr, dirs, mfreq, vals):
-            # arr[:, :, dirs, mfreq] += vals  (no intra-call duplicate dirs).
-            where = (slice(None), slice(None), dirs,
-                     np.full(kl, mfreq, dtype=int))
-            return OM.add_to_array(arr, where, vals)
+        # every (direction table, quantity) pair placed into its destination
+        # frequencies by a matrix product over the group axis (contraction
+        # over G), (nx,ny,kl,G) x (G,ml), summed: ten small GEMMs, one
+        # permuted array live at a time (a single stacked GEMM over 5G
+        # would be a 2.5 x larger temporary, 2 GB per GPU at 384^2)
+        def place(X, key):
+            return OM.np.einsum('xygk,gm->xykm', X, OM.np.asarray(W[key]))
 
-        for MC in range(1, self.mlsthg + 1):
-            r = MC - 1
-            # 0-based destination frequency indices
-            IC = self.d_ic[r] - 1
-            IP = self.d_ip[r] - 1
-            IP1 = self.d_ip1[r] - 1
-            IM = self.d_im[r] - 1
-            IM1 = self.d_im1[r] - 1
-            MCi = MC - 1
-            MP = self.d_mp[r] - 1
-            MP1 = self.d_mp1[r] - 1
-            MM = self.d_mm[r] - 1
-            MM1 = self.d_mm1[r] - 1
-
-            FTAIL = self.c_ftail[r]
-            GW1, GW2, GW3, GW4, GW5, GW6, GW7, GW8 = self.c_gw[:, r]
-            AF = self.c_af11[r]
-
-            interior = (MC > MFR1STFR) and (MC < MFRLSTFR)
-            high = (MC >= MFRLSTFR)
-            for KH in (0, 1):
-                K1 = self.k1w[:, KH]              # (kl,) 0-based
-                K2 = self.k2w[:, KH]
-                K11 = self.k11w[:, KH]
-                K21 = self.k21w[:, KH]
-
-                # SAP, SAM, FIJ : (nx,ny,kl)
-                SAP = (GW1 * F[:, :, K1, IP] + GW2 * F[:, :, K11, IP]
-                       + GW3 * F[:, :, K1, IP1] + GW4 * F[:, :, K11, IP1])
-                SAM = (GW5 * F[:, :, K2, IM] + GW6 * F[:, :, K21, IM]
-                       + GW7 * F[:, :, K2, IM1] + GW8 * F[:, :, K21, IM1])
-                tail = 1.0 if interior else FTAIL
-                FIJ = F[:, :, Kall, IC] * tail
-                FAD1 = FIJ * (SAP + SAM)
-                FAD2 = FAD1 - 2.0 * SAP * SAM
-                FAD1 = FAD1 + FAD2
-                FCEN = AF * FIJ
-                AD = FAD2 * FCEN                  # (nx,ny,kl)
-                DELAD = FAD1 * AF
-                DELAP = (FIJ - 2.0 * SAM) * self.dal1 * FCEN
-                DELAM = (FIJ - 2.0 * SAP) * self.dal2 * FCEN
-
-                if interior:
-                    SL = scat(SL, Kall, MCi, -2.0 * AD)
-                    FL = scat(FL, Kall, MCi, -2.0 * DELAD)
-                    SL = scat(SL, K2, MM, AD * self.c_fklamm1[r])
-                    FL = scat(FL, K2, MM, DELAM * self.c_fklam12[r])
-                    SL = scat(SL, K21, MM, AD * self.c_fklamm2[r])
-                    FL = scat(FL, K21, MM, DELAM * self.c_fklam22[r])
-                    SL = scat(SL, K2, MM1, AD * self.c_fklamma[r])
-                    FL = scat(FL, K2, MM1, DELAM * self.c_fklama2[r])
-                    SL = scat(SL, K21, MM1, AD * self.c_fklammb[r])
-                    FL = scat(FL, K21, MM1, DELAM * self.c_fklamb2[r])
-                    SL = scat(SL, K1, MP, AD * self.c_fklamp1[r])
-                    FL = scat(FL, K1, MP, DELAP * self.c_fklap12[r])
-                    SL = scat(SL, K11, MP, AD * self.c_fklamp2[r])
-                    FL = scat(FL, K11, MP, DELAP * self.c_fklap22[r])
-                    SL = scat(SL, K1, MP1, AD * self.c_fklampa[r])
-                    FL = scat(FL, K1, MP1, DELAP * self.c_fklapa2[r])
-                    SL = scat(SL, K11, MP1, AD * self.c_fklampb[r])
-                    FL = scat(FL, K11, MP1, DELAP * self.c_fklapb2[r])
-
-                elif high:
-                    SL = scat(SL, K2, MM, AD * self.c_fklamm1[r])
-                    FL = scat(FL, K2, MM, DELAM * self.c_fklam12[r])
-                    SL = scat(SL, K21, MM, AD * self.c_fklamm2[r])
-                    FL = scat(FL, K21, MM, DELAM * self.c_fklam22[r])
-                    if MM1 + 1 <= ml:
-                        SL = scat(SL, K2, MM1, AD * self.c_fklamma[r])
-                        FL = scat(FL, K2, MM1, DELAM * self.c_fklama2[r])
-                        SL = scat(SL, K21, MM1, AD * self.c_fklammb[r])
-                        FL = scat(FL, K21, MM1, DELAM * self.c_fklamb2[r])
-                        if MCi + 1 <= ml:
-                            SL = scat(SL, Kall, MCi, -2.0 * AD)
-                            FL = scat(FL, Kall, MCi, -2.0 * DELAD)
-                            if MP + 1 <= ml:
-                                SL = scat(SL, K1, MP, AD * self.c_fklamp1[r])
-                                FL = scat(FL, K1, MP, DELAP * self.c_fklap12[r])
-                                SL = scat(SL, K11, MP, AD * self.c_fklamp2[r])
-                                FL = scat(FL, K11, MP, DELAP * self.c_fklap22[r])
-                                if MP1 + 1 <= ml:
-                                    SL = scat(SL, K1, MP1, AD * self.c_fklampa[r])
-                                    FL = scat(FL, K1, MP1, DELAP * self.c_fklapa2[r])
-                                    SL = scat(SL, K11, MP1, AD * self.c_fklampb[r])
-                                    FL = scat(FL, K11, MP1, DELAP * self.c_fklapb2[r])
-
-                else:  # low frequency branch
-                    if MM1 + 1 >= 1:
-                        SL = scat(SL, K2, MM1, AD * self.c_fklamma[r])
-                        FL = scat(FL, K2, MM1, DELAM * self.c_fklama2[r])
-                        SL = scat(SL, K21, MM1, AD * self.c_fklammb[r])
-                        FL = scat(FL, K21, MM1, DELAM * self.c_fklamb2[r])
-                    SL = scat(SL, Kall, MCi, -2.0 * AD)
-                    FL = scat(FL, Kall, MCi, -2.0 * DELAD)
-                    SL = scat(SL, K1, MP, AD * self.c_fklamp1[r])
-                    FL = scat(FL, K1, MP, DELAP * self.c_fklap12[r])
-                    SL = scat(SL, K11, MP, AD * self.c_fklamp2[r])
-                    FL = scat(FL, K11, MP, DELAP * self.c_fklap22[r])
-                    SL = scat(SL, K1, MP1, AD * self.c_fklampa[r])
-                    FL = scat(FL, K1, MP1, DELAP * self.c_fklapa2[r])
-                    SL = scat(SL, K11, MP1, AD * self.c_fklampb[r])
-                    FL = scat(FL, K11, MP1, DELAP * self.c_fklapb2[r])
-
+        SL = (place(AD, 'all_AD') + place(perm(AD, 'K2'), 'K2_AD') + place(perm(AD, 'K21'), 'K21_AD')
+              + place(perm(AD, 'K1'), 'K1_AD') + place(perm(AD, 'K11'), 'K11_AD'))
+        FL = (place(DELAD, 'all_DELAD') + place(perm(DELAM, 'K2'), 'K2_DELAM')
+              + place(perm(DELAM, 'K21'), 'K21_DELAM') + place(perm(DELAP, 'K1'), 'K1_DELAP')
+              + place(perm(DELAP, 'K11'), 'K11_DELAP'))
         return SL, FL
 
 

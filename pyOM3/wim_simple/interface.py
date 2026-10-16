@@ -7,9 +7,31 @@
 
 import pyOM3                 as OM
 from   pyOM3.wim_simple.main        import main
+import numpy                        as np__
 
 
 class interface(main):
+
+      # INTERIOR SELECTION of the exchange fields. The outputs of this class
+      # are unpadded (they go to the ocean model). numpy: the y,x slices
+      # [halo:-halo] are taken where they always were (_xy), and _out is
+      # the identity. JAX: a slice on y,x is no interior in the inline shard
+      # layout, so _xy keeps the full padded arrays (the operators are
+      # pointwise in y,x and the extra work is the halo columns) and _out
+      # removes every shard's halo at the end (decomposition_jax.unpad).
+      # _pad_in is the inverse for the ocean fields that come in unpadded.
+      def _xy(self, a):
+          if OM.jax: return a
+          s = slice(self.halo, -self.halo)
+          return a[..., s, s]
+
+      def _out(self, a):
+          return self.unpad(a) if OM.jax else a
+
+      def _pad_in(self, a):
+          """(nf,ny,nx) interior -> padded (Nf,Ny,Nx), halo-filled"""
+          if OM.jax: return self.apply_bc(self.pad(a, lead=1))
+          return self.apply_bc(OM.np.pad(a, self.halo))
 
 
       def _wave_kernel(self,dz,nz):
@@ -86,14 +108,13 @@ class interface(main):
           # surface amplitude at the cut-off bin (before the depth factor is
           # applied), used for the analytic high-frequency tail below.
           mc   = -self.halo-1                     # last prognostic (real) freq bin
-          si_c = si[mc,self.halo:-self.halo,self.halo:-self.halo]
-          ci_c = ci[mc,self.halo:-self.halo,self.halo:-self.halo]
+          si_c = self._xy(si[mc])
+          ci_c = self._xy(ci[mc])
           si = si[None,:,:,:]*exp[:,:,None,None] 
           ci = ci[None,:,:,:]*exp[:,:,None,None] 
-          ust = OM.np.zeros( (2,nz,self.ny_loc,self.nx_loc), OM.prec)
           
-          ust[0,:,:,:] = OM.np.sum(si[:,sl,sl,sl]*self.dft[None,sl,None,None], axis=1)
-          ust[1,:,:,:] = OM.np.sum(ci[:,sl,sl,sl]*self.dft[None,sl,None,None], axis=1)
+          us = OM.np.sum(self._xy(si[:,sl])*self.dft[None,sl,None,None], axis=1)
+          vs = OM.np.sum(self._xy(ci[:,sl])*self.dft[None,sl,None,None], axis=1)
  
           # contribution by the high-frequency f^-5 Phillips tail (f > f_c).
           # Exact closed form of u_S^hi(z) = (2/g) int s F(f_c,theta) omega_c^3
@@ -127,9 +148,9 @@ class interface(main):
           if getattr(self,'closed_bottom',False):
              Ib = OM.modify_array(Ib, (0,), fc/(3.0*a))       # I(inf)
           tail = ( Ib - _I(-zt) )/dz
-          ust[0,:,:,:] += tail[:,None,None]*si_c[None,:,:]
-          ust[1,:,:,:] += tail[:,None,None]*ci_c[None,:,:]
-          return ust
+          us = us + tail[:,None,None]*si_c[None,:,:]
+          vs = vs + tail[:,None,None]*ci_c[None,:,:]
+          return self._out(OM.np.stack([us, vs]))
 
 
       def calc_dt_us(self,dz,nz,dt=None):
@@ -209,9 +230,8 @@ class interface(main):
           ci = -2/self.grav*ci[None,:,:,:]*exp[:,:,None,None]  \
                             *self.omega_t[None,:,None,None]**3
 
-          tau = OM.np.zeros( (2,nz,self.ny_loc,self.nx_loc), OM.prec)
-          tau[0,:,:,:] = OM.np.sum(si[:,sl,sl,sl]*self.dft[None,sl,None,None], axis=1)
-          tau[1,:,:,:] = OM.np.sum(ci[:,sl,sl,sl]*self.dft[None,sl,None,None], axis=1)
+          tx = OM.np.sum(self._xy(si[:,sl])*self.dft[None,sl,None,None], axis=1)
+          ty = OM.np.sum(self._xy(ci[:,sl])*self.dft[None,sl,None,None], axis=1)
 
           # contribution by tail. Depth profile of the f^-5 tail is
           #   ee(z) = sqrt(pi)*erfc(fc*sqrt(-b z))/(2 sqrt(-b z)),  b = 8 pi^2/g,
@@ -258,8 +278,6 @@ class interface(main):
               # exactly. E1(x) = -expi(-x). The nonlinear cascade credit is
               # deposited in the TOP cell: its carrier waves have deposition
               # scales g/(2 omega^2) <= centimetres, far below any ocean dz.
-              if OM.jax is None:  from scipy.special     import expi
-              else:               from jax.scipy.special import expi
               fac_tau, _, a, fL = self._tail_input_factors()   # (nd,Ny,Nx)
               eps0 = 1.225/1000.
               C0 = 0.25*eps0*(2*OM.np.pi)**2*fc**5
@@ -272,31 +290,31 @@ class interface(main):
                   J2 = ex/fLc[None] - OM.np.sqrt(OM.np.pi*b*t[:,None,None,None])\
                                       *erfc(OM.np.sqrt(bL))
                   J3 = 0.5*(ex/fLc[None]**2
-                            + b*t[:,None,None,None]*expi(-OM.np.maximum(bL,1e-300)))
+                            + b*t[:,None,None,None]*_expi_neg(OM.np.maximum(bL,1e-300)))
                   return (surf[None] - C0*(a[None]*J2 - J3))*act[None]
               Vb = _V(-zb)
               if getattr(self,'closed_bottom',False):
-                  Vb = OM.modify_array(Vb, (0,), surf[None])
+                  Vb = OM.modify_array(Vb, (0,), surf)        # (nd,Ny,Nx) into slot 0
               w = (Vb - _V(-zt))/dz                            # (nz,nd,Ny,Nx)
               Ec = self.E[:, -self.halo, :, :]
-              tau[0,:,:,:] += OM.np.sum(w[:,sl,sl,sl]*Ec[None,sl,sl,sl]
+              tx = tx + OM.np.sum(self._xy(w[:,sl])*self._xy(Ec[None,sl])
                                 *self.sinth[None,sl,None,None],axis=1)*self.dd
-              tau[1,:,:,:] += OM.np.sum(w[:,sl,sl,sl]*Ec[None,sl,sl,sl]
+              ty = ty + OM.np.sum(self._xy(w[:,sl])*self._xy(Ec[None,sl])
                                 *self.costh[None,sl,None,None],axis=1)*self.dd
               cx, cy, _ = self._cascade_credit()
-              tau[0,-1,:,:] += cx/dz
-              tau[1,-1,:,:] += cy/dz
-              return tau
+              tx = OM.modify_array(tx, (-1,), tx[-1] + cx/dz)
+              ty = OM.modify_array(ty, (-1,), ty[-1] + cy/dz)
+              return self._out(OM.np.stack([tx, ty]))
           fac = 2*fc**5*2.56/self.grav**5*self.e_mean**2*self.om_mean**7
-          fac = fac[None,sl,sl]*(2*OM.np.pi)**5*exp[:,None,None]
+          fac = self._xy(fac)[None]*(2*OM.np.pi)**5*exp[:,None,None]
 
-          si = OM.np.sum( self.E[sl,-self.halo,sl,sl] \
+          si = OM.np.sum( self._xy(self.E[sl,-self.halo]) \
                               *self.sinth[sl,None,None],axis=0 )*self.dd
-          ci = OM.np.sum( self.E[sl,-self.halo,sl,sl] \
+          ci = OM.np.sum( self._xy(self.E[sl,-self.halo]) \
                               *self.costh[sl,None,None],axis=0 )*self.dd 
-          tau[0,:,:,:] += fac*si[None,:,:] 
-          tau[1,:,:,:] += fac*ci[None,:,:]  
-          return tau
+          tx = tx + fac*si[None,:,:] 
+          ty = ty + fac*ci[None,:,:]  
+          return self._out(OM.np.stack([tx, ty]))
 
 
           
@@ -349,12 +367,12 @@ class interface(main):
           """
           sl = slice(self.halo,-self.halo)
           if not hasattr(self, 'S_nl'):
-              z = OM.np.zeros((self.ny_loc,self.nx_loc), OM.prec)
+              z = self._xy(OM.np.zeros((self.Ny,self.Nx), OM.prec))
               return z, z, z
-          Snl = self.S_nl[sl,sl,sl,sl]
+          Snl = self._xy(self.S_nl[sl,sl])
           if hasattr(self, 'freq_mask'):     # prognostic bins only: the
               Snl = OM.np.where(              # diagnostic-range S_nl belongs
-                  self.freq_mask[None,sl,sl,sl], Snl, 0.)  # to the tail-side
+                  self._xy(self.freq_mask[None,sl]), Snl, 0.)  # to the tail-side
                                               # equilibrium booking
           kx_om = (self.omega_t[None,:]*self.sinth[:,None])[sl,sl]
           ky_om = (self.omega_t[None,:]*self.costh[:,None])[sl,sl]
@@ -387,35 +405,34 @@ class interface(main):
                                    S_diss, -self.gamma_in*self.E)
           kx_om = self.omega_t[None,:]*self.sinth[:,None]
           ky_om = self.omega_t[None,:]*self.costh[:,None]
-          tau = OM.np.zeros( (2,self.nf,self.ny_loc,self.nx_loc), OM.prec)
-          tau[0,:,:,:] = -OM.np.sum(S_diss[sl,sl,sl,sl]*kx_om[sl,sl,None,None]*self.dd,axis=0)
-          tau[1,:,:,:] = -OM.np.sum(S_diss[sl,sl,sl,sl]*ky_om[sl,sl,None,None]*self.dd,axis=0)
-          tau          = OM.np.sum(tau*self.dft[None,sl,None,None],axis=1)
+          Sd = self._xy(S_diss[sl,sl])
+          tx = -OM.np.sum(Sd*kx_om[sl,sl,None,None]*self.dd,axis=0)
+          ty = -OM.np.sum(Sd*ky_om[sl,sl,None,None]*self.dd,axis=0)
+          tx = OM.np.sum(tx*self.dft[sl,None,None],axis=0)
+          ty = OM.np.sum(ty*self.dft[sl,None,None],axis=0)
 
           # contribution by tail: switch tail_flux = 'wamdi' (default) | 'input'
           if getattr(self, 'tail_flux', 'wamdi') == 'input':
               # gamma_in-based equilibrium-range flux + nonlinear cascade
               # credit (see _tail_input_factors / _cascade_credit docstrings)
               fac_tau, _, _, _ = self._tail_input_factors()
-              Ec = self.E[:, -self.halo, :, :]
-              taux = OM.np.sum(Ec[sl,sl,sl]*fac_tau[sl,sl,sl]
-                               *self.sinth[sl,None,None]*self.dd, axis=0)
-              tauy = OM.np.sum(Ec[sl,sl,sl]*fac_tau[sl,sl,sl]
-                               *self.costh[sl,None,None]*self.dd, axis=0)
+              Ec = self._xy(self.E[sl, -self.halo])
+              ft_ = self._xy(fac_tau[sl])
+              taux = OM.np.sum(Ec*ft_*self.sinth[sl,None,None]*self.dd, axis=0)
+              tauy = OM.np.sum(Ec*ft_*self.costh[sl,None,None]*self.dd, axis=0)
               cx, cy, _ = self._cascade_credit()
-              tau[0,:,:] += taux + cx
-              tau[1,:,:] += tauy + cy
+              tx = tx + (taux + cx)
+              ty = ty + (tauy + cy)
           else:
               # WAMDI-dissipation tail (analytic continuation of Sdiss_wamdi)
-              taux = OM.np.sum(self.E[sl, 
-                               -self.halo,sl,sl]*self.sinth[sl,None,None]*self.dd,axis=0)
-              tauy = OM.np.sum(self.E[sl,
-                               -self.halo,sl,sl]*self.costh[sl,None,None]*self.dd,axis=0)
+              Ec = self._xy(self.E[sl, -self.halo])
+              taux = OM.np.sum(Ec*self.sinth[sl,None,None]*self.dd,axis=0)
+              tauy = OM.np.sum(Ec*self.costh[sl,None,None]*self.dd,axis=0)
               fac = 2.56/self.grav**4*self.e_mean**2*self.om_mean**7*self.ft[-self.halo]**4
               fac = fac*(2*OM.np.pi)**3
-              tau[0,:,:] += fac[sl,sl]*taux
-              tau[1,:,:] += fac[sl,sl]*tauy
-          return tau
+              tx = tx + self._xy(fac)*taux
+              ty = ty + self._xy(fac)*tauy
+          return self._out(OM.np.stack([tx, ty]))
 
 
 
@@ -432,7 +449,7 @@ class interface(main):
           # (sum_k Qdz = 1 - e^{-2kD} -> U = u_L for depth-independent u_L).
           u = OM.np.sum( UL[:,None,:,:]*Qdz[:,sl,None,None],axis=0)
           v = OM.np.sum( VL[:,None,:,:]*Qdz[:,sl,None,None],axis=0)
-          return self.apply_bc(OM.np.pad(u,self.halo)), self.apply_bc(OM.np.pad(v,self.halo))
+          return self._pad_in(u), self._pad_in(v)
 
 
           
@@ -457,7 +474,7 @@ class interface(main):
           # as the advection: d/df Qdz = (2k/f) 2 (z_t e^{2kz_t} - z_b e^{2kz_b}).
           du = OM.np.sum( UL[:,None,:,:]*dQdz_df[:,sl,None,None],axis=0)
           dv = OM.np.sum( VL[:,None,:,:]*dQdz_df[:,sl,None,None],axis=0)
-          return self.apply_bc(OM.np.pad(du,self.halo)), self.apply_bc(OM.np.pad(dv,self.halo))
+          return self._pad_in(du), self._pad_in(dv)
 
 
 
@@ -482,17 +499,122 @@ class interface(main):
               S_diss = OM.np.where(self.freq_mask[None,:,:,:],
                                    S_diss, -self.gamma_in*self.E)   # see calc_stress
           phi = -self.grav*OM.np.sum(
-                 OM.np.sum(S_diss[sl,sl,sl,sl]*self.dd,axis=0)
+                 OM.np.sum(self._xy(S_diss[sl,sl])*self.dd,axis=0)
                  *self.dft[sl,None,None],axis=0)
           if getattr(self, 'tail_flux', 'wamdi') == 'input':
               # equilibrium-range tail energy flux (gamma_in based) plus the
               # resolved-range nonlinear cascade credit; retires the "tail
               # not included" limitation of the original diagnostic.
               _, fac_phi, _, _ = self._tail_input_factors()
-              Ec = self.E[:, -self.halo, :, :]
-              phi = phi + OM.np.sum(Ec[sl,sl,sl]*fac_phi[sl,sl,sl]
+              Ec = self._xy(self.E[sl, -self.halo])
+              phi = phi + OM.np.sum(Ec*self._xy(fac_phi[sl])
                                     *self.dd, axis=0)
               _, _, ce = self._cascade_credit()
               phi = phi + ce
-          return phi
+          return self._out(phi)
 
+
+      def calc_phioc_work(self,dz,nz):
+          """
+          Depth profile of the dissipation energy flux calc_phioc [m^2/s^3],
+          per ocean cell, index 0 at the bottom, unpadded (nz,ny_loc,nx_loc).
+          The energy -g S_diss of each prognostic bin is deposited with the
+          cell-integrated kernel of _wave_kernel, Qdz/dz with Q = 2k e^{2kz}
+          (as the stress in calc_stress_work, bin by bin with sigma in place
+          of k). The analytic tail and the cascade credit of tail_flux='input'
+          (carrier waves with decay scales of centimetres and less) go into
+          the top cell. The column sum  sum_k P_k dz  equals calc_phioc up to
+          the open-bottom loss e^{-2kD} (exact with closed_bottom).
+          Option phioc_kernel = 'stokes' (default, Q = 2k e^{2kz}) or
+          'orbital' (Q = k e^{kz}, twice the depth scale).
+          """
+          sl = slice(self.halo,-self.halo)
+          if getattr(self,'phioc_kernel','stokes') == 'orbital':
+             z  = OM.np.arange(nz)*dz
+             z  = z - z[-1] - dz/2
+             zt, zb = z + dz/2, z - dz/2
+             k1 = self.omega_t[None,:]**2/self.grav
+             et, eb = OM.np.exp(zt[:,None]*k1), OM.np.exp(zb[:,None]*k1)
+             if getattr(self,'closed_bottom',False):
+                eb = OM.modify_array(eb, (0,slice(None)), 0.0)
+             Qdz = et - eb
+          else:
+             _, _, _, Qdz, _ = self._wave_kernel(dz,nz)
+          S_diss = self.gamma_diss[None,:,:,:]*self.E
+          if getattr(self, 'tail_flux', 'wamdi') == 'input' \
+                  and hasattr(self, 'freq_mask') and hasattr(self, 'gamma_in'):
+              S_diss = OM.np.where(self.freq_mask[None,:,:,:],
+                                   S_diss, -self.gamma_in*self.E)   # see calc_stress
+          phi_f = -self.grav*OM.np.sum(self._xy(S_diss[sl,sl])*self.dd,axis=0) \
+                  *self.dft[sl,None,None]                          # (nf,ny,nx)
+          P = OM.np.sum(Qdz[:,sl,None,None]*phi_f[None,:,:,:],axis=1)/dz
+          if getattr(self, 'tail_flux', 'wamdi') == 'input':
+              _, fac_phi, _, _ = self._tail_input_factors()
+              Ec = self._xy(self.E[sl, -self.halo])
+              top = OM.np.sum(Ec*self._xy(fac_phi[sl])*self.dd, axis=0)
+              _, _, ce = self._cascade_credit()
+              P = OM.modify_array(P, (-1,), P[-1] + (top + ce)/dz)
+          return self._out(P)
+
+
+
+def exp1_jax(x, n_series=100, n_cf=400):
+    """
+    E1(x) = -expi(-x) for x > 0 under JAX, written out as in Cephes/scipy
+    expn(1,x): the power series for x <= 1, the continued fraction for
+    x > 1, both iterated to machine precision with the iteration frozen
+    once converged (the early termination of scipy), so the result matches
+    scipy.special.expi to a few 1e-15. jax.scipy.special.expi/exp1 exist
+    but vectorise a scalar while_loop and take minutes on a (nz,nd,Ny,Nx)
+    array (Oct 2026, jax 0.11); this runs in a second.
+    """
+    jnp, lax = OM.np, OM.jax.lax
+    x = jnp.asarray(x)
+    eps = jnp.finfo(x.dtype).eps
+    one, zero = jnp.ones_like(x), jnp.zeros_like(x)
+    # ---- series, x <= 1
+    xs = jnp.where(x <= 1.0, x, 1.0)
+    def sbody(k, c):
+        yk, ans, done = c
+        yk_n = yk*(-xs)/k
+        ans_n = ans + yk_n/k
+        t = jnp.where(ans_n != 0.0, jnp.abs(yk_n/ans_n), 1.0)
+        yk  = jnp.where(done, yk, yk_n)
+        ans = jnp.where(done, ans, ans_n)
+        done = done | (t <= eps)
+        return yk, ans, done
+    _, ans_s, _ = lax.fori_loop(1, n_series, sbody, (one, zero, x > 1.0))
+    e_small = -np__.euler_gamma - jnp.log(xs) - ans_s
+    # ---- continued fraction, x > 1 (Cephes expn, n = 1)
+    xc = jnp.where(x > 1.0, x, 2.0)
+    BIG = 1.44115188075855872e17
+    def cbody(k, d):
+        pkm2, qkm2, pkm1, qkm1, ans, r, done = d
+        odd = (k % 2) == 1
+        yk = jnp.where(odd, 1.0, xc)
+        xk = jnp.where(odd, 1.0 + (k - 1)/2.0, k/2.0)
+        pk = pkm1*yk + pkm2*xk
+        qk = qkm1*yk + qkm2*xk
+        nz = qk != 0.0
+        r_n = jnp.where(nz, pk/qk, r)
+        t = jnp.where(nz, jnp.abs((ans - r_n)/r_n), 1.0)
+        ans_n = jnp.where(nz, r_n, ans)
+        big = jnp.abs(pk) > BIG
+        sc = jnp.where(big, 1.0/BIG, 1.0)
+        new = (pkm1*sc, qkm1*sc, pk*sc, qk*sc, ans_n, r_n)
+        old = (pkm2, qkm2, pkm1, qkm1, ans, r)
+        out = tuple(jnp.where(done, o, nw) for o, nw in zip(old, new))
+        done = done | (t <= eps)
+        return out + (done,)
+    init = (one, xc, one, xc + 1.0, 1.0/(xc + 1.0), zero, x <= 1.0)
+    d = lax.fori_loop(2, n_cf, cbody, init)
+    e_big = d[4]*jnp.exp(-xc)
+    return jnp.where(x <= 1.0, e_small, e_big)
+
+
+def _expi_neg(x):
+    """expi(-x) for x > 0: scipy on numpy (as before), exp1_jax under JAX"""
+    if OM.jax is None:
+        from scipy.special import expi
+        return expi(-x)
+    return -exp1_jax(x)

@@ -97,6 +97,56 @@ class boundary(decomposition_mpi,decomposition_jax):
     
       
     
+      def apply_bc_multi(self,*xs):
+          """
+          apply_bc for several 2D/3D arrays at once. Under JAX sharding the halo
+          strips of all arrays travel in ONE ppermute per direction (4 collectives
+          per call instead of 4 per array); the arrays themselves are not copied.
+          Under MPI it is apply_bc on each array. Returns a tuple.
+          """
+          if OM.jax: return self.apply_bc_multi_jax(*xs)
+          else:      return tuple(self.apply_bc_mpi(x) for x in xs)
+
+
+      @partial(OM.jaxjit, static_argnums=(0,))
+      def apply_bc_multi_jax(self,*xs):
+          """
+          Halo exchange of several arrays with one ppermute per direction. The
+          strips of all arrays are flattened, concatenated, sent, and put back.
+          Each array is 2D (Ny,Nx) or 3D (Nz,Ny,Nx) in the layout of apply_bc_jax.
+          """
+          halo  = self.halo
+          specs = tuple(self.grid_3D if x.ndim == 3 else self.grid_2D for x in xs)
+          shard = OM.shard_map(lambda *a: self._exchange_strips(*a), mesh=self.mesh,
+                               in_specs=specs, out_specs=specs)
+          return shard(*xs)
+
+
+      def _exchange_strips(self,*xs):
+          """body of apply_bc_multi_jax, runs per shard"""
+          halo = self.halo
+          def permute(strips, axis_name, perm):
+              flat  = OM.np.concatenate([st.reshape(-1) for st in strips])
+              recv  = OM.jax.lax.ppermute(flat, axis_name=axis_name, perm=perm)
+              out, i = [], 0
+              for st in strips:
+                  out.append(recv[i:i+st.size].reshape(st.shape)); i += st.size
+              return out
+          # x direction: send east strip eastward (becomes west halo of neighbour) and v.v.
+          east = [x[..., :, -(2*halo):-halo] for x in xs]
+          west = [x[..., :,  halo:2*halo]    for x in xs]
+          rw = permute(east, 'x', self.eastward)
+          re = permute(west, 'x', self.westward)
+          xs = [x.at[..., :, 0:halo].set(w).at[..., :, -halo:].set(e) for x, w, e in zip(xs, rw, re)]
+          # y direction
+          north = [x[..., -(2*halo):-halo, :] for x in xs]
+          south = [x[...,  halo:2*halo,    :] for x in xs]
+          rs = permute(north, 'y', self.northward)
+          rn = permute(south, 'y', self.southward)
+          xs = [x.at[..., 0:halo, :].set(s).at[..., -halo:, :].set(n) for x, s, n in zip(xs, rs, rn)]
+          return tuple(xs)
+
+
       @partial(OM.jaxjit, static_argnums=(0,))
       def apply_bc_mpi_old(self,a):
           """

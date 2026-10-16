@@ -13,9 +13,11 @@ def modify_array(arr, where, value, out_sharding = None):
     syntax: a = modify_array(a,(slice(2,3),slice(1,2)),b)
     """  
     if jax: 
-        if out_sharding_present_in_set and out_sharding:
-                return arr.at[where].set(value  , out_sharding = out_sharding  )
-        else:   return arr.at[where].set(value) 
+        # out_sharding of .at[].set() is only legal on Explicit mesh axes (jax >= 0.7), the
+        # model's mesh uses Auto axes (shard_map). with_sharding_constraint works for both.
+        res = arr.at[where].set(value)
+        if out_sharding is not None: res = jax.lax.with_sharding_constraint(res, out_sharding)
+        return res
     #res = arr.copy() # do not do that
     #res[where] = value
     #return res
@@ -27,10 +29,9 @@ def add_to_array(arr, where, value, out_sharding = None):
     same but adding to old value
     """  
     if jax: 
-        if out_sharding_present_in_set:
-           return arr.at[where].add(value , out_sharding = out_sharding  ) 
-        else:    
-           return arr.at[where].add(value  )
+        res = arr.at[where].add(value)
+        if out_sharding is not None: res = jax.lax.with_sharding_constraint(res, out_sharding)
+        return res
     #res = arr.copy() # do not do that
     #res[where] += value
     #return res
@@ -115,7 +116,13 @@ def recv(buf, source, tag):
 def _import_jax(which):
     
     if which == 'jax': 
-        
+           # XLA's GPU autotuner benchmarks every fused kernel with real-size
+           # buffers at compile time; for large wim fields that takes minutes
+           # per step for no measurable gain (README_jax_gpu.md). Off, unless
+           # the user's XLA_FLAGS already set a level. Must precede import jax.
+           if 'xla_gpu_autotune_level' not in _os.environ.get('XLA_FLAGS', ''):
+               _os.environ['XLA_FLAGS'] = (_os.environ.get('XLA_FLAGS', '')
+                                           + ' --xla_gpu_autotune_level=0').strip()
            import jax             
            try:
               #raise ValueError 
@@ -162,7 +169,11 @@ except ImportError:
    mpi_comm , my_pe , n_pes  = None, 0, 1 
 
 
-if mpi:
+import os as _os
+# PYOM3_BACKEND=numpy : numpy although jax is installed; =jax : jax although mpi4py is
+# installed (single process). Unset: mpi4py present -> numpy, else jax if importable.
+_backend = _os.environ.get('PYOM3_BACKEND', '').lower()
+if (mpi and _backend != 'jax') or _backend == 'numpy':
    jax, np, shard_map, out_sharding_present_in_set = _import_jax('numpy') 
 else:     
    # try to import JAX, fall back to numpy    
@@ -172,6 +183,10 @@ else:
            break
        except RuntimeError: pass
        except ImportError:  pass   
+   if jax and mpi:
+       # jax forced although mpi4py is importable: the model must not see MPI
+       # (every "if OM.mpi" would take the MPI reduction path). Single process.
+       mpi, mpi_comm, my_pe, n_pes = None, None, 0, 1
 
 
 if jax:  

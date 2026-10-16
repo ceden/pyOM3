@@ -124,15 +124,41 @@ class model(thermodynamics,momentum,pressure,free_surface,damping,implicit_vmix)
                                                      self.coriolis_t,tau)
           
           # allow for user defined momentum forcing, added to du[tau],dv[tau]
-          if hasattr(self,'set_forcing'): self.set_forcing(tau)
+          # set_forcing must precede solve_expl_surface (momentum forcing enters
+          # through du), but tracer_advection below OVERWRITES dtemp/dsalt at
+          # level tau, which lost the surface heat/salt fluxes on this path
+          # (found by test/identities.py, Sep 2026). Keep the tracer forcing
+          # increments and add them back after the advection.
+          if hasattr(self,'set_forcing'):
+             _dtemp0, _dsalt0 = self.dtemp*1, self.dsalt*1
+             self.set_forcing(tau)
+             _ftemp, _fsalt = self.dtemp - _dtemp0, self.dsalt - _dsalt0
+          else:
+             _ftemp = _fsalt = 0.0
 
-          self.u, self.v,  self.p_s = self.solve_expl_surface(self.u,self.v,
+          # bottom friction on the 3-D bottom cell BEFORE the barotropic solve:
+          # solve_expl_surface trims the column to the sub-cycle mean, so the
+          # trimmed column is then consistent with the transport that was
+          # damped inside the sub cycle. Applied after the trimming it left
+          # sum(u dz) != Um, and the re-trim of the next step turned that into
+          # a whole-column kick every step (vertical two-level instability in
+          # shallow coastal columns, POP explicit run Sep 15 2026).
+          self.u, self.v = self.bottom_friction(self.u,self.v,self.maskU,self.maskV)   # no-op unless enabled
+          if not hasattr(self,'U_bt'):       # cold start (or restart without it): from the 3-D field
+             self.U_bt, self.V_bt = self.init_barotropic_state(self.u,self.v,self.maskU,self.maskV)
+          self.u, self.v,  self.p_s, self.U_bt, self.V_bt = self.solve_expl_surface(self.u,self.v,
                                                               self.du,self.dv,self.du_cor,self.dv_cor,
-                                                              self.p_h,self.p_s,
+                                                              self.p_h,self.p_s,self.U_bt,self.V_bt,
                                                               self.maskU,self.maskV,self.maskW,self.maskT,
                                                               self.hu,self.hv,self.coriolis_t,
                                                               A,B,C,tau,taum1,taum2)  
           
+          # vertical friction BEFORE w and the tracers: u is final after it, so
+          # the tracers are advected with the final velocity and w stays
+          # consistent with u into the next step (found by the KE_ph = CONV
+          # identity of test/pe/identities.py: w was stale by the friction's
+          # redistribution at the end of an explicit step, 1.6e-8)
+          self.vertical_friction()        # under TKE also diagnoses K_diss_v
           self.w = self.vertical_velocity(self.u,self.v,self.w,self.maskW) 
           
           self.dtemp = self.tracer_advection(self.temp,self.dtemp,self.u,self.v,self.w,
@@ -149,16 +175,17 @@ class model(thermodynamics,momentum,pressure,free_surface,damping,implicit_vmix)
                 self.salt = self.biharmonic_horizontal(self.salt,self.Khbi,self.maskT)   
 
 
-          self.temp, self.salt, self.rho = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
+          self.dtemp, self.dsalt = self.dtemp + _ftemp, self.dsalt + _fsalt
+          self.temp, self.salt = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
                                                                           self.temp,self.salt,self.dtemp,self.dsalt,
                                                                           self.p0,self.maskT)          
 
           # optional implicit vertical diffusion + convective adjustment (new level)
-          self.vertical_friction()        # on the updated velocities; under
-                                          # TKE also diagnoses K_diss_v
           self.vertical_mixing()          # option hierarchy (see implicit_vmix.py)
-          if getattr(self,'enable_tke',False): self.integrate_tke()
+          # density ONCE per step, of the fully updated tracers, before the TKE
+          # (pyOM2: calc_eq_of_state(taup1) after vmix, then P_diss_v)
           self.rho = get_rho(self.salt,self.temp,self.p0,self.eq_of_state)
+          if getattr(self,'enable_tke',False): self.integrate_tke()
           return
 
 
@@ -212,16 +239,19 @@ class model(thermodynamics,momentum,pressure,free_surface,damping,implicit_vmix)
           # barotropic mode of the pressure solve is not perturbed; the
           # baroclinic w is re-diagnosed below.
           self.vertical_friction()
+          self.u, self.v = self.bottom_friction(self.u,self.v,self.maskU,self.maskV)   # no-op unless enabled
           self.w = self.vertical_velocity(self.u,self.v,self.w,self.maskW) 
                          
-          self.temp, self.salt,self.rho = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
+          self.temp, self.salt = self.update_thermodynamics_AB3(A,B,C,tau,taum1,taum2,
                                                                          self.temp,self.salt,self.dtemp,self.dsalt,
                                                                          self.p0,self.maskT)
 
           # optional implicit vertical diffusion + convective adjustment (new level)
           self.vertical_mixing()          # option hierarchy (see implicit_vmix.py)
-          if getattr(self,'enable_tke',False): self.integrate_tke()
+          # density ONCE per step, of the fully updated tracers, before the TKE
+          # (pyOM2: calc_eq_of_state(taup1) after vmix, then P_diss_v)
           self.rho = get_rho(self.salt,self.temp,self.p0,self.eq_of_state)
+          if getattr(self,'enable_tke',False): self.integrate_tke()
           return
 
     

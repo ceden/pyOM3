@@ -34,7 +34,14 @@ class decomposition_jax(setup):
           self.my_pe, self.n_pes = OM.jax.process_index() ,   OM.jax.device_count()
           self.n_pes_x , self.n_pes_y = n_pes_x, n_pes_y
           
-          self.mesh        = OM.jax.make_mesh( axis_shapes =  (self.n_pes_y,self.n_pes_x ),    axis_names = ('y','x') )
+          # positional arguments: the keyword was renamed axis_shapes -> axis_sizes in jax 0.7.
+          # Auto axis types: since jax 0.7 make_mesh defaults to Explicit axes, under which
+          # shard_map no longer reshards its inputs to in_specs but raises instead.
+          try:
+              auto = (OM.jax.sharding.AxisType.Auto,)*2
+              self.mesh    = OM.jax.make_mesh( (self.n_pes_y,self.n_pes_x), ('y','x'), axis_types = auto )
+          except (AttributeError, TypeError):                              # older jax: Auto is the only mode
+              self.mesh    = OM.jax.make_mesh( (self.n_pes_y,self.n_pes_x), ('y','x') )
           self.grid_2D     = OM.jax.sharding.PartitionSpec('y','x')
           self.grid_3D     = OM.jax.sharding.PartitionSpec(None,'y','x')
           self.grid_4D     = OM.jax.sharding.PartitionSpec(None,None,'y','x')

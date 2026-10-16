@@ -47,6 +47,19 @@ class main(boundary):
                  zt = OM.np.append( zt[0]-self.dz,zt )
                  zt = OM.np.append( zt, zt[-1]+self.dz )                   
                self.p0 = _move_it(zt, OM.np.zeros_like(self.u) )                              
+          elif self.eq_of_state == 5:
+               # GSW/TEOS-10: the pressure argument of the EOS is the depth
+               # below the surface in dbar (~ metres), as pyOM2 passes
+               # abs(zt(k)).  With the default height-above-bottom vertical
+               # convention the surface sits at zt[-halo-1] + dzt[-halo-1]/2.
+               # pe_simple has a uniform dz and no zt/dzt arrays (the lines
+               # copied from pe_realistic referenced them and made eq_of_state
+               # 5 unusable here, found Sep 8 2026): cell-centre depth below
+               # the surface on the padded z axis, index 0 = bottom
+               nz = self.Nz - 2*self.halo
+               k  = OM.np.arange(self.Nz, dtype=OM.prec) - self.halo   # interior 0..nz-1
+               depth = (nz - k - 0.5)*self.dz
+               self.p0 = _move_it(depth, OM.np.zeros_like(self.u) )
           else:
              # not yet implemented 
              raise pyOM3Error 
