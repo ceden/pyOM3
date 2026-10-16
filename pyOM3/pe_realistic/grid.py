@@ -171,6 +171,21 @@ class grid:
                   yu_gl[ny+halo+j]  = yu_gl[halo+j];  yu_gl[halo-1-j]  = yu_gl[ny+halo-1-j]
                   dyu_gl[ny+halo+j] = dyu_gl[halo+j]; dyu_gl[halo-1-j] = dyu_gl[ny+halo-1-j]
 
+
+          # ---- horizontal U spacings must be positive ---------------------
+          # The pyOM2 recursion gives dxu <= 0 where dxt jumps too strongly;
+          # in a periodic direction the seam counts as a jump (cyclic
+          # dxt = [1,1,2,2] gives dxu = 0 at the first interior point). The
+          # vertical grid is checked above (dzw), the horizontal one here,
+          # on the interior plus the halo (the halo spacings enter the
+          # gradients at the block edges). NaN-safe: NaN compares False.
+          if not (dxu_gl.min() > 0.0) or not (dyu_gl.min() > 0.0):
+              raise ValueError('u-centered horizontal grid degenerate: dxu or '
+                  'dyu <= 0 for the given dxt/dyt (pyOM2 recursion; a jump '
+                  'in the spacing, or a periodic direction whose two ends '
+                  'do not match). min dxu=%g min dyu=%g'
+                  % (dxu_gl.min(), dyu_gl.min()))
+
           # ---- vertical origin -------------------------------------------
           # default: height above bottom, bottom face of the first interior
           # cell at z=0 (pe_simple snapshot convention: zt[0]=dzt[0]/2,

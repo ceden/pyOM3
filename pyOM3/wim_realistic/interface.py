@@ -16,11 +16,11 @@
  bit-identical to wim_simple; for the array the cell faces are chained
  exactly and the cell-integrated kernel keeps all its telescoping
  identities (barotropic projection, Stokes transport, stress column sum)
- on any dzt -- see development/interface_dzt_test.py.
+ on any dzt (checked by test/wim/identities.py).
 
  MRO note (as for source): the nominal base chain wim_simple.main/
  boundary of the parent sits dormant behind wim_realistic's own chain in
- model(propagation, source, interface).
+ model(propagation, interface, source, wim_simple.model), see model.py.
 """
 import pyOM3                 as OM
 from   pyOM3.wim_simple.interface   import interface as _interface_uniform, _expi_neg
@@ -262,7 +262,7 @@ class interface(_interface_uniform):
                 w = self._janssen_tail_depth_weights(zt, zb)  # (nz,nd,Ny,Nx)
               else:
                 fac_tau, _, a, fL = self._tail_input_factors()   # (nd,Ny,Nx)
-                eps0 = 1.225/1000.
+                eps0 = self.rho_a/self.rho_w
                 C0 = 0.25*eps0*(2*OM.np.pi)**2*fc**5
                 fLc = OM.np.where(OM.np.isfinite(fL), fL, 1.0)   # dummy where no wind
                 act = OM.np.where(OM.np.isfinite(fL), 1.0, 0.0)

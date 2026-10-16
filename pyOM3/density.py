@@ -25,7 +25,7 @@ def get_rho(salt,temp,press,eq_of_state_type):
    return rho
 
 
-def get_drhodT(salt,temp,press): 
+def get_drhodT(salt,temp,press,eq_of_state_type): 
    """ 
    #-----------------------------------------------------------------------
    # calculate drho/dT as a function of temperature, salinity and pressure
@@ -44,7 +44,7 @@ def get_drhodT(salt,temp,press):
    return drhodT
 
 
-def get_drhodS(salt,temp,press): 
+def get_drhodS(salt,temp,press,eq_of_state_type): 
    """ 
    #-----------------------------------------------------------------------
    # calculate drho/dS as a function of temperature, salinity and pressure

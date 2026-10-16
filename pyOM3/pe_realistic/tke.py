@@ -391,7 +391,8 @@ class tke:
     @partial(OM.jaxjit, static_argnums=0)
     def _tke_solve(self, tke, forc, forc_surf, sqrttke, mxl_eps, kappaM):
         """One backward-Euler TKE step: general Thomas solve, coefficients
-        exactly as tke.f90 (uniform dz; surface W cell 0.5*dz thick)."""
+        exactly as tke.f90 on the variable grid (TKE cell thickness dzw,
+        spacing between W points dzt; surface W cell 0.5*dzw(ke) thick)."""
         h, Nz, dt = self.halo, self.Nz, self.dt
         ke = Nz - h - 1                                    # surface W face
 

@@ -83,6 +83,9 @@ class source(_source_simple):
                            cdisvis=0.0, rnu=1.5e-6, eps1=1e-5,
                            tailfactor=2.5, janssen_ncall=2, jtot_tauhf=19,
                            rho_a=1.225, rho_w=1000.)
+  # rho_a, rho_w are also model attributes (wim_simple/main.py sets the same
+  # defaults), shared with the WAMDI input and the tails of the coupling;
+  # _jp finds the attribute first, so one setting acts everywhere
 
   def _jp(self, name):
       """Janssen parameter: attribute if set, else the ecwam default."""
@@ -313,9 +316,12 @@ class source(_source_simple):
       takes the remainder e^{-2 k_j D}). zt, zb are the cell faces (top = 0).
       """
       fc = self.ft[-self.halo]
-      _, _, fac_j, k_j = self._janssen_tail(fc, self._as_field(self.ustar),
-                                            self._as_field(self.udir),
-                                            self.z0, nodes=True)
+      z0 = getattr(self, 'z0', None)        # set by the first source step;
+      if z0 is None:                        # before it (coupler asking for the
+          z0 = self.z0wave(self._as_field(self.ustar), 0.0)   # stress first,
+      _, _, fac_j, k_j = self._janssen_tail(fc, self._as_field(self.ustar),  # restart):
+                                            self._as_field(self.udir),       # Charnock z0
+                                            z0, nodes=True)
       et = OM.np.exp(2*k_j[None]*zt[:, None, None, None])   # (nz,jtot,Ny,Nx)
       eb = OM.np.exp(2*k_j[None]*zb[:, None, None, None])
       if getattr(self, 'closed_bottom', False):

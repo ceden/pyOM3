@@ -98,7 +98,7 @@ class source(main):
       if not len(OM.np.array(udir).shape):
           udir = OM.np.ones( (self.Ny,self.Nx), OM.prec)*udir
           
-      eps   = 1.225/1000.  
+      eps   = self.rho_a/self.rho_w
       cos = OM.np.cos(self.theta[:,None,None,None] - udir[None,None,:,:])
       c = self.grav/self.omega_t 
       uu = 28*ustar[None,None,:,:]/c[None,:,None,None]*cos

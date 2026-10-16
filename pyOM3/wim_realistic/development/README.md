@@ -51,25 +51,27 @@ to 9e-16: its arithmetic is reordered by the area factors).
 
 ## File inventory: shared vs local
 
-Shared from wim_simple by one-line re-export (single source of truth,
-no copies): `setup` (`__init__.py`), `source` (196 lines, per-column
-wind input/dissipation + WAM translations), `interface` (498 lines,
-vertical/spectral coupling integrals), `wam_source` (via
-wim_simple.source), and the four **S_nl backends** including the one
-fortran build. In the MRO of `model(propagation, source, interface)`
-the shared classes' nominal base chain (wim_simple.main/boundary) sits
-*behind* wim_realistic's own chain, so every lookup resolves the
-metric-aware methods first; `boundary.__init__` initialises the
-parameter base explicitly (not via `super()`) so that dormant chain
-never executes. If a future wim_simple source/interface method relies
-on a *new* wim_simple.main method, the lookup here fails loudly
-(AttributeError), never silently on stale geometry.
+Shared from wim_simple by inheritance (single source of truth, no
+copies): the grid-metric-free infrastructure -- `wim_simple.main`
+(workspace, spectral grid, backend selection; `main.setup` here calls
+`calc_grid` first and then `wim_simple.main.setup`), `wim_simple.boundary`
+(halo exchange; `boundary` here subclasses it), `wim_simple.model` (time
+stepping and the jitted source update), the WAMDI source pair and the
+vertical/spectral coupling integrals of `wim_simple.source` and
+`wim_simple.interface` (subclassed, see below), and the S_nl backends
+including the fortran build. `__init__.py` holds only the package
+docstring, there are no re-exports.
 
 Local to wim_realistic: `grid.py` (new), `boundary.py`, `main.py`,
-`propagation.py`, `snapshot.py` (each genuinely metric-touched), and
-`model.py` — byte-identical to wim_simple's apart from imports, but it
-is the file that stitches the package's own class chain, so it cannot
-be shared without indirection.
+`propagation.py`, `snapshot.py` (each metric-touched), `source.py`
+(subclass of `wim_simple.source`: the Janssen input + WAM4 dissipation
+option and its tails), `interface.py` (subclass of
+`wim_simple.interface`: the coupling integrals on an array dzt and the
+sphere), and `model.py`, which stitches the class chain
+`model(propagation, interface, source, wim_simple.model)`. In this MRO
+the metric-aware methods of wim_realistic resolve first; the nominal
+base chain `wim_simple.main`/`boundary` of the parent classes sits
+behind it and is never used for geometry.
 
 Not ported (deliberately, matching pe_realistic's scope): reduced
 (coarsened-longitude) grids and any pole treatment — a global domain
@@ -80,8 +82,7 @@ must stop short of the poles; the zonal CFL shrinks with cosφ.
 - `reduction_test.py` — Cartesian reduction gate: five forced variants
   (currents+DIA+wind, energy fixer, wall reflection, open coasts with
   loss booking, no current) against wim_simple; bitwise except the fixer
-  at ≤9e-16. Includes a negative control (perturbed metric must be
-  detected).
+  at ≤9e-16.
 - `sphere_test.py` — on the sphere: (1) area-weighted action
   conservation to 1e-16 over 3 d; (2) packet follows the great-circle
   ray reference (RK4) to 0.15° position / 0.6° direction after 36° of
@@ -110,8 +111,10 @@ use the ecwam tail quadrature when the scheme is on. u* stays prescribed
 step as ecwam's two `sinflx` calls. State between steps: `tau_w`, `z0`
 (not in restarts; a restart starts from Charnock and recovers in one step).
 
-Reference: `development/ecwam_ref/` compiles the unchanged ecwam routines
-with f2py (`make ECWAM=<clone of github.com/ecmwf-ifs/ecwam>`);
+Reference: `development/Makefile` (with `wrap.F90`, `yow_stubs.F90`,
+`dummies.F90` and the `*.intfb.h` files in `development/`) compiles the
+unchanged ecwam routines with f2py into `development/ecwref*.so`
+(`make ECWAM=<clone of github.com/ecmwf-ifs/ecwam>`);
 `development/janssen_ref_test.py` checks the port against them column by
 column (growth rate, dissipation, spectral means, windsea mean frequency,
 tail stress and energy flux, z0, cut-off bin, depth weights: all at

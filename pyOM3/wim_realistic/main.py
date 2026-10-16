@@ -20,6 +20,15 @@ class main(boundary,grid):
           grid, DIA and propagation backends, masks).
           """   
           self.calc_grid()
+          # the Janssen input closes the wind momentum with its own tail
+          # (source.py _janssen_tail); the ocean stress must use the same tail,
+          # i.e. tail_flux='input'. With the default 'wamdi' the stress to
+          # the ocean would use the WAMDI dissipation continuation while
+          # tau_w uses the Janssen tail (two closures, momentum not closed).
+          if getattr(self, 'input_scheme', 'wamdi') == 'janssen' \
+                  and getattr(self, 'tail_flux', 'wamdi') != 'input':
+              raise ValueError("input_scheme='janssen' needs tail_flux='input' "
+                               "(got %r)" % (getattr(self, 'tail_flux', 'wamdi'),))
           return _main_simple.setup(self)
 
 

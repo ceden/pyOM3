@@ -43,25 +43,6 @@ class damping(main):
 
     
       @partial(OM.jaxjit, static_argnums=0)    
-      def biharmonic_horizontal_tendency(self,p1,mixC,mask):          
-          fe = -mixC*(self.rollx(p1,-1)-p1)/(self.cost_y*self.dxu_x)*self.rollx(mask,-1)*mask
-          fn = -mixC*(self.rolly(p1,-1)-p1)/self.dyu_y*self.cosu_y*self.rolly(mask,-1)*mask
-          fe, fn = self.apply_bc(fe), self.apply_bc(fn)   
-          
-          del2 = ( (fe-self.rollx(fe,1))/(self.cost_y*self.dxt_x) 
-                 + (fn-self.rolly(fn,1))/(self.cost_y*self.dyt_y) )*mask
-          del2 = self.apply_bc(del2)
-          
-          fe = (self.rollx(del2,-1)-del2)/(self.cost_y*self.dxu_x)*self.rollx(mask,-1)*mask
-          fn = (self.rolly(del2,-1)-del2)/self.dyu_y*self.cosu_y*self.rolly(mask,-1)*mask
-          fe, fn = self.apply_bc(fe), self.apply_bc(fn)
- 
-          return ( (fe-self.rollx(fe,1))/(self.cost_y*self.dxt_x) 
-                 + (fn-self.rolly(fn,1))/(self.cost_y*self.dyt_y)  )*mask
-
-
-
-      @partial(OM.jaxjit, static_argnums=0)    
       def biharmonic_momentum(self,u,v,Ahbi,maskU,maskV):          
           """
           Horizontal biharmonic MOMENTUM friction with the proper U/V-row

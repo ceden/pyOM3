@@ -4,11 +4,12 @@ pe_realistic, after pyOM2 (tke.f90: `where (Nsqr<0) kappaH=1`; thermodynamics.f9
 backward-Euler tridiagonal vmix solve).
 
 Implicit is required because convective adjustment sets kappaH = O(1) m^2/s,
-which violates the explicit limit kappaH*dt/dz^2 < 1/2 (on the acc1 grid the
-ceiling is ~0.52 m^2/s). Backward-Euler is unconditionally stable.
+which violates the explicit limit kappaH*dt/dz^2 < 1/2 (with dt = 900 s and
+dz = 30 m the ceiling is 0.5 m^2/s). Backward-Euler is unconditionally stable.
 
 pe_realistic conventions: z is axis 0 of (Nz,Ny,Nx); bottom k=halo, surface
-k=-halo-1; dz is a uniform scalar. Uses only OM.np / OM.for_loop /
+k=-halo-1; variable grid, T cell thickness dzt_z (Nz,1,1), W cell thickness
+dzw_z. Uses only OM.np / OM.for_loop /
 OM.modify_array, so it stays JAX- and MPI-compatible. Mix into the class
 hierarchy (e.g. let `damping` also inherit from `implicit_vmix`).
 """
@@ -100,10 +101,10 @@ class implicit_vmix:
     #     (I - dt d_z kappaH d_z) var^{n+1} = var^n
     # solved column-by-column with the Thomas algorithm along axis 0.
     #
-    # kappaH is on the W grid (top face of cell k). With uniform dz and the
-    # pe_realistic orientation (k=halo bottom ... k=-halo-1 surface), the flux on
-    # the top face of cell k is  F[k] = kappaH[k]*(var[k+1]-var[k])/dz , and the
-    # tendency is  (F[k]-F[k-1])/dz. maskW[k]=0 on the top face closes the flux
+    # kappaH is on the W grid (top face of cell k). With the pe_realistic
+    # orientation (k=halo bottom ... k=-halo-1 surface), the flux on the top
+    # face of cell k is  F[k] = kappaH[k]*(var[k+1]-var[k])/dzw[k] , and the
+    # tendency is  (F[k]-F[k-1])/dzt[k]. maskW[k]=0 on the top face closes the flux
     # at the surface and below the bottom automatically.
     # ------------------------------------------------------------------
     @partial(OM.jaxjit, static_argnums=0)

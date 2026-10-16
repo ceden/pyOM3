@@ -125,7 +125,10 @@ def small_model(kind='realistic', open_coasts=True, energy_consistent=True, refl
                limit_growth=sources, mask_energy=sources,
                implicit_dissipation_only=True, closed_bottom=True)
     if janssen:
+        # the Janssen input requires the input-based tail (wim_realistic/main.py
+        # refuses tail_flux='wamdi' with it, Oct 16 2026)
         par['input_scheme'] = 'janssen'
+        par['tail_flux'] = 'input'
     par.update(_grids(kind))
     kw = dict(n_pes_x=n_pes_x, n_pes_y=n_pes_y, halo_points=1)
     if comm is not None:

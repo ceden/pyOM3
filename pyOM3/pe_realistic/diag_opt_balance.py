@@ -257,8 +257,11 @@ class opt_balance(model):
                                                     self.u,self.v,self.du,self.dv,self.maskU,self.maskV)
 
           if Ahbi_loc>0:  
-            self.u = self.biharmonic_horizontal(self.u,Ahbi_loc,self.maskU)
-            self.v = self.biharmonic_horizontal(self.v,Ahbi_loc,self.maskV)          
+            # the same metric-aware momentum friction as the model's time step
+            # (pyOM2 placement of the U/V-row metrics), not the generic tracer
+            # operator applied to u and v
+            self.u, self.v = self.biharmonic_momentum(self.u,self.v,Ahbi_loc,
+                                                      self.maskU,self.maskV)
           
           self.u, self.v, self.p_s, \
                self.estimated_error, self.congr_itts  =  self.solve_for_pressure(self.u,self.v,self.p_s,
@@ -275,8 +278,11 @@ class opt_balance(model):
     
       @partial(OM.jaxjit, static_argnums=0)    
       def OB_remove_mean_temp(self,temp,maskT):
-          _t = OM.np.sum( OM.np.sum(temp*maskT,axis=-1),axis=-1) 
-          _m = OM.np.sum( OM.np.sum(maskT,axis=-1),axis=-1) 
+          # horizontal mean per level, weighted with the T cell area (the
+          # unweighted count is only right on a uniform Cartesian grid)
+          w  = maskT*self.area_t
+          _t = OM.np.sum( OM.np.sum(temp*w,axis=-1),axis=-1) 
+          _m = OM.np.sum( OM.np.sum(w,axis=-1),axis=-1) 
           _t = OM.np.where( _m>0, _t/(1e-32+_m), 0)
           temp_back = OM.np.zeros_like(temp) + _t[:,None,None]
           temp -= temp_back
@@ -284,8 +290,10 @@ class opt_balance(model):
 
       @partial(OM.jaxjit, static_argnums=0)    
       def OB_remove_mean_u(self,u,maskU):
-          _u = OM.np.sum( OM.np.sum(u*maskU,axis=0),axis=-1) 
-          _m = OM.np.sum( OM.np.sum(maskU,axis=0),axis=-1) 
+          # zonal-vertical mean per latitude, weighted with the U cell volume
+          w  = maskU*self.area_u*self.dzt_z
+          _u = OM.np.sum( OM.np.sum(u*w,axis=0),axis=-1) 
+          _m = OM.np.sum( OM.np.sum(w,axis=0),axis=-1) 
           _u = OM.np.where( _m>0, _u/(1e-32+_m), 0)
           u_back = OM.np.zeros_like(u) + _u[None,:,None]
           u -= u_back
@@ -384,12 +392,16 @@ class opt_balance(model):
       def OB_norm(self,u1,v1,u2,v2):
           """
           Calculate a norm of differences in u1,v1 and u2,v2
+          (volume-weighted kinetic energy norm; on a uniform grid the
+          weights cancel)
           """
-          a  = u1**2+v1**2
+          wu = self.maskU*self.area_u*self.dzt_z
+          wv = self.maskV*self.area_v*self.dzt_z
+          a  = u1**2*wu+v1**2*wv
           e1 = OM.global_sum( OM.np.sum(a) ) if OM.mpi else OM.np.sum(a) 
-          a  = u2**2+v2**2
+          a  = u2**2*wu+v2**2*wv
           e2 = OM.global_sum( OM.np.sum(a) ) if OM.mpi else OM.np.sum(a)
-          a  = (u1-u2)**2+(v1-v2)**2
+          a  = (u1-u2)**2*wu+(v1-v2)**2*wv
           d  = OM.global_sum( OM.np.sum(a) ) if OM.mpi else OM.np.sum(a)          
           return 2 * OM.np.sqrt(d) / (OM.np.sqrt(e1) + OM.np.sqrt(e2)) 
 

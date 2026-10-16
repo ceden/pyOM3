@@ -2,8 +2,9 @@
 
 Status as of Sep 15 2026. Every test below has been run; the numbers quoted
 are the ones obtained. "Round-off" means 1e-14 relative or better.
-pe_simple shares eleven of the source files with pe_realistic (uniform-grid
-special case); where a test covers both it is said so.
+pe_realistic imports three modules from pe_simple (boundary, snapshot,
+solver) and has its own metric-aware versions of the others; pe_simple is
+the uniform-grid special case, and where a test covers both it is said so.
 
 Reference model throughout: pyOM2 (github.com/ceden/pyOM2), run either as the
 fortran executable or step by step through the f2py module

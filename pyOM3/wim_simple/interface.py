@@ -70,6 +70,9 @@ class interface(main):
           z  = OM.np.arange(nz)*dz
           z  = z - z[-1] - dz/2
           zt, zb = z + dz/2, z - dz/2                  # top face of last cell = 0
+          # per-cell thickness, as wim_realistic's kernel sets it for an array
+          # dzt; calc_phioc_work divides by it (same code for both packages)
+          self._dzc = OM.np.full(nz, dz, OM.prec)
           k2 = 2*self.omega_t[None,:]**2/self.grav     # = 2 k          (1,Nf)
           et, eb  = OM.np.exp(zt[:,None]*k2), OM.np.exp(zb[:,None]*k2)
           if getattr(self,'closed_bottom',False):
@@ -286,7 +289,7 @@ class interface(main):
               # deposited in the TOP cell: its carrier waves have deposition
               # scales g/(2 omega^2) <= centimetres, far below any ocean dz.
               fac_tau, _, a, fL = self._tail_input_factors()   # (nd,Ny,Nx)
-              eps0 = 1.225/1000.
+              eps0 = self.rho_a/self.rho_w
               C0 = 0.25*eps0*(2*OM.np.pi)**2*fc**5
               fLc = OM.np.where(OM.np.isfinite(fL), fL, 1.0)   # dummy where no wind
               act = OM.np.where(OM.np.isfinite(fL), 1.0, 0.0)
@@ -345,7 +348,7 @@ class interface(main):
           multiplied by E_c(theta) and summed over directions; a = uu/f and
           fL = max(f_c, 1/a) for the depth kernel of calc_stress_work.
           """
-          eps = 1.225/1000.
+          eps = self.rho_a/self.rho_w
           fc  = self.ft[-self.halo]        # ghost-bin anchor BY DESIGN (see calc_stress_work)
           omc = 2*OM.np.pi*fc
           cos = OM.np.cos(self.theta[:,None,None] - self.udir[None,:,:])
@@ -536,17 +539,15 @@ class interface(main):
           'orbital' (Q = k e^{kz}, twice the depth scale).
           """
           sl = slice(self.halo,-self.halo)
+          # cell faces and per-cell thickness self._dzc from the shared kernel
+          # (dz scalar, or an array dzt(z) with wim_realistic's kernel)
+          _, zt, zb, Qdz, _ = self._wave_kernel(dz,nz)
           if getattr(self,'phioc_kernel','stokes') == 'orbital':
-             z  = OM.np.arange(nz)*dz
-             z  = z - z[-1] - dz/2
-             zt, zb = z + dz/2, z - dz/2
              k1 = self.omega_t[None,:]**2/self.grav
              et, eb = OM.np.exp(zt[:,None]*k1), OM.np.exp(zb[:,None]*k1)
              if getattr(self,'closed_bottom',False):
                 eb = OM.modify_array(eb, (0,slice(None)), 0.0)
              Qdz = et - eb
-          else:
-             _, _, _, Qdz, _ = self._wave_kernel(dz,nz)
           S_diss = self.gamma_diss[None,:,:,:]*self.E
           if getattr(self, 'tail_flux', 'wamdi') == 'input' \
                   and hasattr(self, 'freq_mask') and hasattr(self, 'gamma_in'):
@@ -554,13 +555,13 @@ class interface(main):
                                    S_diss, -self.gamma_in*self.E)   # see calc_stress
           phi_f = -self.grav*OM.np.sum(self._xy(S_diss[sl,sl])*self.dd,axis=0) \
                   *self.dft[sl,None,None]                          # (nf,ny,nx)
-          P = OM.np.sum(Qdz[:,sl,None,None]*phi_f[None,:,:,:],axis=1)/dz
+          P = OM.np.sum(Qdz[:,sl,None,None]*phi_f[None,:,:,:],axis=1)/self._dzc[:,None,None]
           if getattr(self, 'tail_flux', 'wamdi') == 'input':
               _, fac_phi, _, _ = self._tail_input_factors()
               Ec = self._xy(self.E[sl, -self.halo])
               top = OM.np.sum(Ec*self._xy(fac_phi[sl])*self.dd, axis=0)
               _, _, ce = self._cascade_credit()
-              P = OM.modify_array(P, (-1,), P[-1] + (top + ce)/dz)
+              P = OM.modify_array(P, (-1,), P[-1] + (top + ce)/self._dzc[-1])
           return self._out(P)
 
 

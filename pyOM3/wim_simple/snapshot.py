@@ -112,6 +112,11 @@ class snap_nc4(model):
                     fid.variables['ydot'][sl2]    = _strip(self, self.ydot)
                     fid.variables['fdot'][sl2]    = _strip(self, self.fdot)
                     fid.variables['ddot'][sl2]    = _strip(self, self.ddot)
+                    if 'tau_w' in fid.variables:          # janssen state, if
+                       if hasattr(self, 'tau_w'):         # already set by a
+                          fid.variables['tau_w'][sl1] = _strip(self, self.tau_w)  # source step
+                       if hasattr(self, 'z0'):
+                          fid.variables['z0'][sl1]    = _strip(self, self.z0)
                     fid.close()
 
 
@@ -153,6 +158,12 @@ def _snap_setup(self, snap_file_name, show_each_time_step):
        id.createVariable('ydot', OM.prec ,('time','d','f','y','x') )
        id.createVariable('fdot', OM.prec ,('time','d','f','y','x') )
        id.createVariable('ddot', OM.prec ,('time','d','f','y','x') )
+       # Janssen input state (wim_realistic, input_scheme='janssen'): the
+       # wave-supported stress tau_w (kinematic, per rho_a) and the
+       # roughness length z0, carried between source steps
+       if getattr(self, 'input_scheme', 'wamdi') == 'janssen':
+          id.createVariable('tau_w', OM.prec ,('time','y','x') )
+          id.createVariable('z0',    OM.prec ,('time','y','x') )
        id.close()    
     return
 

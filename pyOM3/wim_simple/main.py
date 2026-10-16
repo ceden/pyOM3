@@ -75,6 +75,11 @@ class main(boundary):
 
 
           if not hasattr(self,'rho_o'):  self.rho_o = 1024.
+          # air and water density of the wind input (WAMDI and Janssen input,
+          # and the input-based tails of the coupling); rho_o above is the
+          # ocean density of the stress hand-over
+          if not hasattr(self,'rho_a'):  self.rho_a = 1.225
+          if not hasattr(self,'rho_w'):  self.rho_w = 1000.
           # WAMDI dissipation coefficient gamma = -beta_o om_mean (om/om_mean)^2 alpha^2
           self.beta_o = 2.33e-5/(0.66*4.57e-3)**2
           if not hasattr(self,'limit_growth'):   self.limit_growth = False

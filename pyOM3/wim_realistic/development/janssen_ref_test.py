@@ -1,6 +1,6 @@
 """
 Janssen/WAM4 port (wim_realistic/source.py, input_scheme='janssen') against
-the ecwam IPHYS=0 routines compiled unchanged (development/ecwam_ref, f2py).
+the ecwam IPHYS=0 routines compiled unchanged (development/Makefile, f2py).
 
 Every ecwam routine is called with wim's own spectral grid and the same
 inputs as the python port, column by column (a 3x3 field of columns with
@@ -35,7 +35,7 @@ Run from the pyOM3 parent directory:
 import sys, os
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(here, '..', '..', '..')))
-sys.path.insert(0, os.path.join(here, 'ecwam_ref'))
+sys.path.insert(0, here)                   # ecwref*.so built by development/Makefile
 import numpy as np
 import pyOM3 as OM
 from pyOM3.wim_realistic.model import model
@@ -43,7 +43,7 @@ from pyOM3.wim_realistic.model import model
 try:
     import ecwref
 except ImportError:
-    print('ecwref not built: cd development/ecwam_ref; make ECWAM=<ecwam clone>')
+    print('ecwref not built: cd wim_realistic/development; make ECWAM=<ecwam clone>')
     sys.exit(2)
 
 PAR = dict(nx=3, ny=3, nf=28, nd=24, f0=0.04, df0=0.1, dt=60.0, dx=5e3, dy=5e3,

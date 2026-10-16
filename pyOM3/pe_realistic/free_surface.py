@@ -92,6 +92,11 @@ class free_surface(main):
              _du_mix, _dv_mix = (_un-u)/self.dt, (_vn-v)/self.dt
           else:
               _du_mix, _dv_mix = 0,0
+          if hasattr(self,'Ah'):
+             # harmonic momentum friction, as a tendency in the same way (was
+             # applied on the implicit-pressure path only until Oct 16 2026)
+             _un, _vn = self.harmonic_momentum(u,v,self.Ah,maskU,maskV)
+             _du_mix, _dv_mix = _du_mix + (_un-u)/self.dt, _dv_mix + (_vn-v)/self.dt
               
           _R_u = A*du[tau,:,:,:] + B*du[taum1,:,:,:] + C*du[taum2,:,:,:] + _du_hyd + _du_mix
           _R_v = A*dv[tau,:,:,:] + B*dv[taum1,:,:,:] + C*dv[taum2,:,:,:] + _dv_hyd + _dv_mix
