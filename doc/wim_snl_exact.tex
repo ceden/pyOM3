@@ -1,0 +1,532 @@
+\documentclass[12pt]{article}
+\usepackage{lineno}
+%\usepackage{ametsoc}
+\usepackage{natbib}
+\usepackage{a4wide}
+\usepackage{longtable}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex,colorlinks, citecolor=black,linkcolor=black,urlcolor=black]{hyperref}
+\definecolor{darkgreen}{rgb}{0.1,0.4,0.1}
+\definecolor{darkblue}{rgb}{0.1,0.1,0.3}
+
+
+
+\newif\ifdetail
+\global\detailfalse
+%\global\detailtrue
+
+\def\bem#1{\colorbox{green}{\em #1}}
+
+\newcommand{\beq}  { \begin{eqnarray} }
+\newcommand{\eeq}  { \end{eqnarray}}
+\newcommand{\beeq}  { \begin{eqnarray*} }
+\newcommand{\eeeq}  { \end{eqnarray*}}
+\newcommand{\eq }  [1]{Eq.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\eqs }  [1]{Eqs.~(\ref{#1})}
+\newcommand{\sect}  [1]{Sec.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\fig}  [1]{Fig.~\ref{#1}}   % Fig. #1
+\renewcommand{\v}[1]{{\mbox{\boldmath$ #1 $}}}  % Vektor durch Fettdruck
+\newcommand{\m}    [1]{{\bf  #1 }}              % Matrix in sans serif
+\newcommand{\gz}[1] {{{d #1} \over {dz}}}
+\newcommand{\pt}[1]{{\partial_t #1}}
+\newcommand{\ptt}[1]{{\partial_{tt} #1}}
+\newcommand{\pttt}[1]{{\partial_{ttt} #1}}
+\newcommand{\pttx}[1]{{{\partial^3 #1} \over {\partial t^2 \partial x}}}
+\newcommand{\ptty}[1]{{{\partial^3 #1} \over {\partial t^2 \partial y}}}
+\newcommand{\ptx}[1]{{{\partial^2 #1} \over {\partial t \partial x}}}
+\newcommand{\pty}[1]{{{\partial^2 #1} \over {\partial t \partial y}}}
+\newcommand{\pz}[1]{{\partial_z #1}}
+\newcommand{\pzz}[1]{{\partial_{zz} #1}}
+\newcommand{\px}[1]{{\partial_x #1}}
+\newcommand{\py}[1]{{\partial_y #1}}
+\newcommand{\pxi}[1]{{\partial_i #1}}
+\newcommand{\pxj}[1]{{\partial_j #1}}
+\newcommand{\pxk}[1]{{\partial_k #1}}
+\newcommand{\pb}[1]{{{\partial #1} \over {\partial b}}}
+%\newcommand{\pxy}[1]{{{\partial^2 #1} \over {\partial x \partial y}}}
+\newcommand{\pxy}[1]{\partial_{xy} #1}
+\newcommand{\pyy}[1]{\partial_{yy} #1}
+\newcommand{\pxx}[1]{\partial_{xx} #1}
+\newcommand{\kx}{{\bf k} \times}
+\newcommand{\dt}[1]{{{d #1} \over {d t}}}
+\newcommand{\Dt}[1]{{{D #1} \over {D t}}}
+\newcommand{\Div}[1]{ \nabla \cdot #1 }
+\renewcommand{\div}[1]{ \nabla_{yz} \cdot #1 }
+\newcommand{\Bar}[1]{ \overline{ #1} }
+\newcommand{\rvec} [1]{
+    \raisebox{-1.5ex}{$\stackrel{\textstyle #1}{\neg}$} }% rotierter Vektor
+\newcommand{\nablq}   {\rvec\nabla}                    % rotated nabla operator
+\newcommand{\Vec}[1]{\left(\begin{array}{c} #1 \end{array}\right) }
+%\renewcommand{\mho}{\mathcal{W}}
+\newcommand{\pn}[1]{{{\partial #1} \over {\partial n}}}
+\newcommand{\pnn}[1]{{{\partial #1} \over {\partial m}}}
+\newcommand{\ps}[1]{{{\partial #1} \over {\partial s}}}
+\newcommand{\p}{{\partial}}
+\newcommand{\vn}{{\v \nabla}}
+\newcommand{\lk}{\left(}
+\newcommand{\rk}{\right)}
+
+\newcommand{\tl}{\tilde}
+
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+
+\newcommand{\ep}{\epsilon}
+\newcommand{\erfc}{\mathrm{erfc}}
+ 
+
+\begin{document}
+
+\section*{The exact scattering integral $S_{nl}$ in wim\_simple: \\ formulation, discretisation and validation}
+
+This note documents the exact evaluation of the non-linear transfer $S_{nl}$
+implemented in the sub-package snl\_exact of wim\_simple
+(''snonlin\_backend''$\,=\,$'exact').
+It complements the model documentation, which contains only a summary,
+with the underlying conventions, the derivation chain of the coupling
+coefficient, the geometry of the resonance loci, the discretisation on the
+spectral grid, the discrete conservation properties, and the validation
+against independent implementations.
+Only deep water is considered.
+
+\subsection*{Conventions and the kinetic equation}
+
+The kinetic equation below is written for the wave action spectral density
+$A(\v k)$ per $d^2 k$. It is related to the surface elevation spectrum
+$F(\v k)$, with $\langle \zeta^2 \rangle = \int F \, d\v k$, by
+\beq \label{eq:convert}
+ A \;=\; \frac{g}{\sigma}\, F   ~~,~~ \sigma(\v k) = \sqrt{g |\v k|}
+\eeq
+The model carries its spectra as functions of cyclic frequency $\nu$ and
+direction $\theta$. Its spectral variables are the variance density
+$E(\nu,\theta)$ per Hz and radian and the action $E/\sigma$, which is also a
+density per Hz and radian. This model action is not the density $A$ per
+$d^2 k$ of \eq{eq:convert}. The model hands $E$ to the exact backend.
+With $k = (2\pi\nu)^2/g$ and $dk/d\nu = 8\pi^2 \nu / g$ the backend converts
+$E$ to the action density per $d^2 k$ by
+\beq
+ A(k,\theta) \;=\; \frac{g \, E(\nu,\theta)}{\sigma \, k \, dk/d\nu}
+\eeq
+and converts the computed transfer back to $E$ with the same factor.
+
+The evolution of $A$ by resonant four-wave interactions is the kinetic
+equation of Hasselmann (1962), written here in the Zakharov form
+\beq \label{eq:kinetic}
+ S_{nl}(\v k_1) = 4\pi \int T^2_{1234}\,
+ \delta(\v k_1 + \v k_2 - \v k_3 - \v k_4)\,
+ \delta(\sigma_1 + \sigma_2 - \sigma_3 - \sigma_4)\; \mathcal{B}\;
+ d\v k_2 \, d\v k_3 \, d\v k_4
+\eeq
+with the density bracket
+\beq \label{eq:bracket}
+ \mathcal{B} \;=\; A_3 A_4 (A_1 + A_2) - A_1 A_2 (A_3 + A_4)
+\eeq
+Two properties of $\mathcal{B}$ are used repeatedly below: it vanishes
+identically for constant $A$, and it vanishes on the resonance manifold for
+the Rayleigh--Jeans equilibrium $A \propto 1/\sigma$, since
+\beq \label{eq:rj}
+ \mathcal{B}\big|_{A = c/\sigma} \;=\;
+ c^3\, \frac{(\sigma_1+\sigma_2) - (\sigma_3+\sigma_4)}
+           {\sigma_1 \sigma_2 \sigma_3 \sigma_4} \;=\; 0
+\eeq
+Both properties are preserved by the discretisation (see below) and provide
+sharp correctness tests.
+
+The kernel $T_{1234}$ in \eq{eq:kinetic} is the canonical four-wave kernel of
+the Zakharov equation
+\beq \label{eq:zakharov}
+ i\, \p_t b_1 \;=\; \int T_{1234}\, b_2^* b_3 b_4\,
+ \delta(\v k_1 + \v k_2 - \v k_3 - \v k_4)\, d\v k_2\, d\v k_3\, d\v k_4
+\eeq
+in the Fourier convention without $2\pi$ prefactors, for which
+$\langle b(\v k) b^*(\v k') \rangle = A(\v k)\,\delta(\v k - \v k')$ holds
+with the physical action density \eq{eq:convert} directly, and
+$T(\v k,\v k,\v k,\v k) = k^3$.
+In the convention of Krasitskii (1994), with a factor $1/2\pi$ per transform,
+the same kernel reads $T^{K} = T/(2\pi)^2$ and
+$T^{K}(\v k,\v k,\v k,\v k) = k^3/4\pi^2$; the collision prefactor $4\pi$
+in \eq{eq:kinetic} is form-invariant under this change of convention.
+The combination
+\beq \label{eq:webb}
+ G \;=\; 4\pi\, T^2 \;=\; 4\pi (2\pi)^4 \lk T^{K} \rk^2
+\eeq
+is the deep-water coupling coefficient of Webb (1978).
+
+\subsection*{Derivation and verification of the kernel}
+
+The kernel is not transcribed from the literature but derived from the
+water-wave Hamiltonian, truncated at fourth order in wave steepness,
+\beq
+ H_3 &=& \frac{1}{2} \int \zeta \lk (\vn \psi)^2 - (G_0 \psi)^2 \rk d\v x \\
+ H_4 &=& \frac{1}{2} \int \zeta \, (G_0 \psi)
+         \lk G_0 (\zeta\, G_0 \psi) + \zeta \, \nabla^2 \psi \rk d\v x
+\eeq
+with the surface potential $\psi$, the flat-surface Dirichlet--Neumann
+operator $G_0$ (symbol $|\v k|$ in deep water), and normal variables defined by
+\beq
+ \hat\zeta(\v k) = \sqrt{\frac{k}{2\sigma}} \lk a_{\v k} + a^*_{-\v k} \rk
+ ~~,~~
+ \hat\psi(\v k) = -i \sqrt{\frac{\sigma}{2 k}} \lk a_{\v k} - a^*_{-\v k} \rk
+\eeq
+(here written in the $2\pi$-free convention).
+Both truncated Hamiltonians were verified exactly against the analytic
+kinetic energy of a prescribed harmonic flow, with residuals scaling as the
+neglected orders $\varepsilon^3$, $\varepsilon^4$, $\varepsilon^5$.
+This check was made during the development. It is not part of the tests
+shipped with the sub-package (test\_kernel.py, test\_locus.py,
+test\_assembly.py and test\_physics.py).
+The canonical (normal-form) transformation then removes the non-resonant
+cubic terms; on the four-wave resonance manifold the two classes of induced
+quartic contributions coincide pairwise, which is exploited by keeping both
+with weight $1/4$ so that the $(12)\!\leftrightarrow\!(34)$ symmetry of $T$
+is manifest also off the manifold.
+
+The resulting kernel satisfies, at machine precision, the on-shell
+Hermiticity and index symmetries, rotation invariance, cubic homogeneity
+$T(\lambda \v k_i) = \lambda^3 T(\v k_i)$, and independence of $g$.
+It reproduces the two-wave degenerate-quartet interaction coefficients of
+Longuet-Higgins/Leblanc (as compiled by Stuhlmeier, 2024) to about
+$10^{-6}$.
+These coefficients are values of $T$ at degenerate quadruplets such as
+$(\v k, \v k, \v k, \v k)$. There the expression for $T$ contains vanishing
+difference wavenumbers and cannot be evaluated directly.
+The tests therefore evaluate $T$ at nearby quadruplets
+$(\v k_i, \v k_j, \v k_i + \v d, \v k_j - \v d)$ with a small offset
+$\v d$ of length $10^{-5}$ or $10^{-6}$ times a fixed vector of order one.
+The agreement of about $10^{-6}$ is set by this offset, not by the kernel.
+The deviation decreases linearly with the offset and is
+$1.2 \cdot 10^{-9}$ for $(\v k,\v k,\v k,\v k)$ at an offset factor of
+$10^{-8}$.
+During the development the kernel also reproduced the Stokes
+second-harmonic and mean-flow response and the bichromatic super- and
+sub-harmonic amplitudes. These checks are not part of the shipped tests.
+Finally, the identity
+\beq \label{eq:xcwebb}
+  \mathrm{xc\_webb} \;=\; 64 \pi^5 g^2 \lk T^{K}\rk^2 \;=\; g^2 \, G
+\eeq
+connecting \eq{eq:webb} to the coupling routine of the exact-NL code of
+van Vledder (mod\_xnl4v5, as distributed with WAVEWATCH III and SWAN) was
+verified to a relative accuracy of $3 \cdot 10^{-13}$ on resonant quadruplets,
+so that the absolute normalisation of \eq{eq:kinetic} is anchored to an
+independent production code at the level of the coupling coefficient.
+
+\subsection*{WRT reduction and the resonance loci}
+
+Following Webb (1978) and Tracy and Resio (1982), the wavenumber delta
+function in \eq{eq:kinetic} eliminates $\v k_2$, and for fixed
+$(\v k_1, \v k_3)$ the frequency delta function reduces the remaining
+$\v k_2$-plane integral to a line integral along the resonance locus
+\beq \label{eq:locus}
+ z(\v k_2) \;=\; q + \sigma(\v k_2) - \sigma(\v k_2 + \v P) \;=\; 0
+ ~~,~~ \v P = \v k_1 - \v k_3 ~,~ q = \sigma_1 - \sigma_3
+\eeq
+with $\v k_4 = \v k_2 + \v P$, so that
+\beq \label{eq:wrt}
+ S_{nl}(\v k_1) \;=\; \int d\v k_3 \oint_{z=0}
+ \frac{ds}{|\vn_{\v k_2} z|}\; G \, \mathcal{B}
+\eeq
+Note that $z(\v k_3) = 0$ identically: the trivial quadruplet
+$\v k_2 = \v k_3$, $\v k_4 = \v k_1$ lies on every locus, with bounded $G$;
+the vanishing of the integrand there resides entirely in $\mathcal{B}$.
+
+In deep water the loci form a one-parameter family: scaling lengths by
+$|\v P|$ and frequencies by $\sqrt{g |\v P|}$, the locus shape depends only on
+\beq
+ \hat q = \frac{q}{\sqrt{g |\v P|}} \in (0,1)
+\eeq
+(the labels $1,3$ are chosen such that $q>0$; $\hat q < 1$ holds for every
+pair since $(\sqrt{k_1}-\sqrt{k_3})^2 < k_1 - k_3 \le |\v k_1 - \v k_3|$).
+In the normalised frame with $\hat{\v P} = (1,0)$ the two intersections of
+the locus with the symmetry axis are analytic,
+\beq \label{eq:crossings}
+ x_+ = \lk \frac{1-\hat q^2}{2 \hat q} \rk^2
+ ~~,~~
+ x_- = - \lk \frac{\sqrt{2-\hat q^2} - \hat q}{2} \rk^2
+\eeq
+which provide exact anchors for the tracing.
+The code contains two tracers. Both describe the closed curve by its radius
+$r(\theta)$ about the interior midpoint of \eq{eq:crossings}. Here $\theta$
+is the polar angle about this midpoint, not the wave direction.
+Both compute the derivative of the radius along the curve analytically from
+the gradient,
+\beq
+ r'(\theta) = - \frac{\p z / \p \theta}{\p z / \p r}
+ ~~,~~ ds = \sqrt{r^2 + r'^2}\, d\theta
+\eeq
+The operator uses the routine trace\_batch of assembly.py.
+It places the $n_{\rm pts}$ points of a locus uniformly in $\theta$, with
+spacing $2\pi/n_{\rm pts}$, and finds the radius of each point by bisection
+along its ray.
+The periodic trapezoid rule in $\theta$ then yields spectrally accurate
+quadrature weights $w_s = (ds/d\theta)\,(2\pi/n_{\rm pts}) / |\vn z|$.
+The routine trace\_locus of locus.py is used in the locus tests.
+It traces the curve densely by radial continuation from ray to ray and
+resamples it to equal arc length $\Delta s$, with the weights
+$w_s = \Delta s / |\vn z|$.
+For $q = 0$ (equal frequencies, $\v k_1 \ne \v k_3$) the locus degenerates to
+the perpendicular bisector $\{ \v k_2 : \v k_2 \cdot \v P = -|\v P|^2/2 \}$;
+these same-frequency interactions are unbounded in extent but their line
+integral converges through the decay of the spectrum, and they are included
+with a separate straight-line quadrature.
+The dimensional line measure follows from the scale invariance,
+\beq \label{eq:measure}
+ \frac{ds}{|\vn z|} \;=\; \frac{|\v P|^{3/2}}{\sqrt{g}}\;
+ \frac{d\hat s}{|\hat\vn \hat z|}
+\eeq
+and the coupling scales as $G \propto |\v k|^6$ by the homogeneity of $T$.
+Combining the scalings of \eq{eq:wrt}, the transfer obeys the deep-water
+self-similarity
+\beq \label{eq:selfsim}
+ S_{nl}\lk \v k; \lambda A(\cdot/\mu) \rk \;=\;
+ \lambda^3 \mu^{19/2}\, S_{nl}\lk \v k/\mu;  A \rk
+\eeq
+which the discretisation reproduces on the geometric grid for the closed
+loci in the interior of the grid (see below).
+
+\subsection*{Discretisation}
+
+The spectral grid of wim\_simple is geometric in frequency and uniform in
+direction, hence geometric in $k$ with uniform spacing $h$ in $\ln k$.
+Two consequences are exploited.
+First, a rotation of the pair $(\v k_1, \v k_3)$ by a multiple of the
+direction spacing $\Delta\theta$ rotates its locus by the same angle.
+The locus geometry, the coupling values, the quadrature weights and the
+interpolation stencils are therefore tabulated for $\theta_1 = 0$ only.
+The table covers every pair $(i_1, i_3)$ of frequency indices and every
+direction-index difference $j_3 - j_1$.
+Each of these configurations is traced once, exactly.
+In the stencils the $\ln k$ indices are absolute grid indices, and the
+direction indices are offsets relative to $j_1$.
+The table is applied to every $\theta_1$ by shifting all direction indices
+by $j_1$.
+This renders the discrete operator exactly equivariant under rotations of
+the spectrum by grid directions.
+The size of the table scales as $n_f^2\, n_d\, n_{\rm pts}$, with $n_f$
+frequencies, $n_d$ directions and $n_{\rm pts}$ points per locus.
+There is no interpolation in $\hat q$; the discrete grid realises finitely
+many configurations, and all of them are solved.
+Second, $\hat q$ depends only on the ratio $k_3/k_1$ and the direction
+difference.
+Let $\rho$ be the ratio of neighbouring frequencies, so that $h = 2\ln\rho$.
+A shift of $i_1$ and $i_3$ by one ring multiplies all wavenumbers of the
+quadruplets by $\rho^2$, and the stencils move by one index in $\ln k$.
+In the interior of the grid this renders the closed-locus part of the
+operator equivariant under shifts along the geometric $k$-axis
+--- the discrete form of \eq{eq:selfsim}.
+Near the grid boundaries this equivariance is broken.
+There the strict truncation described below discards different quadruplets
+for a spectrum and for its shifted copy.
+The same-frequency line loci break it as well.
+Each line is cut at $|\v k_2| = 1.02\, k_{max}$, with $k_{max}$ the largest
+wavenumber of the grid, and not at a fixed multiple of $|\v P|$.
+The shipped test of \eq{eq:selfsim} therefore leaves out the line loci and
+evaluates only interior rings.
+
+Action densities at the off-grid locus points $\v k_2, \v k_4$ are obtained
+by bilinear interpolation in $(\ln k, \theta)$.
+Locus points within a small fraction of $|\v P|$ of the trivial point
+$\v k_2 = \v k_3$ are removed: there the exact bracket \eq{eq:bracket}
+vanishes but its interpolant does not; the computed transfer is insensitive
+to the filter width at the percent level, which is verified as part of the
+test battery.
+Above the discrete frequency range the spectrum is extended by a parametric
+$E \propto \nu^{-5}$ tail over a number of additional geometric rings before
+evaluation (following WRT practice in WAVEWATCH III), and the transfer is
+restricted to the original band afterwards; quadruplets with any member
+beyond the extended range are discarded entirely (strict truncation).
+Strict truncation is what preserves the equilibria: every retained quadruplet
+carries all four action values, so $\mathcal{B} \equiv 0$ termwise for
+constant $A$, and \eq{eq:rj} holds up to interpolation error for
+$A \propto 1/\sigma$.
+This holds for the operator itself, evaluated without the tail.
+The backend in wim\_simple appends the tail by default, with eight rings
+(pad\_hi$\,=\,$8, see below).
+The tail continues an equilibrium spectrum of the band by
+$E \propto \nu^{-5}$, so the extended spectrum is no equilibrium.
+The backend therefore returns a nonzero transfer for an equilibrium
+spectrum of the band.
+For constant $A$ on a band of 20 rings this transfer reaches about $0.2$ of
+the one-sided (gross) rate, also in the interior of the band.
+
+With cell areas $\Delta_i = k_i\, \Delta k_i \, \Delta\theta$, where
+$\Delta k_i = k_i \lk \rho - 1/\rho \rk = 2 k_i \sinh(h/2)$ is the width of
+ring $i$, the discrete form of
+\eq{eq:wrt} for one quadruplet instance $(i_1 j_1, i_3 j_3, s)$ carries the
+measure
+\beq
+ \mu_q \;=\; \Delta_{3}\; w_s \; G_s
+\eeq
+and two assemblies of the same integral are provided.
+In the \emph{direct} mode the rate $\mu_q \mathcal{B}$ is accumulated at
+$\v k_1$ only --- the discrete analogue of \eq{eq:wrt} and of other WRT
+implementations.
+In the \emph{conservative} mode each instance deposits the total-action
+increments
+\beq \label{eq:scatter}
+ \lk \delta \mathcal{A}_1, \delta \mathcal{A}_2,
+     \delta \mathcal{A}_3, \delta \mathcal{A}_4 \rk
+ \;=\; \lk +1,+1,-1,-1 \rk \, \frac{\Delta_1 \mu_q \mathcal{B}}{4}
+\eeq
+distributed over the grid through the same bilinear stencils used for the
+gather.
+Dividing the deposit at the interpolated legs by the effective cell area
+$\bar\Delta$, interpolated in $\ln k$ with the same weights, conserves the
+deposited action exactly, since the stencil weights $w_t$ and the
+$\theta$-independent areas satisfy $\sum_t w_t \Delta_{c(t)} = \bar\Delta$
+identically.
+The factor $1/4$ in \eq{eq:scatter} averages the four role-estimators of the
+enumeration over ordered pairs; the total action budget of the discrete
+transfer, including the action exchanged with the parametric tail, then
+closes at machine precision by construction.
+The two modes are independent discretisations of \eq{eq:wrt}; their
+difference is $O(h)$, decreases under grid refinement, and serves as a
+built-in convergence diagnostic.
+Energy and momentum are conserved by the continuous quadruplets and hence to
+interpolation accuracy by the discrete transfer.
+The code does not compute their residuals.
+The backend stores action diagnostics of the last evaluated cell in the
+dictionary Snonlin.diag.
+In the conservative mode these are action\_rate, the sum of $\Delta_i$
+times the transfer over the extended grid, and leak, the action of deposits
+that fall outside the grid.
+In both modes they are band\_action\_rate and tail\_action\_rate, the same
+sum over the band and over the tail rings.
+
+For the semi-implicit time stepping a diagonal derivative is accumulated
+alongside,
+\beq
+ \frac{\p S_{nl}(\v k_1)}{\p A_1} \;=\;
+ \sum_q \mu_q \lk A_3 A_4 - A_2 (A_3 + A_4) \rk
+\eeq
+It is the derivative of the direct rate at $\v k_1$ with respect to $A_1$,
+with $A_2$, $A_3$ and $A_4$ held fixed.
+The code returns it in both modes.
+In the conservative mode, the default, it is not the derivative of the
+returned transfer.
+There $A_1$ enters also through the deposits of the instances in which
+$\v k_1$ plays the role 2, 3 or 4, and the role-1 deposit carries the
+factor $1/4$.
+At the peak cell of a JONSWAP spectrum and at a cell above the peak the
+derivative of the conservative transfer, estimated by finite differences,
+differs from the sum above by about a factor 2.
+In the direct mode the two differ by about 15\% at these cells, since
+$A_1$ also enters through the interpolated $A_2$ and $A_4$.
+The sum serves as the diagonal factor of the semi-implicit step.
+It is invariant under the conversion between $A$ and $E$ on the diagonal
+and is used directly in the update
+$E \leftarrow E + S\, \Delta t / (1 - \Delta t\, \p S/\p E)$.
+
+\subsection*{The backend in wim\_simple}
+
+The model selects the exact transfer by
+''snonlin\_backend''$\,=\,$'exact'.
+In each source step the model hands the variance density $E$ of a cell to
+the backend.
+The backend returns the transfer $S_{nl}$ of $E$ and the diagonal factor
+$\p S/\p E$.
+The settings of the backend are attributes of the object Snonlin in the
+module pyOM3.wim\_simple.snl\_exact.snonlin\_exact.
+They must be set before the setup of the model, since that setup builds the
+interaction table.
+The attributes and their defaults are
+\begin{itemize}
+\item g$\,=\,$9.81, the gravitational acceleration of the backend.
+It is not taken from the attribute grav of the model.
+A model with another value of grav needs the same value here.
+\item npts$\,=\,$24, the number $n_{\rm pts}$ of points per closed locus.
+The 128 points per locus quoted for the locus tests below refer to the
+routine trace\_locus, not to the operator.
+\item npts\_line$\,=\,$None, which gives $4\, n_{\rm pts}$ points per
+same-frequency line locus.
+\item pad\_hi$\,=\,$8, the number of tail rings.
+\item dfilt$\,=\,$0.025, the radius of the trivial-point filter in units
+of $|\v P|$.
+\item cache$\,=\,$None.
+A file name here stores the table in that file.
+A later setup with the same grid and the same settings reloads it.
+\item mode$\,=\,$'conservative', the assembly mode.
+The other choice is 'direct'.
+\item points$\,=\,$None, the list of cells $(i_x, i_y)$ to evaluate.
+None means all cells.
+\item max\_cells$\,=\,$64, the largest number of cells per call.
+With more cells the backend stops with an error.
+\item verbose$\,=\,$True, progress output during the table build.
+\end{itemize}
+Cells not in points get $S_{nl} = 0$ and $\p S/\p E = 0$.
+With the numpy backend of pyOM3 the indices $(i_x, i_y)$ count the interior
+cells of the local MPI rank, without halo.
+The frequency axis of the model must be geometric.
+The setup of the backend checks this and stops otherwise.
+
+\subsection*{Validation}
+
+The implementation is validated layer by layer; the quoted accuracies refer
+to the test battery shipped with the sub-package (test grids of 28--30
+frequencies and 24 directions).
+
+\begin{itemize}
+\item \emph{Kernel}: degenerate two-wave interaction coefficient to $4\cdot
+10^{-6}$ at the test offsets; on-shell symmetries, rotation, homogeneity and $g$-independence to
+$10^{-13}$; identity \eq{eq:xcwebb} with the WAVEWATCH III coupling routine
+to $3\cdot 10^{-13}$.
+\item \emph{Loci}: residuals $|z|$ at returned points $4 \cdot 10^{-14}$;
+crossings \eq{eq:crossings} exact; resonance closure of dimensional
+quadruplets $10^{-14}$ for both signs of $q$; line-delta quadrature against a
+brute-force two-dimensional integral to $5\cdot 10^{-5}$ (grid limited);
+measure scaling \eq{eq:measure} to $4 \cdot 10^{-15}$; quadrature of
+trace\_locus converged to $10^{-9}$ with 128 points per locus.
+\item \emph{Assembly}: action budget (transfer $+$ leak) closed to
+$10^{-15}$; rotation equivariance, isotropy and cubic homogeneity at
+machine precision; discrete self-similarity \eq{eq:selfsim} to
+$1.2 \cdot 10^{-7}$ for the closed loci on interior rings;
+trivial-filter insensitivity $0.6\%$ between filter widths $0.025$ and
+$0.05$.
+\item \emph{Equilibria}: constant $A$ null at $2\cdot 10^{-19}$ of the
+one-sided (gross) rate; Rayleigh--Jeans null at $7\cdot 10^{-5}$ with $O(h^2)$
+convergence; near-vanishing transfer for the Zakharov--Filonenko spectrum
+$E \propto \nu^{-4}$.
+\item \emph{Magnitude and shape}: mean JONSWAP transfer with the classic
+$(+,-,+)$ lobe structure.
+The maximum of the positive low-frequency lobe is
+$0.8$ times that of the WAM DIA.
+The DIA was itself tuned against exact computations
+(Hasselmann et al., 1985).
+This agreement rules out any residual power of $2\pi$ or $g$ in the
+normalisation chain.
+\item \emph{Independent exact code}: on identical input, and with the
+default interaction filtering of that code disabled, the transfer lobes agree
+with the exact-NL code of van Vledder (WAVEWATCH III / SWAN) at the level of
+a few percent (positive lobe ratio $0.96$, negative lobe ratio $1.02$ in the
+reference case), with the independent result bracketed between the direct and
+conservative modes, as expected for consistent discretisations of the same
+integral.
+\end{itemize}
+
+\subsection*{References}
+
+\noindent Hasselmann, K., 1962: On the non-linear energy transfer in a
+gravity-wave spectrum. Part 1. \emph{J. Fluid Mech.}, 12, 481--500. \\
+Hasselmann, S., K. Hasselmann, J.H. Allender and T.P. Barnett, 1985:
+Computations and parameterizations of the nonlinear energy transfer in a
+gravity-wave spectrum. Part II. \emph{J. Phys. Oceanogr.}, 15, 1378--1391. \\
+Krasitskii, V.P., 1994: On reduced equations in the Hamiltonian theory of
+weakly nonlinear surface waves. \emph{J. Fluid Mech.}, 272, 1--20. \\
+Stuhlmeier, R., 2024: Deterministic wave forecasting with the Zakharov
+equation. arXiv:2401.03539. \\
+Tracy, B.A. and D.T. Resio, 1982: Theory and calculation of the nonlinear
+energy transfer between sea waves in deep water. WES Report 11, US Army
+Corps of Engineers. \\
+van Vledder, G.Ph., 2006: The WRT method for the computation of non-linear
+four-wave interactions in discrete spectral wave models.
+\emph{Coastal Engineering}, 53, 223--242. \\
+Webb, D.J., 1978: Non-linear transfers between sea waves.
+\emph{Deep-Sea Res.}, 25, 279--298. \\
+Zakharov, V.E., 1968: Stability of periodic waves of finite amplitude on the
+surface of a deep fluid. \emph{J. Appl. Mech. Tech. Phys.}, 9, 190--194.
+
+\end{document}

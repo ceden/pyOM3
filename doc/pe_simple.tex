@@ -118,11 +118,12 @@ The buoyancy equation is integrated as
 \eeq
 with the advective buoyancy tendency
 \beq
-\delta b^n =  \vn \cdot \v u^{n} b^n + \p_z w^{n} b^n ~~,~~
+\delta b^n =  - \vn \cdot \v u^{n} b^n - \p_z w^{n} b^n ~~,~~
 \Bar{ \delta b}^{n+1/2} = A \delta b^n + B \delta b^{n-1} + C \delta b^{n-2}
  \eeq
  interpolated with the Adam-Bashforth (AB3) scheme  to time level $n+1/2$.
- Mixing is treated with an Euler forward step, or maybe implicit in case of vertical mixing.
+ The biharmonic horizontal mixing (attribute \verb|Khbi|) is treated with an Euler forward step.
+ Vertical mixing follows the options described in the section on vertical mixing and friction below.
  
 An intermediate velocity $\v u^*$ is calculated from
 \beq
@@ -143,7 +144,8 @@ From the vertically integrated continuity equation follows the condition
 \eeq
 which is solved with a conjugate-gradient iteration for $p_s^{n+1}$
 (attributes \verb|epsilon| for the convergence threshold and
-\verb|max_iterations|; a BiCGStab variant is implemented as an alternative).
+\verb|max_iterations|; a BiCGStab variant is implemented as well and is
+selected by editing the solver call in \verb|pressure.py|).
 The iteration count and the estimated error are available per step as
 \verb|congr_itts| and \verb|estimated_error|. The intermediate velocity is  then
 corrected as
@@ -195,16 +197,29 @@ a simple, dissipative  scheme proposed by Demange et al (2019) using the forcing
  - \theta   \vn \cdot \v U^{n+m/M}
  \rk
 \eeq
-with the transport $\v U^n = \int_{-h}^0 \v u^n dz$, and $\Bar{\v U}^{n+(m+1/2)/M}$ interpolated
+with the transport $\v U = \int_{-h}^0 \v u\, dz$, and $\Bar{\v U}^{n+(m+1/2)/M}$ interpolated
 with AB2.   Demange et al (2019)  found  $\theta=0.14$ to be the best choice in terms of phase error and damping.
-The new external mode is given by
+In the model $\theta$ is the attribute \verb|fb_theta| with default $0.14$.
+Larger values damp grid-scale barotropic waves more strongly.
+
+The sub cycle starts from the transport $\v U^n$ and the surface pressure $p_s^n$ which the
+sub cycle of the previous time step ended with.
+This transport is model state (\verb|U_bt|, \verb|V_bt|) and part of the restart.
+It is computed from the vertical integral of $\v u^n$ only at a cold start.
+Two transports result from the sub cycle.
+The transport at the end of the sub cycle, $\v U^{n+1} = \v U^{n+M/M}$, starts the next sub cycle.
+The average over the sub cycle
 \beq
-\v U^{n+1}=\frac{1}{M} \sum_{m=1}^{M} \v U^{n+m/M}  + \frac{\theta}{M} \lk  \v U^{n+1} - \v U^n  \rk 
+\tl{\v U}^{n+1}=\frac{1}{M} \sum_{m=1}^{M} \v U^{n+m/M}  + \frac{\theta}{M} \lk  \v U^{n+1} - \v U^n  \rk
 \eeq
-After the sub-cycling,  the barotropic part of the intermediate velocity is corrected 
+is used to correct the barotropic part of the intermediate velocity
 \beq
-  \v u^{n+1/2} = \v u^* -1/h \lk  \int_{-h}^0 \v u^* dz - \v U^{n+1} \rk 
+  \v u^{n+1/2} = \v u^* -1/h \lk  \int_{-h}^0 \v u^* dz - \tl{\v U}^{n+1} \rk
 \eeq
+The next sub cycle must not start from the average $\tl{\v U}^{n+1}$.
+That would pair the averaged transport with the surface pressure at the end of the sub cycle.
+This mismatch grows from step to step when the Courant number of the external
+gravity wave is large (Banerjee et al.\ 2024, the split-explicit solver of FESOM2).
 The buoyancy equation is integrated using $\v u^{n+1/2}$ and $w^{n+1/2} = - \int_{-h}^z \vn \cdot \v u^{n+1/2}$
 as
 \beq
@@ -212,10 +227,18 @@ as
 \eeq
 with the buoyancy tendency
 \beq
-\delta b^n =  \vn \cdot \v u^{n+1/2} b^n + \p_z w^{n+1/2} b^n
+\delta b^n =  - \vn \cdot \v u^{n+1/2} b^n - \p_z w^{n+1/2} b^n
  \eeq
  interpolated with AB3 to time level $n+1/2$.
  This scheme is one option in FESOM2.
+
+In both schemes the advective tracer flux through the surface face is zero by default, as in pyOM2.
+Under the linear free surface the vertical velocity $w$ at the surface face is not zero.
+A tracer that is uniform in space then changes in the surface cell at the rate $ b\, w|_{z=0} / \Delta z = - b\, \vn \cdot \int_{-h}^0 \v u\, dz / \Delta z$.
+With the attribute \verb|free_surface_tracer_flux| the flux through the surface face is
+$w\, b$ instead, with $w$ at the surface face and $b$ of the surface cell.
+A uniform tracer then stays uniform.
+This option is off by default.
 The external-mode treatment is selected by the attributes
 \verb|implicit_free_surface| and \verb|explicit_free_surface|: both false
 gives the rigid lid, the first the implicit free surface (both solved with
@@ -257,16 +280,37 @@ the vertical operator with zero-flux boundary conditions leaves the
 column-integrated momentum unchanged, the barotropic mode is not
 perturbed, and $w$ is re-diagnosed afterwards.
 
+\emph{Bottom friction.} Two options act on the velocity $\v u_b$ in the lowest wet cell
+of each $U$ and $V$ column. Both are off by default.
+Linear friction (\verb|enable_bottom_friction|) has the rate $r = r_{bot}$ in 1/s
+(attribute \verb|r_bot|).
+Quadratic friction has the rate
+$r = C_d |\v u_b| / \Delta z$ with the drag coefficient $C_d$ (attribute \verb|r_quad_bot|).
+It is switched on by
+\verb|enable_quadratic_bottom_friction|.
+Here $|\v u_b|$ is the speed in the bottom cell. The other velocity component is averaged
+to the $U$ or $V$ point from the four surrounding points.
+If both options are on, the two rates add.
+The friction is an implicit step on the bottom cell,
+\beeq
+ \v u_b^{new} = \v u_b / \lk 1 + \Delta t\, r \rk
+\eeeq
+In the rigid-lid and implicit free-surface scheme it is applied after the vertical friction.
+In the split-explicit scheme it is applied before the external mode is integrated.
+There the same bottom stress also acts on the transport inside the sub cycle.
+Every sub step divides $\v U$ by $1 + (\Delta t/M)\, r\, \Delta z / h$.
+
 \subsection*{TKE closure}
 
 The closure of Gaspar et al.\ (1990) is ported from pyOM2
 (\verb|tke.py|, mixin class). All closure constants are configuration
-attributes (set before \verb|init_tke|); the defaults are the pyOM2
-\verb|tke_module| defaults: $c_k = 0.1$, $c_\epsilon = 0.7$, $\alpha = 1$,
-$\ell_{min} = 10^{-12}\,$m, $\kappa_M^{max} = 100\,$m$^2$/s, and background
-floors $\kappa_M^{min} = \kappa_H^{min} = 10^{-5}\,$m$^2$/s (the floors play
-the role of pe\_simple's constant background $A_v$ and $\kappa$; pyOM2
-handles backgrounds separately and uses $\kappa_M^{min}=0$). Note that the
+attributes. They are set before \verb|init_tke|.
+The defaults are the pyOM2 \verb|tke_module| defaults $c_k = 0.1$, $c_\epsilon = 0.7$, $\alpha = 1$,
+$\ell_{min} = 10^{-12}\,$m and $\kappa_M^{max} = 100\,$m$^2$/s.
+The floors $\kappa_M^{min}$ and $\kappa_H^{min}$ of viscosity and diffusivity are zero by default, as in pyOM2.
+With the TKE closure on, the constant coefficients $A_v$ and $\kappa$ of the hierarchy above are not used.
+A background viscosity or diffusivity is therefore a choice of the configuration.
+It is made by setting the floors. Note that the
 pyOM2 configurations of the acc family deviate from the module defaults and
 set $\alpha = 30$ (a proxy for vertical TKE transport by pressure work,
 which spreads the surface-injected TKE substantially deeper) and
@@ -285,8 +329,75 @@ grow faster than the distance to the boundaries (two sweeps, pyOM2's
  \kappa_H = \kappa_M / \max(1, \min(10,\, 6.6\, Ri)), \qquad
  Ri = N^2 \kappa_M / K_{diss}
 \eeq
-Convection is contained in the closure: $\kappa_H = \max(\kappa_H, 1)$
-where $N^2 < 0$, which replaces the convective-adjustment option.
+There is no separate convective branch.
+Where $N^2 < 0$ the Richardson number is negative.
+The Prandtl number is then one and $\kappa_H = \kappa_M$, exactly as in pyOM2.
+This replaces the convective-adjustment option.
+The ratio $K_{diss}/\kappa_M$ in $Ri$ is the squared vertical shear of the friction operator.
+With \verb|mix_eulerian| (see below) it is $\pz{\bar{\v u}} \cdot \pz{} \lk \bar{\v u} + \v u_S \rk$.
+Without it, it is the squared shear of the model velocity.
+$N^2$ lives on the $W$ points, i.e.\ on the top face of each cell.
+At the surface face there is no cell above, so $N^2$ is copied from the face below, as in pyOM2.
+For \verb|eq_of_state| $=5$ the density of the upper cell is evaluated at the pressure of the
+lower cell and compared with the density of the lower cell (adiabatic displacement, as in pyOM2).
+
+Two sets of limits for the mixing length are available. They are selected by \verb|mxl_choice|.
+The default \verb|mxl_choice| $=1$ is the pyOM2 form named above.
+Its sweeps run in the order of \verb|tke.f90|.
+First a downward sweep from the surface limits $\ell_k \le \ell_{k+1} + \Delta z$.
+It starts from the unlimited value at the surface face.
+Then the value at the surface face is limited to $\ell \le \ell_{min} + z_0 + \Delta z$,
+with the roughness length $z_0$ given below.
+Finally an upward sweep from the bottom limits $\ell_k \le \ell_{k-1} + \Delta z$.
+The same length enters the diffusivity and the dissipation.
+With \verb|mxl_choice| $=2$ the limits of NEMO 4.2 are used (\verb|nn_mxl| $=3$ with \verb|ln_mxl0|).
+All lengths live on the $W$ points, i.e.\ at the top face of each tracer cell.
+The index $n$ counts these points upward. Here $n=1$ is the lowest point of the array
+and $n_s$ the surface face.
+The starting point is the buoyancy length
+\beeq
+ \ell_n = \max \lk \sqrt{2 e} / \sqrt{\max(N^2, 10^{-12}\,\mbox{s}^{-2})},\ \ell_{min0} \rk
+\eeeq
+with $\ell_{min0} = 0.04\,$m (attribute \verb|mxl_min0|).
+This floor is applied at all $W$ points, also at dry points where $e=0$.
+The surface value is then reduced to the surface length, $\ell_{n_s} = \min(\ell_{n_s}, \ell_0)$, with $\ell_0$ given below.
+Since $\ell_0$ is set before the downward sweep, it bounds the whole near-surface profile and not only the surface point.
+Two profiles are formed from $\ell_n$. Going downward from the surface the length is limited by the distance to the surface,
+\beeq
+ \ell^{up}_n = \min \lk \ell_n,\ \ell^{up}_{n+1} + \Delta z \rk, \quad n = n_s-1, \ldots, 1, \qquad \ell^{up}_{n_s} = \ell_{n_s}
+\eeeq
+Going upward from the bottom of the array the length is limited by the distance to the bottom,
+\beeq
+ \ell^{dwn}_n = \min \lk \ell_n,\ \ell^{dwn}_{n-1} + \Delta z \rk, \quad n = 2, \ldots, n_s, \qquad \ell^{dwn}_1 = \ell_1
+\eeeq
+The two sweeps run over the whole array, dry points included.
+In a column whose lowest wet cell lies above the bottom of the array, the $W$ point below the lowest wet cell is dry.
+There $\ell_n = \ell_{min0}$, so the lowest wet point gets $\ell^{dwn} \le \ell_{min0} + \Delta z$.
+In a column that is wet down to the bottom of the array the lowest point gets $\ell^{dwn}_1 = \ell_1$ without this limit.
+The diffusivity uses the geometric mean of the two profiles and the dissipation uses their minimum,
+\beeq
+ \ell_k = \sqrt{\ell^{up}\, \ell^{dwn}} , \qquad \ell_\epsilon = \min \lk \ell^{up},\ \ell^{dwn} \rk
+\eeeq
+$\ell_k$ replaces $\ell$ in the diffusivity $\kappa_M$, and $\ell_\epsilon$ replaces $\ell$ in the dissipation $c_\epsilon e^{3/2}/\ell$.
+The constant $c_\epsilon$ multiplies the dissipation here.
+Writing the dissipation as $e^{3/2}/\ell_\epsilon$ with $\ell_\epsilon = \min(\ell^{up}, \ell^{dwn})/c_\epsilon$ is the same.
+The surface length $\ell_0$ has two forms.
+Without a roughness length it follows Charnock's relation
+\beeq
+ \ell_0 = \kappa_{vk}\, \beta\, |\v \tau| / g
+\eeeq
+with the kinematic surface stress $\v \tau$, i.e.\ the stress divided by $\rho_0$,
+the von K\'arm\'an constant $\kappa_{vk} = 0.4$ (attribute \verb|mxl_kappa|)
+and the Charnock constant $\beta$ (attribute \verb|mxl_beta|).
+The default $\beta = 2\cdot 10^5$ is the value of NEMO. It gives $\ell_0 = 0.8\,$m at a stress of $0.1\,$Pa.
+The value $\beta = 2\cdot 10^4$ gives $\ell_0 = 0.08\,$m at the same stress.
+The modulus $|\v \tau|$ is formed pointwise from \verb|taux| and \verb|tauy|,
+or taken from \verb|tau_modulus| if the configuration provides it.
+With a roughness length $z_0 > 0$ (attribute \verb|z0_surf|) the surface length is $\ell_0 = \kappa_{vk}\, z_0$ instead.
+The coupled configurations set $z_0 = 1.6\, H_s$ with the significant wave height $H_s$ from the wave model.
+In both forms $\ell_0 \ge \ell_{min0}$.
+One halo exchange of $\ell_0$ is made per time step.
+A configuration whose stress carries valid halo values can avoid it by setting \verb|tau_halo_ok|.
 
 The discretisation follows pyOM2: backward Euler with the dissipation
 linearised in the diagonal ($c_\epsilon \sqrt{e^n}/\ell$ acting on
@@ -302,34 +413,72 @@ surface flux boundary condition added to that cell,
 selected by \verb|tke_surf_from_waves| (default on, falling back to the
 classical form if no wave flux is present; $\v \tau$ kinematic; the first
 form closes the energy cycle between the wave and ocean components, the
-second is the pyOM2 default and serves as the control experiment). No
+second is the pyOM2 default and serves as the control experiment).
+The classical form carries the factor one of pyOM2.
+Craig and Banner (1994) give $\alpha_{cb} |\v \tau|^{3/2}$ with $\alpha_{cb} \approx 100$.
+pe\_simple has no attribute for this factor.
+A configuration that wants it overloads \verb|_surface_forcing|,
+as \verb|setups/coupled_common/exp_ocean.py| does with \verb|EXP_ALPHA_CB|. No
 diffusive TKE, tracer or momentum flux passes through the surface face
 itself: the surface forcing enters only as the explicit flux above, which
 also removes a spurious shear production against the zero-velocity halo
-above the surface (a phantom no-slip lid). For wave-driven injection the
-downward mixing-length limiting sweep can be seeded with a surface
-roughness length (attribute \verb|z0_surf|, default $0$, e.g.\
-$1.6\,H_s$ from the wave model in the sense of Mellor \& Blumberg 2004),
-so the near-surface mixing length starts at the wave scale rather than
-at $O(\Delta z)$. If the
+above the surface (a phantom no-slip lid).
+For wave-driven injection a surface roughness length $z_0$ can be set
+(attribute \verb|z0_surf|, default $0$, e.g.\
+$1.6\,H_s$ from the wave model in the sense of Mellor \& Blumberg 2004).
+With \verb|mxl_choice| $=1$ it only raises the limit of the value at the surface face.
+The downward sweep runs before that limit is applied, so the mixing length below the surface face does not change.
+With \verb|mxl_choice| $=2$ it sets the surface length $\ell_0$ described above.
+If the
 surface cell is drained negative by buoyancy fluxes, the missing energy is
-added back and booked in \verb|tke_surf_corr| as in pyOM2, and
-$e \ge e_{min} = 10^{-12}$ is enforced.
+added back and booked in \verb|tke_surf_corr| as in pyOM2.
+There is no other floor on $e$, as in pyOM2.
+A floor $e \ge e_{min}$ is applied only if \verb|tke_min| $> 0$ is set.
+The initial value of $e$ in all wet cells is \verb|tke_init| $= 10^{-12}\,$m$^2$/s$^2$, as in the pyOM2 configurations.
 
-Energetic consistency is exact on the discrete level: vertical friction is
+Vertical friction is
 computed implicitly with $\kappa_M$ averaged to the $U$/$V$ points as in
-pyOM2 ($\overline{\kappa_M}^i$), and the shear production is diagnosed
+pyOM2 ($\overline{\kappa_M}^i$).
+A momentum flux exists only across a face between two wet $U$ (or $V$) cells, as in pyOM2.
+TKE is likewise exchanged only between two wet $W$ levels.
+The shear production is diagnosed
 from the same discrete operator with the updated velocities,
 \beq
  K_{diss} = \Bar{\, \overline{\kappa_M}^i \lk \pz{u^{n+1}} \rk^2 \,}^i
           + \Bar{\, \overline{\kappa_M}^j \lk \pz{v^{n+1}} \rk^2 \,}^j
 \eeq
-so the kinetic energy removed from the mean flow reappears in the TKE
-forcing without discretisation residual; $P_{diss} = \kappa_H N^2$ is the
+The backward-Euler friction step is $\v u^{n+1} - \v u^n = \Delta t\, \pz{} \lk \overline{\kappa_M}\, \pz{\v u^{n+1}} \rk$.
+Multiplying it by $\v u^{n+1}$ and integrating over the column gives the kinetic energy it removes,
+\beeq
+ \int_{-h}^0 \frac{|\v u^n|^2 - |\v u^{n+1}|^2}{2 \Delta t}\, dz
+ = \int_{-h}^0 \overline{\kappa_M} \lk \pz{\v u^{n+1}} \rk^2 dz
+ + \int_{-h}^0 \frac{|\v u^{n+1} - \v u^n|^2}{2 \Delta t}\, dz
+\eeeq
+The first term on the right is $K_{diss}$ and is the forcing of the TKE equation.
+The second term is the numerical dissipation of the backward-Euler step.
+It is of order $\Delta t$ and is not put into the TKE equation.
+The kinetic energy removed from the mean flow therefore reappears in the TKE forcing
+up to this term. $P_{diss} = \kappa_H N^2$ is the
 exact transfer of the implicit buoyancy mixing, evaluated with the
 \emph{updated} buoyancy (the tracer solve precedes the TKE step; using the
 pre-mixing $N^2$ over-drains the TKE whenever $\kappa_H \Delta t/\Delta z^2$
-is not small). In stand-alone column
+is not small).
+At the surface face $P_{diss}$ is the surface buoyancy flux instead, as in pyOM2,
+\beeq
+ P_{diss}(0) = - \frac{g}{\rho_0} \lk \frac{\p \rho}{\p T} F_T + \frac{\p \rho}{\p S} F_S \rk
+\eeeq
+Here $F_T$ and $F_S$ are the surface fluxes of temperature and salt into the ocean
+(K\,m/s and psu\,m/s, positive into the ocean).
+The configuration provides them as the attributes \verb|forc_temp_surface| and \verb|forc_salt_surface|.
+Surface cooling is thus a source of TKE.
+Without these attributes the term is zero.
+For \verb|eq_of_state| $=0$ the temperature is the buoyancy $b$ and $\p \rho / \p b = -\rho_0/g$ is used.
+pyOM2 uses zero there and has no surface buoyancy source of TKE for this equation of state.
+The surface $W$ cell has the thickness $\Delta z/2$.
+The TKE that enters it per unit area and time is therefore
+$F_e(0) + (\Delta z/2)\, J_s$ plus the correction \verb|tke_surf_corr| described above.
+Here $J_s = - P_{diss}(0)$ is the surface buoyancy loss.
+In stand-alone column
 tests the discrete TKE budget (surface flux $+$ shear production $=$
 dissipation $+$ buoyancy destruction $+$ storage) closes to machine
 precision.
@@ -354,6 +503,10 @@ $e$ and $N^2$ at the start of the step (so buoyancy mixing and friction
 use the same coefficients the transfers are paired with), vertical
 friction after the pressure correction, and the TKE step at the end of
 the time step.
+The density is evaluated once per time step, as in pyOM2.
+This happens after the vertical mixing of the tracers and before the TKE step.
+$N^2$ and $P_{diss}$ of the TKE step use this updated density.
+The hydrostatic pressure of the next time step is computed from the same density.
 
 
 \section*{Model parameters and options}
@@ -377,7 +530,8 @@ Attribute & Unit & Meaning \\
 \verb|dt| & s & time step \\
 \verb|eq_of_state| & --- & equation of state: $0$ (temperature carries the
   buoyancy, no salinity), $1$ (linear $\rho(S,T)$, salinity prognostic),
-  $100$ (ideal-gas atmosphere) \\
+  $5$ (GSW/TEOS-10, salinity prognostic, the pressure is the depth of the
+  cell centre below the surface in dbar), $100$ (ideal-gas atmosphere) \\
 \verb|implicit_free_surface| & --- & implicit free surface if true \\
 \verb|explicit_free_surface| & --- & split-explicit free surface if true;
   both false: rigid lid \\
@@ -409,11 +563,23 @@ Attribute / method & Meaning \\
 \hline
 \endhead
 \verb|set_forcing(tau)| & optional user method; adds forcing to the momentum
-  tendencies \verb|du[tau]|, \verb|dv[tau]| (enters the AB interpolation) \\
+  tendencies \verb|du[tau]|, \verb|dv[tau]| (enters the AB interpolation).
+  Surface fluxes of heat and salt are added to \verb|dtemp[tau]| and
+  \verb|dsalt[tau]| in the same way. Both schemes keep these tracer
+  increments \\
 \verb|set_forcing_direct()| & optional user method; direct momentum increment
   bypassing the AB weights, applied before the pressure solve. Used for the
   Stokes tendency $\Delta \v u_S$ of the Lagrangian-mean ($\v u_L$)
-  formulation, which must be a plain forward increment \\
+  formulation, which must be a plain forward increment.
+  It is called only in the rigid-lid and implicit free-surface scheme.
+  The split-explicit scheme does not call it \\
+\verb|forc_temp_surface| & surface flux of temperature into the ocean
+  (K\,m/s). It gives the surface buoyancy source $P_{diss}(0)$ of the TKE
+  equation. It does not force the tracer. That is done in \verb|set_forcing| \\
+\verb|forc_salt_surface| & the same for salt (psu\,m/s) \\
+\verb|tau_modulus| & optional modulus of the kinematic surface stress at the
+  $T$ points, used by \verb|mxl_choice| $=2$ instead of the pointwise modulus
+  of \verb|taux|, \verb|tauy| \\
 \verb|taux|, \verb|tauy| & kinematic wind stress; also the fallback surface
   TKE forcing $|\v \tau|^{3/2}$ \\
 \verb|phi_oc| & wave-breaking energy flux from the wave model; surface TKE
@@ -425,7 +591,7 @@ Attribute / method & Meaning \\
 
 \subsection*{Options with defaults}
 
-\begin{longtable}{@{}llp{7.6cm}@{}}
+\begin{longtable}{@{}llp{5.9cm}@{}}
 \hline
 Attribute & Default & Meaning \\
 \hline
@@ -437,7 +603,10 @@ Attribute & Default & Meaning \\
 \verb|Khbi| & unset & biharmonic horizontal tracer diffusion coefficient
   (m$^4$/s); active if present, forward Euler \\
 \verb|Ahbi| & unset & biharmonic horizontal friction coefficient (m$^4$/s);
-  active if present, forward Euler (rigid-lid/implicit path) \\
+  active if present, forward Euler. In the rigid-lid and implicit
+  free-surface scheme it is applied to $\v u$ before the AB update. In the
+  split-explicit scheme it is a tendency in the forcing $\v R^n$ of the
+  external mode \\
 \verb|vmix_scheme| & \verb|'explicit'| & vertical mixing/friction hierarchy:
   \verb|'explicit'| (forward Euler, coefficient checked against the
   diffusive stability limit) or \verb|'implicit'| (backward Euler,
@@ -450,6 +619,18 @@ Attribute & Default & Meaning \\
 \verb|kappa_conv| & $1$ & convective-adjustment diffusivity (m$^2$/s) \\
 \verb|enable_tke| & off & TKE closure; overrides the constant coefficients
   for both buoyancy and momentum (implicit scheme only) \\
+\verb|enable_bottom_friction| & off & linear bottom friction on the lowest
+  wet cell, rate \verb|r_bot| \\
+\verb|r_bot| & $0$ & rate of the linear bottom friction (1/s) \\
+\verb|enable_quadratic_bottom_friction| & off & quadratic bottom friction on
+  the lowest wet cell, rate $C_d |\v u_b|/\Delta z$ \\
+\verb|r_quad_bot| & $0$ & drag coefficient $C_d$ of the quadratic bottom
+  friction \\
+\verb|fb_theta| & $0.14$ & dissipation parameter $\theta$ of the
+  split-explicit sub cycle \\
+\verb|free_surface_tracer_flux| & off & tracer flux through the surface face.
+  Off means zero flux, as in pyOM2. On means $w\, b$ with the surface-cell
+  value, so a uniform tracer stays uniform \\
 \hline
 \end{longtable}
 
@@ -466,13 +647,27 @@ Attribute & Default & Meaning \\
   acc configurations use $30$ \\
 \verb|mxl_min| & $10^{-12}$ & mixing-length floor (m); acc configurations use
   $10^{-8}$ \\
-\verb|kappaM_min| & $10^{-5}$ & viscosity floor (m$^2$/s), plays the role of
-  the constant background $A_v$ \\
+\verb|kappaM_min| & $0$ & viscosity floor (m$^2$/s), as in pyOM2. A background
+  viscosity is set here \\
 \verb|kappaM_max| & $100$ & viscosity cap (m$^2$/s) \\
-\verb|kappaH_min| & $10^{-5}$ & diffusivity floor (m$^2$/s) \\
-\verb|tke_min| & $10^{-12}$ & TKE floor (m$^2$/s$^2$) \\
-\verb|z0_surf| & $0$ & surface roughness length (m) seeding the downward
-  mixing-length sweep (e.g.\ $1.6\,H_s$) \\
+\verb|kappaH_min| & $0$ & diffusivity floor (m$^2$/s). A background
+  diffusivity is set here \\
+\verb|tke_min| & $0$ & TKE floor (m$^2$/s$^2$), applied only if positive \\
+\verb|tke_init| & $10^{-12}$ & initial TKE in wet cells (m$^2$/s$^2$) \\
+\verb|mxl_choice| & $1$ & limits of the mixing length. $1$ is pyOM2,
+  $2$ is NEMO 4.2 with a separate length for the dissipation \\
+\verb|mxl_kappa| & $0.4$ & von Karman constant of the surface length
+  (\verb|mxl_choice| $=2$) \\
+\verb|mxl_beta| & $2\cdot 10^5$ & Charnock constant $\beta$ of the surface
+  length (\verb|mxl_choice| $=2$) \\
+\verb|mxl_min0| & $0.04$ & minimum surface and bottom length (m)
+  (\verb|mxl_choice| $=2$) \\
+\verb|tau_halo_ok| & off & set when \verb|taux|, \verb|tauy| carry valid halo
+  values. Saves the halo exchange of the surface length
+  (\verb|mxl_choice| $=2$) \\
+\verb|z0_surf| & $0$ & surface roughness length (m), e.g.\ $1.6\,H_s$.
+  Limits the value at the surface face (\verb|mxl_choice| $=1$) or sets the
+  surface length (\verb|mxl_choice| $=2$) \\
 \verb|tke_surf_from_waves| & on & surface TKE flux from the wave dissipation
   $\Phi_{oc}$; falls back to $|\v \tau|^{3/2}$ if no wave flux is present \\
 \verb|mix_eulerian| & off & vertical friction acts on the Eulerian mean
@@ -480,6 +675,26 @@ Attribute & Default & Meaning \\
   $K_{diss}^E$/$K_{diss}^L$ booking split \\
 \hline
 \end{longtable}
+
+\subsection*{Restart state}
+
+The model has no restart routine of its own. A configuration that continues a
+run must save the following fields and set them again before the next step.
+A restart is then bit-identical to the uninterrupted run.
+This is tested by \verb|pyOM3/test/pe/restart.py|, which holds the reference list.
+\begin{itemize}
+\item Always the fields \verb|u|, \verb|v|, \verb|w|, \verb|temp|, \verb|salt|, \verb|rho|, \verb|p_h| and \verb|p_s|.
+\item Always the three time levels of the tendencies \verb|du|, \verb|dv|, \verb|dtemp| and \verb|dsalt|.
+\item The time-level pointers \verb|tau|, \verb|taum1|, \verb|taum2| and the AB coefficients of the driving loop.
+The method \verb|loop| starts every call with a forward Euler step and the pointers $2,1,0$.
+A restart must therefore drive the time steps itself.
+\item With the TKE closure \verb|tke| and \verb|K_diss_v|.
+The diffusivities of a step are built from $K_{diss}$ of the previous step through the Richardson number.
+Without \verb|K_diss_v| the first step after the restart differs.
+\item With the split-explicit scheme \verb|du_cor|, \verb|dv_cor|, \verb|U_bt| and \verb|V_bt|.
+\item With \verb|mxl_choice| $=2$ \verb|taux| and \verb|tauy| (or \verb|tau_modulus|).
+The closure uses them at the start of the step, before \verb|set_forcing| sets the new stress.
+\end{itemize}
 
 \subsection*{Snapshot diagnostics}
 

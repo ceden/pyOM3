@@ -441,7 +441,8 @@ $\bar \sigma = \bar E/ \int (E/\sigma) d \theta d\nu$,
 air,water density  $\rho_a,\rho_o$, atmospheric friction velocity magnitude $u^{\star}$,
 with direction $ \theta^*$, deep water phase velocity $c = g/  \sigma$,
 and the parameter $\beta_{o} = 2.56 $.
-Other parameterisations are implemented as options.
+wim\_simple carries only this WAMDI pair of input and dissipation.
+The input of Janssen and the WAM4 dissipation are options of wim\_realistic.
 The mean frequency is clipped to the resolved spectral range,
 \beq
 \bar\sigma \leftarrow \min\!\left(\max(\bar\sigma,\, \sigma_0),\, \sigma_{N_\nu-1}\right)
@@ -450,8 +451,120 @@ The non-linear source term $S_{nl}$ is the discrete interaction approximation (D
 of Hasselmann et al.\ (1985), taken from WAM (cycle 7).
 A fortran version directly from the original WAM legacy code, 
 and two python versions (one with jax/jit acceleration, one pure numpy) are available.
-The attribute ''snonlin\_backend'' determines which one to use ('fortran'/'jax'/'numpy'), default is 'fortran';
-all versions give identical results.
+The attribute ''snonlin\_backend'' determines which one to use ('fortran'/'jax'/'numpy',
+or 'exact' for the reference integral described below).
+With the numpy backend of pyOM3 the default is 'fortran'.
+With the JAX backend the default is 'jax'.
+Under JAX the setting 'numpy' is replaced by 'jax', and the setting 'fortran' raises an error,
+since the Fortran code needs numpy arrays.
+The three DIA versions agree to round-off.
+The JAX version is a vectorised form of the WAM loop for the GPU.
+It is described in the section on the JAX backend below.
+
+\subsubsection*{An exact scattering integral as reference}
+
+In addition to the DIA, an exact evaluation of the scattering integral is
+implemented (sub-package snl\_exact, selected by
+''snonlin\_backend''$\,=\,$'exact'), intended as a reference for assessing the
+DIA and future parameterisations of $S_{nl}$ rather than as a source term for
+production integrations.
+For the action density $A(\v k)$ the four-wave kinetic equation for deep water
+reads
+\beq \label{eq:snl_exact}
+ S_{nl}(\v k_1) \;=\; \int G\,
+ \delta(\v k_1+\v k_2-\v k_3-\v k_4)\, \delta(\sigma_1+\sigma_2-\sigma_3-\sigma_4)\,
+ \lk A_3 A_4 (A_1+A_2) - A_1 A_2 (A_3+A_4) \rk \, d\v k_2\, d\v k_3\, d\v k_4
+\eeq
+with $A_i = A(\v k_i)$ and the deep-water coupling coefficient
+$G(\v k_1,\v k_2,\v k_3,\v k_4)$ of Webb (1978).
+Here $G$ is evaluated from the closed form of Webb's coupling coefficient.
+This closed form is ported from the routine xc\_webb of the exact-NL code of
+van Vledder (xnl) in WAVEWATCH III, and its result is divided by $g^2$.
+The canonical four-wave kernel $T$ of the Zakharov equation (Krasitskii, 1994)
+was derived independently from the water-wave Hamiltonian.
+It serves to verify the identity $G = 4 \pi (2\pi)^4 T^2$ on resonant
+quadruplets, which holds to a relative accuracy of $3 \cdot 10^{-13}$.
+
+The integral is evaluated with the Webb--Resio--Tracy (WRT) method: the
+wavenumber delta function eliminates $\v k_2$, and the frequency delta function
+reduces the remaining integration to a line integral along the resonance locus
+$\sigma(\v k_2) - \sigma(\v k_2 + \v P) + \sigma_1 - \sigma_3 = 0$ with
+$\v P = \v k_1 - \v k_3$, weighted by the inverse gradient of the frequency
+mismatch.
+In deep water the loci form a one-parameter family under scaling and rotation.
+On the geometric frequency grid with uniform directions the locus geometry,
+coupling coefficients and interpolation stencils are computed once per grid
+and stored in a table for $\theta_1 = 0$.
+The table covers every frequency pair $(i_1, i_3)$ of $\v k_1$ and $\v k_3$
+and all direction differences $\theta_3 - \theta_1$.
+It is applied to all other directions $\theta_1$ by integer shifts of the
+direction index, which is exact on the uniform direction grid.
+Same-frequency pairs, for which the locus degenerates to a straight line, are
+included separately.
+Action densities at the off-grid points $\v k_2, \v k_4$ are obtained by
+bilinear interpolation in $(\ln k, \theta)$.
+Before evaluation the backend appends by default ''pad\_hi''$\,=\,8$ frequency
+rings of a parametric $E \propto \nu^{-5}$ tail above the model frequencies.
+In each direction this tail is matched to $E$ at the last model frequency.
+Quadruplets with any member beyond the extended range are discarded entirely.
+This strict truncation preserves the equilibria of the operator on the
+extended grid exactly.
+For constant $A$ on that grid the discrete transfer vanishes at machine
+precision, and for the Rayleigh--Jeans spectrum $A \propto 1/\sigma$ it
+vanishes at the level of the interpolation error, converging quadratically
+with the grid spacing.
+These equilibrium properties refer to the operator without the parametric
+tail (''pad\_hi''$\,=\,0$).
+With the default tail a model spectrum of constant $A$ is continued by the
+$\nu^{-5}$ tail.
+The padded spectrum is then no equilibrium, and the transfer does not vanish.
+
+Two discretisations of \eq{eq:snl_exact} are available.
+They are selected by the attribute ''mode'' of the backend object
+\verb|pyOM3.wim_simple.snl_exact.snonlin_exact.Snonlin|, an instance of the
+class \verb|_SnonlinExact|.
+''mode'' is not an attribute of the model instance.
+Its default is 'conservative'.
+The 'direct' mode evaluates the collision integral for each $\v k_1$
+separately, in close analogy to other WRT implementations; the 'conservative'
+mode distributes each quadruplet contribution over all four wavenumbers with
+weights $(+,+,-,-)/4$ through the same interpolation stencils, which closes
+the total action budget of the discrete transfer to machine precision,
+including an explicit account of the action exchanged with the parametric
+tail.
+The two modes are independent discretisations of the same integral; their
+difference decreases with spectral resolution and serves as a built-in
+convergence diagnostic.
+For pointwise comparisons against reference transfers the 'direct' mode is
+preferable at moderate resolution, while the 'conservative' mode is
+appropriate whenever exact closure of the action budget matters.
+
+The implementation was validated against the equilibria above, against the
+near-vanishing of the transfer for the Zakharov--Filonenko spectrum
+$E \propto \nu^{-4}$, against the WAM DIA for the overall magnitude, and
+against the independent exact-NL code of van Vledder (as distributed with
+WAVEWATCH III and SWAN) run on identical input: with the interaction filtering
+of that code disabled, the transfer lobes of the two implementations agree at
+the level of a few percent for typical single-peaked test spectra, with the
+exact-NL result bracketed by the 'direct' and 'conservative' modes.
+The interface of the exact backend matches the other $S_{nl}$ backends,
+including the diagonal functional derivative $\p S_{nl}/\p E$ used by the
+semi-implicit time stepping.
+In both modes this derivative is that of the 'direct' rate at $\v k_1$.
+It is the derivative of the bracket in \eq{eq:snl_exact} with respect to $A_1$,
+accumulated over the table entries with $\v k_1$ in the first role.
+With the default 'conservative' mode it is therefore not the exact derivative
+of the returned transfer.
+Since the cost of an exact evaluation grows rapidly with spectral resolution
+and applies per horizontal grid point, the backend evaluates at most
+''max\_cells''$\,=\,64$ spectra per call.
+A call with more cells raises an error unless ''max\_cells'' is raised.
+Evaluation can be restricted to selected horizontal points through the
+attribute ''points'', a list of index pairs $(i_x, i_y)$ of interior cells.
+Its default None selects all cells.
+Cells not in ''points'' get $S_{nl} = 0$ and $\p S_{nl}/\p E = 0$.
+Like ''mode'', the attributes ''max\_cells'', ''points'' and ''pad\_hi'' belong
+to the backend object, not to the model instance.
 
 
 \subsection*{Stokes velocity}
@@ -461,9 +574,16 @@ Stokes velocity is
 \v u_S(z) =  \int \int 2 (k/\sigma) e^{2kz} \v k   E(\v k)  d \v k  
 = (2/g) \int_0^\infty  \sigma^3  e^{2k z } \int_0^{2 \pi}   \v s E  d\theta d \nu 
 \eeq
-with direction vector $\v s=(\sin \theta,\cos \theta)$. The frequency integral is calculated over the
-prognostic range of $\nu$, and the contribution by the high frequency tail is added.
-The latter part is given by
+with direction vector $\v s=(\sin \theta,\cos \theta)$.
+In the code the frequency integral is a sum over all model frequency bins.
+With \verb|mask_energy| this sum includes the diagnostic bins above the
+per-column cut-off, which hold the imposed $\nu^{-5}$ spectrum.
+The contribution by the high frequency tail is added to this sum.
+For the Stokes velocity the tail starts at the last model frequency bin.
+In \eq{eq:ushi} and \eq{eq:ushi-exact} below, $\nu_c$ and $E(\nu_c,\theta)$
+are therefore the frequency and the spectrum of that bin, which is also part
+of the resolved sum.
+The tail part is given by
   \beq \label{eq:ushi}
   \v u_S^{hi} = 
   (2/g) \int_{\nu_c}^\infty \int_0^{2 \pi}    \sigma^3  e^{2z \sigma^2/g}    \v s  E(\nu_c,\theta)  \nu_c^5  \nu^{-5} d\theta d \nu 
@@ -597,8 +717,21 @@ The contribution  by the high-frequency tail assuming the WAMDI dissipation scal
  %  -   \nu_c^5 \int_{\nu_c}^\infty\sigma  \gamma_{out}  \nu^{-5} d\nu \int_0^{2 \pi}     \v s  E(\nu_c,\theta)d \theta 
  %\\ = 
   (2 \pi)^3 \nu_c^4 \beta_{o} g^{-4}  \bar E^2 \bar \sigma^7 
- \int_0^{2 \pi}     \v s   E(\nu_c,\theta)  d \theta 
-   \eeq 
+ \int_0^{2 \pi}     \v s   E(\nu_c,\theta)  d \theta
+   \eeq
+In the code the resolved parts of \eq{eq:dztau} and \eq{eq:tauo} are sums
+over all model frequency bins.
+The frequency axis carries ghost (halo) bins on both sides.
+The tails \eq{eq:dztau-hi} and \eq{eq:tauo-hi} start at the first ghost bin
+above the last model frequency, and so do the tails \eq{eq:tauo-hi-in2} and
+\eq{eq:dztau-hi-in} of the alternative formulation below.
+In these tails $\nu_c$ is the frequency of the ghost bin and $E(\nu_c,\theta)$
+is the spectrum stored in it.
+The ghost bin holds the imposed $\nu^{-5}$ value only when \verb|mask_energy|
+is set and the cut-off lies below the ghost-bin frequency.
+Otherwise the ghost bin holds zero.
+The tails of the stress, of the stress force and of the \verb|'input'| booking
+then vanish, while the Stokes tail is still added.
 
 An alternative formulation of the tail stress follows from the equilibrium
 assumption that underlies the imposed $\nu^{-5}$ shape itself: for $\nu > \nu_c$
@@ -686,7 +819,7 @@ exchange term $C$ of \eq{eq_C} closes because $\v U$ is the adjoint of the
 profile assignment, i.e.\ because the same $Q$ appears on both sides of the
 depth integral. The discretisation preserves this structure: one common
 discrete kernel is used in all three methods of
-\verb|./pyOM3/wim/interface.py| (\verb|calc_stokes|, \verb|calc_stress_work|,
+\verb|./pyOM3/wim_simple/interface.py| (\verb|calc_stokes|, \verb|calc_stress_work|,
 \verb|calc_doppler_vel|), given by the cell integral of $Q$ over each ocean
 cell of thickness $\Delta z$ with centres $z_k$ and faces $z_{k \pm 1/2} = z_k
 \pm \Delta z/2$ (uppermost face at $z=0$),
@@ -735,7 +868,9 @@ $a = 2 \sigma_c^2/g$ its depth profile $B(t) = \nu_c [ e^{-a t} - \sqrt{\pi a t}
  + \frac{1 - (a S^2 + 1) e^{-a S^2}}{3 \sqrt{\pi} \, a^{3/2}} \right) \right]
 \eeq
 with $I(\infty) = \nu_c/(3 a)$, so that the discrete tail transport equals the
-exact value $(2\pi/3) \nu_c^2 \int \v s E(\nu_c,\theta) d\theta$. In tests the
+exact value $(2\pi/3) \nu_c^2 \int \v s E(\nu_c,\theta) d\theta$.
+As stated above, $\nu_c$ in \eq{eq:tailH} is the frequency of the ghost bin,
+while $\nu_c$ in \eq{eq:Istokes} is the frequency of the last model bin. In tests the
 column sums reproduce $\v \tau_o$ and the
 Stokes transport to machine precision; for a shallow column below a
 developed wind sea, however, a substantial part of the retained fraction $1 - e^{-2kD}$
@@ -775,9 +910,11 @@ propagation operator. For steady $\v U$ the rays conserve $\Omega = \sigma +
 \sigma \, \p_t A$ balances the ocean gain $-\int \v U \cdot \v k \, \p_t A$
 identically. Discretely, the flux-form advection conserves the action $\int A
 \, d\v k$ to machine precision, but not $\int \Omega A \, d \v k$: the
-nonlinear Superbee limiter leaves a residual (the frequency advection velocity
-$\dot \nu$ is already located on the $u$-centred frequency faces, so face
-staggering is not the cause). In tests with a wave packet refracted across a jet
+nonlinear Superbee limiter leaves a residual.
+The flux through the frequency face $i+1/2$ between the bins $i$ and $i+1$
+uses a frequency advection velocity $\dot \nu$ that the code evaluates with
+the bin-centre frequency $\nu_i$ and the Doppler gradients of bin $i$.
+This velocity is thus offset by half a bin from the face on which it is used. In tests with a wave packet refracted across a jet
 (moderate Doppler shift, $\max |\v U \cdot \v k|/\sigma \approx 0.3$) this
 $\Omega$-conservation defect amounts to about $1 \, \%$ of the gross local
 transfer rate $\int |\dot \sigma A| \, d\v k$ for the Superbee scheme,
@@ -804,7 +941,11 @@ integration yields
 \eeq
 with the forward difference $\delta \Omega$ of $\Omega$ across each cell
 face. Boundary terms vanish for closed and periodic boundaries (not for
-reflective ones, for which no correction is made). The possible leakage $D$
+reflective ones, for which no correction is made).
+With the option \verb|open_coasts| the face terms at the coast carry the
+energy that leaves the domain.
+They are therefore left out of $D$, and the outflow is booked separately
+(see the section on boundary conditions). The possible leakage $D$
 is split into contributions $\sum_{j,k} D_{j,k} = D$ per water column at
 discrete position $(j,k)$, with the shared horizontal face terms split
 half-half between neighbouring columns, and each $D_{j,k}$ is cancelled by a
@@ -816,8 +957,9 @@ that column,
                        { \sum_m \bar A_m \, (\delta_\nu \Omega_m)^2 }
 \eeq
 with $m$ running over all $\nu$ faces and directions $\theta$ at position
-$(j,k)$, and the weight $\bar A_m$ given by the face average of the action
-content of the two adjacent cells. Being a transport, $\tilde F$ leaves the
+$(j,k)$, and the weight $\bar A_m$ given by the face average
+$\bar A_m = (A_i + A_{i+1})/2$ of the action density $A$ of the two adjacent
+cells $i$ and $i+1$, not of their action content $A_i \Delta_i$. Being a transport, $\tilde F$ leaves the
 action conservation untouched, but by the same partial integration it changes
 the energy by $\sum_m \tilde F_m \, \delta_\nu \Omega_m = -D_{j,k}$. The
 frequency direction is chosen for the corrective flux since it is the only
@@ -829,7 +971,13 @@ the level of action, so that it acts as a small correction of the frequency
 propagation velocity rather than as a source term and positivity is not
 threatened, and the factor $\delta_\nu \Omega_m$ makes the denominator
 sign-definite, so that $\lambda$ exists whenever action is present at that
-position. Minimising the action-weighted amplitude
+position.
+The code applies a conditioning guard to each column.
+The correction is made only where the magnitude of the denominator of
+\eq{eq:efix} exceeds $10^{-3} \, |D_{j,k}| \, \Delta t$, both in the
+normalisation used in \verb|propagation.py|.
+Columns below this bound are left uncorrected with $\lambda = 0$, so that a
+near-zero denominator does not amplify the defect. Minimising the action-weighted amplitude
 $\sum_m \tilde{F}_m^2 / \bar A_m$ subject to this constraint yields the same
 form by the standard Lagrange-multiplier condition: among all conservative
 frequency-flux corrections that restore the energy, \eq{eq:efix} is the
@@ -854,7 +1002,7 @@ remains an option for future work.
  \subsection*{The coupling to the ocean}
  
  
- Stokes velocity, wave stress, and wave stress force are calculated in \verb|./pyOM3/wim/interface.py|.
+ Stokes velocity, wave stress, and wave stress force are calculated in \verb|./pyOM3/wim_simple/interface.py|.
  The methods there may be called and results passed to the ocean model.
  The velocity variable of the coupled ocean model is interpreted as the
  three-dimensional Lagrangian mean velocity $\v u_L = \v u + \v u_S$, with the
@@ -1141,10 +1289,11 @@ locally as
 (kinematic; $\rho_w \Phi_{oc}$ in W\,m$^{-2}$; WAM's PHIOC), computed from the
 same stored dissipation rate $\gamma_{out}$ and with the same spectral
 measures as the wave stress, and written to the coupling output both as the
-local field and as its domain integral in the energy-diagnostic record. The
-dissipation of the diagnostic $\nu^{-5}$ tail is included according to the
-\verb|tail_flux| switch described above (under \verb|'input'| together with
-the nonlinear cascade credit). The
+local field and as its domain integral in the energy-diagnostic record.
+Under \verb|tail_flux| $=$ \verb|'wamdi'| (the default) $\Phi_{oc}$ contains
+no tail contribution and covers the model frequency bins only.
+Only \verb|tail_flux| $=$ \verb|'input'| adds the analytic tail integral
+$I_\Phi$ and the nonlinear cascade credit. The
 field is the surface boundary condition for the flux $F$ of the turbulent
 kinetic energy (TKE) closure following Gaspar et al.\ (1990) in the ocean
 component ($\rho_w \Phi_{oc}$ as the surface TKE flux, in place of the
@@ -1211,15 +1360,29 @@ a safeguard, not a substitute for a proper time step.
 
 
 Lateral boundary conditions in $x$ and $y$ are periodic (attribute ''periodic\_in\_x''/''periodic\_in\_y''),
-closed, or reflective. Boundary conditions in frequency are always closed, in direction
+closed, reflective, or open. Boundary conditions in frequency are always closed, in direction
 always periodic.
 Lateral 
 reflection boundary conditions at coast lines are implemented  the same way as in the 
 IDEMIX2 in pyOM2.
 These are activated by setting the attribute ''enable\_reflection'' to true value'. 
-If undefined or false, the default of closed boundary are used where energy may pile up near the 
+If undefined or false, the default of closed boundary are used where energy may pile up near the
 boundary.
-Land mask is set in the template method   ''set\_topography'' in \verb|./pyOM3/wim/main.py|.
+Open (radiating) coasts are activated by the attribute ''open\_coasts''.
+A coastal face lies between a wet cell and a land cell, which includes the
+land ring of a closed outer boundary.
+On such a face the limited flux is replaced by the first-order upwind flux.
+Where the velocity points towards land, the upwind cell is the wet cell and
+action leaves the domain.
+Where it points away from land, the upwind cell is the land cell, where the
+action is zero, and nothing enters.
+''open\_coasts'' takes precedence over ''enable\_reflection''.
+The outflow is booked with the same Adams--Bashforth weights that step the
+action.
+The method \verb|coastal_loss()| returns the action, the intrinsic energy
+$\sigma A$ and the absolute energy $\Omega A$ that have left the domain since
+the start of the run.
+Land mask is set in the template method   ''set\_topography'' in \verb|./pyOM3/wim_simple/main.py|.
 
 
 \subsection*{Time stepping scheme}
@@ -1285,7 +1448,11 @@ floor removes, which equals the spurious action it injects and hence the
 energy-consistency cost of the clip --- is measured \emph{before} clipping and
 a warning is issued whenever it exceeds round-off scale relative to the total
 action, so a silently active floor cannot mask a genuine positivity violation;
-switching the floor off restores the raw scheme. Second, $\min A$ is monitored
+switching the floor off restores the raw scheme.
+With the numpy backend this check is made at every step.
+Under JAX it is made only every \verb|floor_check_steps| steps (default 100),
+with the clip mass of that step, since the comparison requires a transfer
+from the device to the host. Second, $\min A$ is monitored
 automatically every $O(100)$ steps against a relative round-off threshold and a
 warning names the remedy (larger $\epsilon$ or forward Euler): any
 limiter/time-scheme violation shows up there long before a blow-up.
@@ -1351,9 +1518,10 @@ the growth is treated explicitly and bounded by the limiter. It leaves the
 equilibrium ($S = 0$) unchanged and therefore does not affect the energy balance;
 it only alters the transient integration of the growth phase.
 
-After the source substep the energy is masked to zero on land, the
-high-frequency tail is re-imposed through \verb|imphftail|, and the action is
-recovered as $A = E/\sigma$ for the next propagation step.
+After the source substep the energy is masked to zero on land.
+If \verb|mask_energy| is set, the high-frequency tail is then re-imposed
+through \verb|imphftail|.
+Finally the action is recovered as $A = E/\sigma$ for the next propagation step.
 
 
 The time step of the propagation is limited by the advective CFL number based
@@ -1368,6 +1536,78 @@ cannot be cured by reducing the time step; the cure is the time scheme.
 Substantially larger time steps than the advective CFL allows would require an
 implicit or semi-Lagrangian treatment of propagation, at the cost --- for plain
 semi-Lagrangian --- of the exact (face-flux) energy conservation.
+
+
+\subsection*{The JAX backend}
+
+pyOM3 runs either with numpy, in parallel with MPI, or with JAX.
+The backend is chosen when pyOM3 is imported.
+The environment variable \verb|PYOM3_BACKEND=jax| selects JAX also when mpi4py is installed.
+The JAX backend is meant for GPUs, with one process per GPU.
+The JAX results agree with the numpy results to round-off.
+The test \verb|pyOM3/test/wim/jax_sharding.py| checks this to $10^{-12}$ for one, two and four shards.
+Notes on running on GPUs are collected in \verb|pyOM3/README_jax_gpu.md|.
+
+\emph{Domain decomposition.} Under JAX the two horizontal axes $y$ and $x$ of all arrays
+are sharded over $n_{pes,x} \times n_{pes,y}$ devices (\verb|decomposition_jax.py|).
+The spectral axes of direction and frequency are never sharded.
+Every shard carries its own halo ring.
+The global padded sizes are therefore $N_x = n_x + 2\, h\, n_{pes,x}$ and $N_y = n_y + 2\, h\, n_{pes,y}$,
+with $h$ the number of halo points.
+A slice that removes the halo on the $y$ or $x$ axis therefore removes only the outer halo.
+Operations on the interior cells use the interior mask \verb|maskI| instead.
+The halo exchange between neighbouring shards is done with \verb|ppermute|.
+
+\emph{Compiled time step.} A time step consists of three compiled (jitted) parts.
+The first is the propagation (\verb|_mk_advection| and \verb|_add_propagation|).
+The second is the Adams--Bashforth update with the outflow booking and the positivity floor (\verb|_ab_update|).
+The third is the source step (\verb|_source_update|).
+The model instance is a static argument of these parts.
+Attributes read inside them are therefore constants of the compiled program.
+Fields that change in time, the wind and the ocean currents, are passed as arguments.
+The sharded constants of the run, such as the masks, are passed as the argument \verb|consts|.
+The results are returned and written to the attributes outside the compiled parts.
+The check of the positivity floor needs a transfer from the device to the host.
+It is therefore made only every \verb|floor_check_steps| steps (default 100).
+
+\emph{Propagation.} Under JAX the propagation uses the array form (\verb|propagation_backend| $=$ 'numpy').
+The Fortran kernels need numpy arrays.
+Specular reflection at coasts uses a vectorised form of the reflection of the fluxes
+instead of the loop over the coastal cells.
+The compiled propagation contains optimisation barriers (\verb|jax.lax.optimization_barrier|).
+They separate the flux scheme, the energy fixer, the coastal loss sums and the flux divergence.
+XLA may not fuse the pieces across a barrier.
+Without the barriers XLA fused all pieces into one program.
+For $384 \times 384$ cells and $24 \times 25$ spectral bins on four GPUs this program took minutes per step,
+while each piece alone takes milliseconds.
+With numpy the barriers do nothing.
+
+\emph{Nonlinear transfer.} Under JAX the DIA is evaluated by \verb|snonlin_jax.py|.
+It has the same arithmetic as the WAM loop of \verb|snonlin_np.py| and \verb|Snonlin.f90|,
+but no loop and no scatter.
+The WAM loop runs over the centre frequency index $M_C$ and the two mirror halves
+$K_H \in \{0,1\}$ of the quadruplet.
+In the vectorised form these two loops become one group axis $g = 2(M_C-1) + K_H$.
+There are $G = 2 M_{LSTHG}$ groups, with $M_{LSTHG}$ the number of centre frequencies of WAM.
+The spectral values of all quadruplets are collected with index tables of shape $(G, n_d)$.
+The quadruplet arithmetic then runs on arrays of shape $(n_x, n_y, G, n_d)$.
+Each contribution is placed in its destination bin in two steps.
+First the directions are permuted into their destination direction bins.
+Then a matrix product over the group axis with a weight matrix of shape $(G, n_\nu)$
+adds it to its destination frequency.
+The weight matrices also hold the validity masks of the interior, high- and low-frequency
+branches of the WAM loop.
+All tables are built once with numpy at the setup.
+Without a scatter the result is deterministic on the GPU.
+The sums over the groups run in a different order than in the loop.
+The result therefore agrees with the Fortran and numpy versions to round-off.
+For a spectrum with $25$ frequencies and $24$ directions the largest relative difference was
+$8\cdot 10^{-16}$ in $S_{nl}$ and $6\cdot 10^{-16}$ in its derivative.
+On a CPU the loop forms are faster, since their slices per group stay in the cache.
+Under JAX the DIA is evaluated on all horizontal columns including the halo columns.
+In the shard layout a slice does not give the interior, and the DIA acts on each column separately.
+The exact scattering integral (\verb|snonlin_backend| $=$ 'exact') is a numpy code
+and cannot be used under JAX.
 
 
 \subsection*{Model parameters and options}
@@ -1406,6 +1646,8 @@ The constructor additionally takes the keyword arguments \verb|n_pes_x|,
 \verb|n_pes_y| (processor grid, default $1\times 1$; their product must equal
 the communicator size), \verb|halo_points| (default 1) and \verb|comm_in|
 (default: the MPI world communicator).
+Under JAX the product of \verb|n_pes_x| and \verb|n_pes_y| must not exceed the number
+of devices, and \verb|nx| and \verb|ny| must be divisible by \verb|n_pes_x| and \verb|n_pes_y|.
 
 \subsubsection*{Forcing and coupling fields}
 
@@ -1414,9 +1656,13 @@ the communicator size), \verb|halo_points| (default 1) and \verb|comm_in|
 Attribute & Default & Meaning \\
 \hline
 \endhead
-\verb|ustar| & required & friction velocity magnitude $u_\star$; scalar or
-  horizontal field (scalars are broadcast) \\
-\verb|udir| & required & wind direction $\theta^*$ (radians); scalar or field \\
+\verb|ustar| & required & friction velocity magnitude $u_\star$. A scalar is
+  accepted and broadcast only in the default configuration. With
+  \verb|limit_growth| or \verb|tail_flux| $=$ \verb|'input'| a horizontal
+  field including the halo points, of shape \verb|(Ny,Nx)|, is required \\
+\verb|udir| & required & wind direction $\theta^*$ (radians), scalar or
+  field. With \verb|tail_flux| $=$ \verb|'input'| a field of shape
+  \verb|(Ny,Nx)| including the halo points is required \\
 \verb|ocean_U|, \verb|ocean_V| & unset & Doppler velocity $\v U(\nu)$ provided
   by the coupler. If unset, all current effects (advection by currents,
   refraction, the energy fixer) are dormant \\
@@ -1433,15 +1679,23 @@ Attribute & Default & Meaning \\
 Attribute & Default & Meaning \\
 \hline
 \endhead
-\verb|snonlin_backend| & \verb|'fortran'| & DIA implementation:
-  \verb|'fortran'| (original WAM code; requires double precision),
-  \verb|'jax'| or \verb|'numpy'|; all give identical results \\
+\verb|snonlin_backend| & \verb|'fortran'| & $S_{nl}$
+  implementation. The DIA versions are \verb|'fortran'| (original WAM code,
+  double precision only), \verb|'jax'| and \verb|'numpy'|, which agree
+  to round-off. \verb|'exact'| selects the reference scattering
+  integral. The default is \verb|'fortran'| with the numpy backend and
+  \verb|'jax'| with the JAX backend. Under JAX \verb|'numpy'| is replaced by
+  \verb|'jax'|, and \verb|'fortran'| raises an error \\
+\verb|propagation_backend| & \verb|'fortran'| & propagation
+  kernels. \verb|'fortran'| uses the f2py kernels in
+  \verb|wim_simple/Propagation/| (double precision only), \verb|'numpy'| the
+  array form. Both give bit-identical results. The default is
+  \verb|'fortran'| with the numpy backend and \verb|'numpy'| with the JAX
+  backend, under which \verb|'fortran'| raises an error \\
 \verb|grav| & $9.81$ & gravitational acceleration \\
 \verb|rho_o| & $1024$ & reference water density. Currently unused inside the
   wave model: the air--water density ratio of the source terms is fixed at
   $1.225/1000$ \\
-\verb|z0| & $0.0002$ & roughness length; read only by the optional WAM input
-  parameterisation, inactive with the default WAMDI input \\
 \verb|mask_energy| & off & prognostic cut-off $\nu_c$ per column with the
   imposed $\nu^{-5}$ diagnostic tail (\verb|imphftail|); prerequisite for the
   equilibrium booking of \verb|tail_flux| $=$ \verb|'input'| \\
@@ -1450,6 +1704,9 @@ Attribute & Default & Meaning \\
   source feedback in the implicit denominator, \eq{eq:denomclamp} \\
 \verb|floor_action| & on & positivity floor $A \leftarrow \max(A,0)$ after the
   propagation step, with the clipped mass monitored and warned about \\
+\verb|floor_check_steps| & $100$ & JAX only. Interval in time steps at which
+  the clipped mass of the positivity floor is checked (with numpy at every
+  step) \\
 \verb|f_limiter| & \verb|'superbee'| & advection flux limiter:
   \verb|'superbee'| (second order) or \verb|'upwind'| (first order,
   diffusive, robust) \\
@@ -1457,6 +1714,12 @@ Attribute & Default & Meaning \\
   operator, \eq{eq:efix} \\
 \verb|enable_reflection| & off & specular reflection of the advective fluxes
   at coastlines \\
+\verb|open_coasts| & off & radiating coasts. Every face between a wet and a
+  land cell carries the first-order upwind flux, so action leaves the domain
+  and nothing enters from land. Takes precedence over
+  \verb|enable_reflection|. The outflow is booked, and \verb|coastal_loss()|
+  returns the action, intrinsic energy and absolute energy lost since the
+  start. These faces are left out of the defect of the energy fixer \\
 \verb|limit_fdot| & off & clip the refraction velocities $\dot\nu, \dot\theta$
   to a CFL bound \\
 \verb|refraction_cfl| & $0.5$ & the CFL bound used by \verb|limit_fdot| \\
@@ -1467,15 +1730,32 @@ Attribute & Default & Meaning \\
   the ocean: \verb|'wamdi'| (dissipation-rate continuation) or
   \verb|'input'| (equilibrium-range $\gamma_{in}$ integral plus nonlinear
   cascade credit) \\
+\verb|phioc_kernel| & \verb|'stokes'| & vertical kernel of
+  \verb|calc_phioc_work|, which distributes $\Phi_{oc}$ of each model
+  frequency bin over the ocean cells. \verb|'stokes'| uses the shared kernel
+  $Q = 2k e^{2kz}$ of \eq{eq:Qdz}. \verb|'orbital'| uses $k e^{kz}$, with
+  twice the decay depth. The tail and cascade credit of \verb|tail_flux|
+  $=$ \verb|'input'| go into the top cell \\
 \hline
 \end{longtable}
 
 \subsubsection*{Snapshot diagnostics}
 
-The netCDF snapshot class reads the attribute \verb|snapint| (snapshot
+The netCDF snapshot class \verb|snap_nc4| reads the attribute \verb|snapint| (snapshot
 interval in seconds, required) and takes the setup arguments
 \verb|snap_file_name| (default \verb|'snap.cdf'|) and
-\verb|show_each_time_step| (default on). The land mask is defined by
+\verb|show_each_time_step| (default on).
+The alternative class \verb|snap_raw| writes the block of every PE as
+\verb|.npy| files in float32 into a directory, without gathering.
+It reads \verb|snapint| as well, and its \verb|snap_file_name| is the
+directory name (default \verb|'raw_snap'|).
+The attribute \verb|snap_fields| is a tuple of the field names to write.
+By default it contains \verb|E_mean|, \verb|om_mean|, \verb|Hs|,
+\verb|E_f| and \verb|E_d|, where \verb|E_f| and \verb|E_d| are the spectrum
+integrated over direction and over frequency.
+Any other 2-D or 4-D attribute of the model may be named as well.
+The full spectrum \verb|E| is added on those snapshot steps that fall on a
+multiple of \verb|snapint_full| seconds (default 0, which means never). The land mask is defined by
 overloading the template method \verb|set_topography|; the default is an
 all-ocean domain, with closed outer boundaries generated automatically from
 \verb|periodic_in_x|/\verb|periodic_in_y|.
