@@ -9,7 +9,7 @@ Simple Python-based ocean and surface wave models.
 | `pyOM3/pe_simple` | Cartesian primitive equation model using JAX sharding or mpi4py for domain decomposition |
 | `pyOM3/pe_realistic` | Version of `pe_simple` with pseudo-spherical coordinates for large-scale realistic applications |
 | `pyOM3/nh_simple` | Non-hydrostatic ocean model with FFT solver based on pencil decomposition and MPI message passing |
-| `pyOM3/nh_realistic` | Version of `nh_simple` with topography and irregular boundaries, but with a slower CG solver |
+| `pyOM3/nh_realistic` | Non-hydrostatic ocean model based on `pyOM3/pe_realistic` with topography and irregular boundaries and a 3-D CG solver |
 | `pyOM3/wim_simple` | Simple spectral surface wave model using JAX sharding or mpi4py for domain decomposition |
 | `pyOM3/wim_realistic` | Version of `wim_simple` with pseudo-spherical coordinates for large-scale realistic applications |
 | `pyOM3/test` | Test suite for the pe, nh, and wim models |
