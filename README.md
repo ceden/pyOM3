@@ -1,32 +1,24 @@
 # python Ocean Model (pyOM3)
 
-Simple python-based ocean and surface wave models:
+Simple Python-based ocean and surface wave models.
 
+## Packages
 
-pyOM3/pe_simple:     Cartesian primitive equation model using Jax sharding 
-                     or mpi4py for domain decomposition
+| Package | Description |
+|---|---|
+| `pyOM3/pe_simple` | Cartesian primitive equation model using JAX sharding or mpi4py for domain decomposition |
+| `pyOM3/pe_realistic` | Version of `pe_simple` with pseudo-spherical coordinates for large-scale realistic applications |
+| `pyOM3/nh_simple` | Non-hydrostatic ocean model with FFT solver based on pencil decomposition and MPI message passing |
+| `pyOM3/nh_realistic` | Version of `nh_simple` with topography and irregular boundaries, but with a slower CG solver |
+| `pyOM3/wim_simple` | Simple spectral surface wave model using JAX sharding or mpi4py for domain decomposition |
+| `pyOM3/wim_realistic` | Version of `wim_simple` with pseudo-spherical coordinates for large-scale realistic applications |
+| `pyOM3/test` | Test suite for the pe, nh, and wim models |
 
-pyOM3/pe_realistic:  version of pe_simple with pseudo-spherical coordinates 
-                     for large-scale realistic applications 
+## Background
 
-pyOM3/nh_simple:     non-hydrostatic ocean model with FFT solver 
-                     based on pencil decomposition and MPI message parsing
+Based on pyOM2 and ps3D, using P3DFFT, JAX, etc.
 
-pyOM3/nh_realistic:  version of nh_simple with topography and irregular boundaries
-                     but with slower CG solver
-
-pyOM3/wim_simple:    simple spectral surface wave model using Jax sharding 
-                     or mpi4py for domain decomposition
-
-pyOM3/wim_realistic: version of wim_simple with pseudo-spherical coordinates 
-                     for large-scale realistic applications
-
-pyOM3/test:          suite of tests for pe, nh, and wim
-   
-based on pyOM2 and ps3D, using P3DFFT, JAX, etc.
-
-
-# Installation of pyOM3
+# Installation 
 
 pyOM3 consists of the Python packages pe_simple, pe_realistic, nh_simple, nh_realistic,
 wim_simple and wim_realistic. Required and optional Python packages are described 
@@ -116,7 +108,7 @@ The Makefiles find FFTW and the libraries of the compiler in `$CONDA_PREFIX`.
 With the packages of the system on Linux they are called with `make CONDA_PREFIX=/usr` instead.
 On Linux they set the paths of these libraries in the `.so` files with `patchelf`.
 
-## Running the model
+# Running the model
 
 A configuration is a Python script or Jupyter notebook, started with as many processes 
 as it expects, for instance `mpirun -np 6 python3 acc1.py` in `setups/acc`.
