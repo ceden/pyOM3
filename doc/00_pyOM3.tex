@@ -1,0 +1,274 @@
+\documentclass[12pt]{article}
+\usepackage{lineno}
+%\usepackage{ametsoc}
+\usepackage{natbib}
+\usepackage{a4wide}
+\usepackage{longtable}
+\usepackage{cancel}
+\usepackage{docmute}   % \include of the stand-alone documents below skips their preambles
+\usepackage{amsfonts}
+\usepackage{amssymb}
+
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex,colorlinks, citecolor=black,linkcolor=black,urlcolor=black]{hyperref}
+\definecolor{darkgreen}{rgb}{0.1,0.4,0.1}
+\definecolor{darkblue}{rgb}{0.1,0.1,0.3}
+
+
+
+\newif\ifdetail
+\global\detailfalse
+%\global\detailtrue
+
+\def\bem#1{\colorbox{green}{\em #1}}
+
+\newcommand{\beq}  { \begin{eqnarray} }
+\newcommand{\eeq}  { \end{eqnarray}}
+\newcommand{\beeq}  { \begin{eqnarray*} }
+\newcommand{\eeeq}  { \end{eqnarray*}}
+\newcommand{\eq }  [1]{Eq.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\eqs }  [1]{Eqs.~(\ref{#1})}
+\newcommand{\sect}  [1]{Sec.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\fig}  [1]{Fig.~\ref{#1}}   % Fig. #1
+\renewcommand{\v}[1]{{\mbox{\boldmath$ #1 $}}}  % Vektor durch Fettdruck
+\newcommand{\m}    [1]{{\bf  #1 }}              % Matrix in sans serif
+\newcommand{\gz}[1] {{{d #1} \over {dz}}}
+\newcommand{\pt}[1]{{\partial_t #1}}
+\newcommand{\ptt}[1]{{\partial_{tt} #1}}
+\newcommand{\pttt}[1]{{\partial_{ttt} #1}}
+\newcommand{\pttx}[1]{{{\partial^3 #1} \over {\partial t^2 \partial x}}}
+\newcommand{\ptty}[1]{{{\partial^3 #1} \over {\partial t^2 \partial y}}}
+\newcommand{\ptx}[1]{{{\partial^2 #1} \over {\partial t \partial x}}}
+\newcommand{\pty}[1]{{{\partial^2 #1} \over {\partial t \partial y}}}
+\newcommand{\pz}[1]{{\partial_z #1}}
+\newcommand{\pzz}[1]{{\partial_{zz} #1}}
+\newcommand{\px}[1]{{\partial_x #1}}
+\newcommand{\py}[1]{{\partial_y #1}}
+\newcommand{\pxi}[1]{{\partial_i #1}}
+\newcommand{\pxj}[1]{{\partial_j #1}}
+\newcommand{\pxk}[1]{{\partial_k #1}}
+\newcommand{\pb}[1]{{{\partial #1} \over {\partial b}}}
+%\newcommand{\pxy}[1]{{{\partial^2 #1} \over {\partial x \partial y}}}
+\newcommand{\pxy}[1]{\partial_{xy} #1}
+\newcommand{\pyy}[1]{\partial_{yy} #1}
+\newcommand{\pxx}[1]{\partial_{xx} #1}
+\newcommand{\kx}{{\bf k} \times}
+\newcommand{\dt}[1]{{{d #1} \over {d t}}}
+\newcommand{\Dt}[1]{{{D #1} \over {D t}}}
+\newcommand{\Div}[1]{ \nabla \cdot #1 }
+\renewcommand{\div}[1]{ \nabla_{yz} \cdot #1 }
+\newcommand{\Bar}[1]{ \overline{ #1} }
+\newcommand{\rvec} [1]{
+    \raisebox{-1.5ex}{$\stackrel{\textstyle #1}{\neg}$} }% rotierter Vektor
+\newcommand{\nablq}   {\rvec\nabla}                    % rotated nabla operator
+\newcommand{\Vec}[1]{\left(\begin{array}{c} #1 \end{array}\right) }
+%\renewcommand{\mho}{\mathcal{W}}
+\newcommand{\pn}[1]{{{\partial #1} \over {\partial n}}}
+\newcommand{\pnn}[1]{{{\partial #1} \over {\partial m}}}
+\newcommand{\ps}[1]{{{\partial #1} \over {\partial s}}}
+\newcommand{\p}{{\partial}}
+\newcommand{\vn}{{\v \nabla}}
+\newcommand{\lk}{\left(}
+\newcommand{\rk}{\right)}
+
+\newcommand{\tl}{\tilde}
+
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+
+\newcommand{\ep}{\epsilon}
+\newcommand{\erfc}{\mathrm{erfc}}
+
+\begin{document}
+
+\begin{center}
+{\LARGE Documentation of pyOM3}
+\end{center}
+
+\tableofcontents
+\clearpage
+
+\phantomsection
+\addcontentsline{toc}{section}{Overview}
+\section*{Overview}
+
+pyOM3 is a set of ocean and wave models in Python.
+Each model is a package in the directory \verb|pyOM3|.
+This document collects the documentation of all packages.
+Each documentation is a section of its own and can also be compiled alone.
+
+\begin{longtable}{@{}lp{8.6cm}r@{}}
+\hline
+Package & Model & Page \\
+\hline
+\endhead
+\verb|pe_simple| & primitive equations on a uniform Cartesian grid & \pageref{doc:pe_simple} \\
+\verb|pe_realistic| & pe\_simple with a variable grid, the sphere and isoneutral mixing & \pageref{doc:pe_realistic} \\
+\verb|nh_simple| & non-hydrostatic Boussinesq equations on a uniform grid, periodic in $x$ and $y$, with LES closures & \pageref{doc:nh_simple} \\
+\verb|nh_realistic| & pe\_realistic with a prognostic $w$ and a non-hydrostatic pressure, Cartesian grid & \pageref{doc:nh_realistic} \\
+\verb|wim_simple| & spectral wave model on a Cartesian grid & \pageref{doc:wim_simple} \\
+\verb|wim_realistic| & wim\_simple on the sphere & \pageref{doc:wim_realistic} \\
+--- & the exact scattering integral $S_{nl}$ of wim\_simple & \pageref{doc:wim_snl_exact} \\
+\hline
+\end{longtable}
+
+A realistic package is documented by its differences to the simple package.
+The documentation of pe\_realistic thus needs the one of pe\_simple.
+The same holds for nh\_realistic, which needs pe\_realistic and pe\_simple, and for wim\_realistic.
+
+The routine tests and their results are described in \verb|pyOM3/test/README_test_suite.md|.
+The coupled configurations are described in \verb|setups/README.md|.
+
+\phantomsection
+\addcontentsline{toc}{section}{Practical tips for programming}
+\section*{Practical tips for programming}
+
+This section lists the few things that are needed to write a configuration.
+Everything else is in the documentation of the packages.
+
+\subsection*{The model object}
+
+A model is a Python class.
+A configuration derives a class from the class \verb|model| of a package.
+It overloads the methods it needs, for instance \verb|set_coriolis|, \verb|set_topography|, \verb|set_initial_conditions| and \verb|set_forcing|.
+Additional parts such as the TKE closure of pe\_realistic or the LES closures of nh\_simple are further base classes in front, for instance \verb|class model(tke, pe_realistic.model.model)|.
+
+The object is created with the dictionary of parameters and the number of processes in $x$ and $y$,
+\begin{verbatim}
+   m = model(parameter, n_pes_x = 2, n_pes_y = 2)
+\end{verbatim}
+Every entry of the dictionary becomes an attribute of the object.
+All fields, grid arrays and parameters of the model are attributes of this one object.
+In \verb|setups/coupled_common/run.py| the object is called \verb|M|, in the tests \verb|m|.
+
+The time stepping is started with \verb|m.loop(n)| for $n$ time steps.
+Before that, the pe family needs \verb|m.prepare_for_run()| after the topography is set.
+nh\_simple and the wave models need \verb|m.setup()| after the object is created.
+The snapshot classes take the place of \verb|model| when output is wanted.
+
+\subsection*{Arrays and their dimensions}
+
+All fields carry halo points on every side of every axis.
+The size of an axis is therefore $N = n + 2 h$ with $n$ cells and $h$ = \verb|halo| halo points.
+The interior of a three-dimensional field \verb|a| is \verb|a[h:-h, h:-h, h:-h]|.
+
+The order of the axes differs between the packages.
+\begin{longtable}{@{}lll@{}}
+\hline
+Packages & Order & Shape \\
+\hline
+\endhead
+pe\_simple, pe\_realistic, nh\_realistic & $z, y, x$ & \verb|(Nz, Ny, Nx)| \\
+nh\_simple & $x, y, z$ & \verb|(Nx, Ny, Nz)| \\
+wim\_simple, wim\_realistic & direction, frequency, $y$, $x$ & \verb|(Nd, Nf, Ny, Nx)| \\
+\hline
+\end{longtable}
+\noindent
+Two-dimensional fields of the pe and wim families have the shape \verb|(Ny, Nx)|.
+nh\_simple stores its arrays in Fortran order, since its pressure solver needs that.
+All other packages use the order of numpy.
+
+In $z$ the index \verb|h| is the lowest cell and the index \verb|-h-1| is the surface cell, in all packages with $z$.
+The tendencies have a first axis of length 3 for the time levels of the Adams--Bashforth step.
+The tendency of $u$ at the current level is \verb|du[tau]|.
+
+The velocities sit on the faces of the cells, the tracers in the centres.
+$u$ with index $i$ sits at the eastern face of cell $i$.
+$v$ with index $j$ sits at the northern face of cell $j$.
+$w$ with index $k$ sits at the top face of cell $k$.
+The shift \verb|rollx(a,-1)| gives the value at $i+1$, and \verb|rollx(a,1)| the value at $i-1$.
+The same holds for \verb|rolly| and \verb|rollz|.
+
+\subsection*{The main variables}
+
+\begin{longtable}{@{}lp{10.6cm}@{}}
+\hline
+Package & Variables \\
+\hline
+\endhead
+pe\_simple & \verb|u|, \verb|v|, \verb|w|, \verb|temp|, \verb|salt|, \verb|rho|, the hydrostatic pressure \verb|p_h|, the surface pressure \verb|p_s|.
+  The masks \verb|maskT|, \verb|maskU|, \verb|maskV|, \verb|maskW|, the bottom index \verb|kbot|, the Coriolis parameter \verb|coriolis_t|.
+  The grid spacings are the numbers \verb|dx|, \verb|dy|, \verb|dz| \\
+pe\_realistic & as pe\_simple.
+  The grid spacings are one-dimensional arrays \verb|dxt|, \verb|dxu|, \verb|dyt|, \verb|dyu|, \verb|dzt|, \verb|dzw| and the coordinates \verb|xt|, \verb|xu|, \verb|yt|, \verb|yu|, \verb|zt|, \verb|zw|, all with halo.
+  \verb|dxt_x| has the shape \verb|(1,1,Nx)|, \verb|dyt_y| the shape \verb|(1,Ny,1)| and \verb|dzt_z| the shape \verb|(Nz,1,1)|, for use with three-dimensional fields.
+  \verb|dx|, \verb|dy| and \verb|dz| are None \\
+nh\_realistic & as pe\_realistic, and the non-hydrostatic pressure \verb|p_nh|, the tendency \verb|dw| and the mask \verb|maskWc| \\
+nh\_simple & \verb|u|, \verb|v|, \verb|w|, the buoyancy \verb|b|, the pressure \verb|p|.
+  The grid spacings are the numbers \verb|dx|, \verb|dy|, \verb|dz| \\
+wim\_simple, wim\_realistic & the wave action density \verb|A| \\
+\hline
+\end{longtable}
+
+\subsection*{Writing to arrays}
+
+\verb|OM.np| is numpy or jax.numpy, after \verb|import pyOM3 as OM|.
+The choice is made by the environment variable \verb|PYOM3_BACKEND|.
+Arrays of JAX cannot be changed in place.
+\verb|a[...] = b| therefore fails with JAX.
+\verb|a = OM.modify_array(a, index, b)| works with both and replaces \verb|a[index]| by \verb|b|.
+\verb|OM.add_to_array| adds instead.
+The result must always be assigned.
+
+After a field is set, \verb|m.apply_bc(a)| fills its halo points.
+It exchanges them with the neighbouring processes or wraps them in a periodic direction.
+Without it the halo points keep wrong values.
+
+\subsection*{Initial conditions with domain decomposition}
+
+With MPI each process holds the block of its cells and the halo around it.
+With JAX one array holds the whole domain, and every shard carries its own halo points inside that array.
+A field that is set by hand must follow this layout.
+
+The simplest way in the pe family is \verb|m.set_initial_conditions(u, v, temp, salt, p_s)|.
+It takes the fields of the whole domain without halo points, of the shape \verb|(nz, ny, nx)|.
+It cuts out the block of the process with MPI and inserts the halo points with JAX.
+\verb|p_s| is None for the rigid lid.
+Each process then holds the whole field once, which may need too much memory for a large model.
+
+In pe\_realistic and nh\_realistic the coordinates \verb|xt|, \verb|yt| and \verb|zt| already have the layout of the process.
+A field built from them is therefore correct with MPI and with JAX,
+\begin{verbatim}
+   T = 10 + 1e-3*m.zt[:,None,None] + 1e-6*m.xt[None,None,:] \
+          + 1e-6*m.yt[None,:,None]
+   m.temp = m.apply_bc(OM.np.asarray(T))*m.maskT
+\end{verbatim}
+The three terms together give the shape \verb|(Nz, Ny, Nx)|.
+This is the recommended way.
+
+In pe\_simple and wim\_simple there are no coordinate arrays.
+With MPI the local index $i$ has the global index $i - h + \verb|xs_pe| - 1$ of the interior cells, counted from 0.
+The same holds in $y$ with \verb|ys_pe|.
+The number of interior cells of the process is $\verb|Nx| - 2h$.
+In the pe family \verb|xe_pe| should not be used, since it is \verb|Nx| on a single process.
+With JAX the global index of a point depends on its shard.
+The function \verb|global_index| of \verb|pyOM3/test/pe/config.py| gives it for both cases.
+
+nh\_simple divides the domain in $y$ and $z$ and never in $x$.
+The local index $i$ has the global index $i - h + \verb|xs_pe| - 1$, and the same holds with \verb|ys_pe| and \verb|zs_pe|.
+\verb|pyOM3/test/nh/config.py| builds its initial fields in this way.
+
+After the fields are set, \verb|apply_bc| fills the halo points.
+In the pe family the density follows from \verb|get_rho| of \verb|pyOM3/density.py|.
+\verb|set_initial_conditions| does both.
+nh\_simple makes the initial velocity free of divergence with \verb|m.pressure_solver()|.
+nh\_realistic does this with \verb|m.nh_projection()|.
+
+\clearpage\phantomsection\label{doc:pe_simple}\addcontentsline{toc}{section}{pe\_simple}
+\include{pe_simple}
+\clearpage\phantomsection\label{doc:pe_realistic}\addcontentsline{toc}{section}{pe\_realistic}
+\include{pe_realistic}
+\clearpage\phantomsection\label{doc:nh_simple}\addcontentsline{toc}{section}{nh\_simple}
+\include{nh_simple}
+\clearpage\phantomsection\label{doc:nh_realistic}\addcontentsline{toc}{section}{nh\_realistic}
+\include{nh_realistic}
+\clearpage\phantomsection\label{doc:wim_simple}\addcontentsline{toc}{section}{wim\_simple}
+\include{wim_simple}
+\clearpage\phantomsection\label{doc:wim_realistic}\addcontentsline{toc}{section}{wim\_realistic}
+\include{wim_realistic}
+\clearpage\phantomsection\label{doc:wim_snl_exact}\addcontentsline{toc}{section}{The exact $S_{nl}$ of wim\_simple}
+\include{wim_snl_exact}
+
+\end{document}
