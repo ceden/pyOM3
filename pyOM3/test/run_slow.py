@@ -5,7 +5,10 @@ wim: 8w the sphere acceptance tests (great-circle ray, conservation over 3 d,
 closure on the sphere) and 7w the ecwam reference of the Janssen input, both
 run where they live, in wim_realistic/development/ (7w needs the f2py build
 of development/ecwam_ref, see the README there). 15 wim_simple against the
-classical growth and kinematics results and the exact S_nl (wim/benchmarks.py)."""
+classical growth and kinematics results and the exact S_nl (wim/benchmarks.py).
+J the jax layouts of pe, nhr and wim (jax_sharding.py: numpy reference, 1x1,
+1x2, 2x1, 2x2 shards and the 1x1, 2x2 layouts with halo_points = 2, on four
+fake CPU devices; about 30 min in all), when jax is installed."""
 import os, sys, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 FS = os.path.join(HERE, 'pe', 'free_surface'); TW = os.path.join(HERE, 'pe', 'twins')
@@ -26,6 +29,11 @@ else:
     print('7w ecwam twin skipped: build wim_realistic/development/ecwam_ref (make ECWAM=<ecwam clone>)')
 jobs += [('15 wim_simple benchmarks: PM growth, JONSWAP fetch law, swell c_g, Snell, DIA vs exact S_nl',
           os.path.join(HERE, 'wim'), ['benchmarks.py'])]
+if subprocess.run([sys.executable, '-c', 'import jax'], capture_output=True).returncode == 0:
+    jobs += [('J jax layouts, %s (jax_sharding.py, halo 1 and 2)' % fam, os.path.join(HERE, fam), ['jax_sharding.py'])
+             for fam in ('pe', 'nhr', 'wim')]
+else:
+    print('J jax layouts skipped: jax not installed')
 ok = True
 for name, cwd, cmd in jobs:
     print('=== ' + name, flush=True)

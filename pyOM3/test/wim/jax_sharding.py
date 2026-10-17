@@ -2,6 +2,7 @@
 
     python3 jax_sharding.py                 # everything, on 4 fake CPU devices
     python3 jax_sharding.py realistic 2 2   # one run, needs the references
+    python3 jax_sharding.py realistic 2 2 2 # the same with halo_points = 2
 
 Everything: for each kind ('simple', 'realistic', 'cartesian') first the
 numpy reference (PYOM3_BACKEND=numpy), then jax 1x1, 1x2, 2x1 and 2x2
@@ -15,7 +16,9 @@ reflect_flux of the JAX path against the loop), janssen (wim_realistic
 only: the Janssen input with its state tau_w through the pure source
 hooks), plus tail_flux='input' and the adiabatic path (sources=False).
 8 steps, the fields of config.FIELDS on the global interior (config.state
-unpads the inline shard halos).
+unpads the inline shard halos); A on its interior frequency bins and the
+two outermost ghost bins. Then 1x1 and 2x2 once more with halo_points = 2
+against the same references (test 16 on the jax layout).
 
 Tolerance 1e-12: jax and numpy differ by round-off (XLA fusion), about
 1e-15 here; decomposed shards differ from 1x1 by the per-shard compilation.
@@ -35,7 +38,16 @@ REF = lambda kind, name: os.path.join(HERE, 'jax_ref_%s_%s.npz' % (kind, name))
 TOL = 1e-12
 
 
-def run(kind, npx, npy, write_ref=False):
+def _split(st, h):
+    """A carries its frequency ghosts (Nf = nf + 2 halo): compare the interior
+    bins and the two outermost ghost bins separately (as test 16)"""
+    st = dict(st)
+    st['A_fghost'] = st['A'][:, [h - 1, -h]]
+    st['A'] = st['A'][:, h:-h]
+    return st
+
+
+def run(kind, npx, npy, write_ref=False, halo=1):
     import io, contextlib
     from config import small_model, step, state, line, OM   # config puts the tree on sys.path
     if write_ref and OM.jax or not write_ref and not OM.jax:
@@ -43,14 +55,14 @@ def run(kind, npx, npy, write_ref=False):
     ok = True
     for name, kw in CASES[kind]:
         with contextlib.redirect_stdout(io.StringIO()):
-            st = state(step(small_model(kind, n_pes_x=npx, n_pes_y=npy, **kw), 8))
+            st = _split(state(step(small_model(kind, n_pes_x=npx, n_pes_y=npy, halo=halo, **kw), 8)), halo)
         if write_ref:
             np.savez(REF(kind, name), **st); continue
         if not os.path.exists(REF(kind, name)):
             print('J wim_%s jax: no numpy reference' % kind); return False
         ref = np.load(REF(kind, name))
         d = max(float(np.max(np.abs(st[k] - ref[k]))/max(np.max(np.abs(ref[k])), 1e-300)) for k in st)
-        ok &= line('J wim %s jax %dx%d vs numpy, %s' % (kind, npx, npy, name), d, TOL)
+        ok &= line('J wim %s jax %dx%d%s vs numpy, %s' % (kind, npx, npy, ' halo 2' if halo > 1 else '', name), d, TOL)
     if write_ref:
         print('J wim %s: numpy references written' % kind)
     return ok
@@ -67,7 +79,8 @@ def run_all():
     ok = True
     for kind in ('simple', 'realistic', 'cartesian'):
         for backend, args in (('numpy', ('ref',)), ('jax', ('1', '1')), ('jax', ('1', '2')),
-                              ('jax', ('2', '1')), ('jax', ('2', '2'))):
+                              ('jax', ('2', '1')), ('jax', ('2', '2')),
+                              ('jax', ('1', '1', '2')), ('jax', ('2', '2', '2'))):     # halo_points = 2 (test 16)
             env['PYOM3_BACKEND'] = backend
             cmd = [sys.executable, os.path.abspath(__file__), kind] + list(args)
             r = subprocess.run(cmd, cwd=HERE, env=env, capture_output=True, text=True)
@@ -91,4 +104,5 @@ if __name__ == '__main__':
     kind = sys.argv[1]
     if sys.argv[2] == 'ref':
         sys.exit(0 if run(kind, 1, 1, write_ref=True) else 1)
-    sys.exit(0 if run(kind, int(sys.argv[2]), int(sys.argv[3])) else 1)
+    halo = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+    sys.exit(0 if run(kind, int(sys.argv[2]), int(sys.argv[3]), halo=halo) else 1)

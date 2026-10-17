@@ -6,7 +6,7 @@ import sys, os, time, importlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'vadv', 'ab3', 'halo'],   # 4 needs mpirun
             'nh':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'halo'],  # nh_simple (4 needs mpirun)
-            'nhr': ['realistic', 'twin_nh_simple', 'restart', 'halo'],                     # nh_realistic (4 needs mpirun; jax_sharding.py by hand)
+            'nhr': ['realistic', 'twin_nh_simple', 'restart', 'halo'],                     # nh_realistic (4 needs mpirun; jax_sharding.py in run_slow.py)
             'wim': ['reduction', 'identities', 'restart', 'operators', 'golden',
                     'symmetry', 'sources', 'budget', 'halo']}                           # wim_simple, wim_realistic (wim_idemix: not built)
 want = sys.argv[1:] or list(FAMILIES)

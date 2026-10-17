@@ -191,9 +191,18 @@ implicit and explicit; nh: lid and les; wim: default) -- the wider halo
 exchange and the ghost rows of every kernel; same tolerances, all exact
 where the halo 1 layouts are exact.
 
-nh_simple and nh_realistic needed no change. Not covered: the fortran
-propagation and DIA kernels under a wider halo (the suite runs the numpy
-backends; the kernels take `halo` as an argument) and the jax layouts.
+nh_simple and nh_realistic needed no change. The jax layouts: the three
+`jax_sharding.py` scripts (pe, nhr, wim) run the 1x1 and 2x2 shard layouts
+once more with `halo_points = 2` against the same numpy references (inline
+halos of width 2 per shard, the ppermute strips, unpad), and since Oct 17
+2026 `run_slow.py` runs them when jax is installed (about 30 min in all,
+too long for the fast part). Run Oct 17 2026 in the sandbox (jax 0.11, CPU): all
+153 lines pass, the halo-2 layouts at the same level as halo 1 (pe 1e-12,
+nhr 1e-10, wim 5e-15); no package change was needed for the jax layouts.
+Times on two cores: pe 6 min, nhr 6.5 min, wim 16 min.
+
+Not covered: the fortran propagation and DIA kernels under a wider halo
+(the suite runs the numpy backends; the kernels take `halo` as an argument).
 
 ## Slow part, nightly or before a release
 
@@ -402,9 +411,12 @@ numpy backends (no compiled module needed). All fields per GLOBAL index.
                          simple, realistic, cartesian x default, reflection,
                          janssen, tail_flux input, adiabatic; 8 steps, the
                          fields of config.FIELDS on the global interior,
-                         1e-12 (measured 3e-15). Not in run_fast.py: with
-                         every model instance tracing its jitted step anew
-                         it takes about 12 min on two cores (a persistent
+                         1e-12 (measured 3e-15). Since Oct 17 2026 also the
+                         1x1 and 2x2 layouts with halo_points = 2 against
+                         the same references (test 16 on the jax layout), and
+                         run_slow.py runs it when jax is installed: with
+                         every model instance tracing its jitted step anew it
+                         takes about 15 min on two cores (a persistent
                          compilation cache is set inside, see the docstring).
                          The whole fast family also runs under
                          PYOM3_BACKEND=jax (config.py and four tests were made
@@ -755,15 +767,17 @@ preconditioner (1000-3500 without it in this box).
                            physically irrelevant but not reproducible; an FFT
                            preconditioner would be the remedy if it matters
     nhr/jax_sharding.py    jax 1x1, 1x2, 2x1, 2x2 against numpy on 4 fake CPU
-                           devices, by hand as for pe, same eps_nh and
-                           tolerances (measured 2e-10 and 1e-6)
+                           devices, same eps_nh and tolerances (measured
+                           2e-10 and 1e-6); since Oct 17 2026 also 1x1 and
+                           2x2 with halo_points = 2, and run from run_slow.py
+                           when jax is installed
 
 ## Layout
 
     pyOM3/test/
         common.py            helpers shared by the families
         run_fast.py          tests 1-6 of every built family, prints the table
-        run_slow.py          tests 7-9
+        run_slow.py          tests 7-9, 15, and the jax layouts (J)
         pe/                  reduction, identities, restart, decomposition,
                              operators, golden (+ golden.json), vadv, ab3, halo,
                              free_surface/, twins/
