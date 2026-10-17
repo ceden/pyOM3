@@ -14,7 +14,8 @@ wind- and buoyancy-forced box, 16 x 12 x 10 cells, with the TKE closure.
                              (free surface), mxl_choice, tracer_flux
                              (free_surface_tracer_flux), vadv
                              (vadv_sub_cycling), n_pes_x, n_pes_y,
-                             comm, nsteps-independent.
+                             comm, halo (halo_points, default 1; halo.py
+                             runs the model with 2 and 3), nsteps-independent.
   step(m, n, ab)             n steps of the model's own time_step_*; ab = weights
                              (default pyOM2's AB2 eps 0.1) or 'ab3' (ramped)
   state(m)                   dict of the interior prognostic fields (numpy)
@@ -61,7 +62,7 @@ def _grids(kind):
 
 
 def small_model(kind='realistic', explicit=False, mxl_choice=1, tracer_flux=False,
-                n_pes_x=1, n_pes_y=1, comm=None, Ahbi=1e11, quiet=True, vadv=0):
+                n_pes_x=1, n_pes_y=1, comm=None, Ahbi=1e11, quiet=True, vadv=0, halo=1):
     if kind == 'simple':
         from pyOM3.pe_simple.model import model as _base
         from pyOM3.pe_simple.tke import tke as _tke
@@ -81,7 +82,7 @@ def small_model(kind='realistic', explicit=False, mxl_choice=1, tracer_flux=Fals
                kappa_T=1e-5, A_v=1e-4, Ahbi=Ahbi, biha_friction_cosPower=1.0,
                epsilon=1e-12, max_iterations=5000)
     par.update(_grids(kind))
-    kw = dict(n_pes_x=n_pes_x, n_pes_y=n_pes_y)
+    kw = dict(n_pes_x=n_pes_x, n_pes_y=n_pes_y, halo_points=halo)
     if comm is not None:
         kw['comm_in'] = comm
     if quiet:

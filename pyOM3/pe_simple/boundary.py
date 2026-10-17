@@ -326,7 +326,7 @@ class boundary(decomposition_mpi,decomposition_jax):
           return a
 
 
-      def gather_array_mpi(self,a):   # todo: account for other halo sizes
+      def gather_array_mpi(self,a):
           """
           returns array of complete domain gathered by PE0 
           works for 2D and 3D distributed domains
@@ -334,7 +334,7 @@ class boundary(decomposition_mpi,decomposition_jax):
           z = slice(self.halo,-self.halo) if len(a.shape) == 3 else None
         
           nx, ny = self.get_full_domain_extent()
-          nz = self.Nz-2
+          nz = self.Nz-2*self.halo
           
           # transfer local domain
           if self.my_pe==0:

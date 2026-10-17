@@ -136,6 +136,65 @@ tests use (1.6, -0.6, 0), pyOM2's AB2 with eps 0.1, as the coupled runs do
 
 Test 4 has a fourth case, 'ab3' (implicit path, M = 2, AB3).
 
+### 16. Halo width (`<family>/halo.py`, all four families)
+
+The small model with `halo_points = 2` and `3` against the default `1`,
+after six steps, every field of the family's `state`, bit for bit on one
+PE. Nothing in the discrete problem changes with the halo width, so a
+difference is an index that counts from the array edge instead of from the
+halo, a sum that runs over halo points, or a grid recursion anchored in the
+halo. `small_model` of every family takes `halo=` for this.
+
+* pe: pe_realistic and pe_simple, implicit and explicit, mxl 2, vadv 2 with
+  AB3, tracer_flux.
+* nh: lid, superbee + tke, smagorinsky, biharmonic, periodic in z.
+* nhr: nh_realistic implicit and explicit (p_nh included).
+* wim: wim_realistic, wim_simple, reflection, janssen, adiabatic. The halo
+  width also sets the number of ghost bins of the f and d axes, so A is
+  compared on its interior bins and on the two outermost ghost bins (where
+  the tail lives) separately.
+
+Writing it (Oct 17 2026) found three things, all fixed in the delivered
+package files; the halo 1 results are unchanged bit for bit (golden,
+restart, twins untouched):
+
+1. `pe_simple/main.py` and `pe_realistic/main.py` make_topo_masks compared
+   `kbot` with the array index `k` instead of the level number
+   `k - halo + 1`, so with `halo_points > 1` the whole topography sat
+   `halo - 1` levels too deep (every mask wrong, salt 1.0 relative).
+2. `pe_realistic/grid.py` and `wim_realistic/grid.py` ran the u-centered
+   grid recursion over the whole extended array, anchored at the outermost
+   ghost point: the coordinates moved at round-off with the halo width
+   (1e-14 in the fields), and on a PERIODIC axis with variable spacing by
+   O(dx) (wim: xt 8e-3 deg, 1e-5 in A), because the periodic image spacings
+   in the ghosts enter the recursion. New `u_centered_grid_halo`: the
+   recursion runs on the array with one ghost per side (the halo 1 grid,
+   bit for bit) and is continued outward over the remaining ghosts.
+3. `wim_simple/main.py` set_grid filled only the outermost ghost bin of
+   ft, fu, dft, dfu and theta; the inner ghost bins of a wider halo had
+   omega = 0 (division by zero in every source term and in the
+   propagation). Every ghost bin now continues the axis (f with the edge
+   spacing, theta periodic).
+4. `pe_simple/decomposition_mpi.py` (used by pe_realistic and
+   nh_realistic too) set the first global index of a block to
+   `(my_blk - 1) * blk + halo` instead of `+ 1`: xs_pe is a 1-based global
+   interior index and does not depend on the halo width. With halo 2
+   every block was one point short (pe_realistic's grid layout check
+   raised). Found by test 4 under MPI, see below.
+5. `pe_simple/boundary.py` gather_array_mpi took the number of levels as
+   `Nz - 2` instead of `Nz - 2 halo` (the todo in its header). Used by the
+   snapshots and the tests; same packages as 4.
+
+Under MPI, test 4 of every family now runs its first path(s) once more
+with `halo_points = 2` against the same serial references (pe and nhr:
+implicit and explicit; nh: lid and les; wim: default) -- the wider halo
+exchange and the ghost rows of every kernel; same tolerances, all exact
+where the halo 1 layouts are exact.
+
+nh_simple and nh_realistic needed no change. Not covered: the fortran
+propagation and DIA kernels under a wider halo (the suite runs the numpy
+backends; the kernels take `halo` as an argument) and the jax layouts.
+
 ## Slow part, nightly or before a release
 
 ### 7. pyOM2 twins
@@ -706,14 +765,15 @@ preconditioner (1000-3500 without it in this box).
         run_fast.py          tests 1-6 of every built family, prints the table
         run_slow.py          tests 7-9
         pe/                  reduction, identities, restart, decomposition,
-                             operators, golden (+ golden.json), free_surface/, twins/
+                             operators, golden (+ golden.json), vadv, ab3, halo,
+                             free_surface/, twins/
         nh/                  reduction, identities, restart, decomposition,
-                             operators, golden (+ golden.json)
+                             operators, golden (+ golden.json), halo
         nhr/                 realistic, twin_nh_simple, restart, decomposition,
-                             jax_sharding (on the pe configuration)
+                             halo, jax_sharding (on the pe configuration)
         wim/                 reduction, identities, restart, decomposition,
                              operators, golden (+ golden.json), symmetry, sources,
-                             budget; benchmarks (slow); the sphere and ecwam slow
+                             budget, halo; benchmarks (slow); the sphere and ecwam slow
                              tests stay in wim_realistic/development/
         coupled/             test 9
 

@@ -7,7 +7,9 @@ Run under MPI, from this directory:
     mpirun -np 2 python3 decomposition.py 2 1          -> x-split, 1e-12 (the CG's global sums reduce in rank order)
     mpirun -np 4 python3 decomposition.py 2 2
 
-Each decomposed run checks both paths against their serial reference. The
+Each decomposed run checks the four paths against their serial reference,
+and the implicit and explicit path once more with halo_points = 2 (the
+halo width test 16 under MPI, same references, same tolerances). The
 explicit path exchanges U, V, p_s every sub step and carries U_bt, so it has
 more layout-sensitive pieces than the implicit one. Without MPI (one rank
 without arguments) it says so."""
@@ -33,8 +35,12 @@ def run(argv):
     if len(argv) < 3:
         print('4 decomposition: skipped (run under mpirun with NPX NPY, see docstring)'); return True
     npx, npy = int(argv[1]), int(argv[2]); ok = True
-    for explicit, name, vadv, ab in PATHS:
-        st = gathered_state(step(small_model(comm=comm, n_pes_x=npx, n_pes_y=npy, explicit=explicit, vadv=vadv), 8, ab))
+    # the four paths with the default halo, then the implicit and the explicit
+    # path with halo_points = 2 (test 16 under MPI: the wider halo exchange and
+    # the ghost rows of every kernel) against the SAME serial references
+    for explicit, name, vadv, ab, halo in [p + (1,) for p in PATHS] + [p + (2,) for p in PATHS[:2]]:
+        st = gathered_state(step(small_model(comm=comm, n_pes_x=npx, n_pes_y=npy, explicit=explicit, vadv=vadv,
+                                             halo=halo), 8, ab))
         if comm.Get_rank() != 0:
             continue
         if not os.path.exists(REF(name)):
@@ -43,7 +49,7 @@ def run(argv):
         d = max(float(np.max(np.abs(st[k] - ref[k]))/max(np.max(np.abs(ref[k])), 1e-300)) for k in st)
         # explicit path: halo exchanges only, no global reduction -> exact in every
         # layout; implicit: the CG's dot products reduce in rank order -> x-splits 1e-12
-        ok &= line('4 decomposition %dx%d vs 1 PE, %s' % (npx, npy, name), d,
+        ok &= line('4 decomposition %dx%d vs 1 PE, %s%s' % (npx, npy, name, ', halo 2' if halo > 1 else ''), d,
                    0.0 if (npx == 1 or explicit) else 1e-12)
     return bool(comm.bcast(ok, root=0))
 

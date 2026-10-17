@@ -319,21 +319,25 @@ class main(boundary):
           self.dft[1:] = self.fu[1:] - self.fu[:-1]
           self.dft[0]  = self.dfu[0]
           
-          self.dft = OM.np.pad(OM.np.asarray(self.dft), pad_width=self.halo)  
-          self.dft = OM.modify_array(self.dft, 0,  self.dft[ 1]  )
-          self.dft = OM.modify_array(self.dft,-1,  self.dft[-2]  ) 
-
-          self.dfu = OM.np.pad(OM.np.asarray(self.dfu), pad_width=self.halo)  
-          self.dfu = OM.modify_array(self.dfu, 0,  self.dfu[ 1]  )
-          self.dfu = OM.modify_array(self.dfu,-1,  self.dfu[-2]  ) 
-          
-          self.ft  = OM.np.pad(OM.np.asarray(self.ft), pad_width = self.halo) 
-          self.ft = OM.modify_array(self.ft, 0,  self.ft[ 1] - self.dft[ 0] )
-          self.ft = OM.modify_array(self.ft,-1,  self.ft[-2] + self.dft[-1] ) 
-
-          self.fu  = OM.np.pad(OM.np.asarray(self.fu), pad_width = self.halo) 
-          self.fu = OM.modify_array(self.fu, 0,  self.fu[ 1] - self.dfu[ 0] )
-          self.fu = OM.modify_array(self.fu,-1,  self.fu[-2] + self.dfu[-1] )   
+          # ghost bins: every one of the halo ghosts on each side (not only
+          # the outermost) gets the spacing of the last interior bin and the
+          # coordinate continued with it, so that omega_t, dft, dfu are
+          # non-zero in all ghost bins for any halo_points (Oct 17 2026)
+          h = self.halo
+          self.dft = OM.np.pad(OM.np.asarray(self.dft), pad_width=h)  
+          self.dfu = OM.np.pad(OM.np.asarray(self.dfu), pad_width=h)  
+          self.ft  = OM.np.pad(OM.np.asarray(self.ft), pad_width=h) 
+          self.fu  = OM.np.pad(OM.np.asarray(self.fu), pad_width=h) 
+          for i in range(h-1, -1, -1):
+              self.dft = OM.modify_array(self.dft, i,  self.dft[h]  )
+              self.dfu = OM.modify_array(self.dfu, i,  self.dfu[h]  )
+              self.ft  = OM.modify_array(self.ft,  i,  self.ft[i+1] - self.dft[i] )
+              self.fu  = OM.modify_array(self.fu,  i,  self.fu[i+1] - self.dfu[i] )
+          for i in range(-h, 0):
+              self.dft = OM.modify_array(self.dft, i,  self.dft[-h-1]  )
+              self.dfu = OM.modify_array(self.dfu, i,  self.dfu[-h-1]  )
+              self.ft  = OM.modify_array(self.ft,  i,  self.ft[i-1] + self.dft[i] )
+              self.fu  = OM.modify_array(self.fu,  i,  self.fu[i-1] + self.dfu[i] )
                      
           self.omega_t = 2*OM.np.pi*self.ft
           self.omega_u = 2*OM.np.pi*self.fu
@@ -341,9 +345,10 @@ class main(boundary):
           # set directional axis
           self.dd = 2*OM.np.pi/self.nd
           self.theta = OM.np.arange(self.nd)*self.dd + self.dd/2
-          self.theta = OM.np.pad(self.theta, pad_width = self.halo)  
-          self.theta = OM.modify_array(self.theta, 0,  self.theta[-2]  )
-          self.theta = OM.modify_array(self.theta,-1,  self.theta[ 1]  )                          
+          self.theta = OM.np.pad(self.theta, pad_width = h)  
+          for i in range(h):                     # periodic wrap of every ghost bin
+              self.theta = OM.modify_array(self.theta, i,      self.theta[-2*h + i] )
+              self.theta = OM.modify_array(self.theta, -h + i, self.theta[ h + i]   )
           self.costh = OM.np.cos(self.theta)
           self.sinth = OM.np.sin(self.theta)  
           # face angles theta + dd/2 (the upper face of bin k, where the

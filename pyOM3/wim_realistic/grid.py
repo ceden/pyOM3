@@ -71,6 +71,31 @@ def u_centered_grid(dyt):
     return yu, yt, dyu
 
 
+def u_centered_grid_halo(dyt, halo):
+    """u_centered_grid for a halo of any width: the recursion runs on the
+    array with ONE ghost on each side (the grid of halo_points = 1, bit for
+    bit) and is continued outward over the remaining ghosts with the same
+    recursion. The anchor of the recursion is therefore always the same
+    point, so the interior coordinates do not depend on halo_points; run on
+    the full extended array (as before Oct 17 2026) a periodic direction
+    with variable spacing gave a different xt for every halo width, since
+    the periodic image spacings in the ghosts enter the recursion.
+    For halo = 1 identical to u_centered_grid(dyt)."""
+    n = len(dyt); m = halo - 1
+    yu = np__.zeros(n); yt = np__.zeros(n); dyu = np__.zeros(n)
+    yu[m:n-m], yt[m:n-m], dyu[m:n-m] = u_centered_grid(dyt[m:n-m])
+    for i in range(m-1, -1, -1):              # outward to the left
+        yu[i]  = yu[i+1] - dyt[i+1]
+        yt[i]  = 2*yu[i] - yt[i+1]
+        dyu[i] = yt[i+1] - yt[i]
+    for i in range(n-m, n):                   # outward to the right
+        yu[i]    = yu[i-1] + dyt[i]
+        yt[i]    = 2*yu[i-1] - yt[i-1]
+        dyu[i-1] = yt[i] - yt[i-1]
+    dyu[n-1] = 2*dyt[n-1] - dyu[max(0, n-2)]
+    return yu, yt, dyu
+
+
 class grid:
 
       radius = 6370.0e3                       # Earth radius in m (pyOM2)
@@ -144,8 +169,8 @@ class grid:
           dyt_gl = self._extend_1d(self._dxt_input('dyt','dy',ny), halo, self.periodic_in_y)
 
           # ---- coordinates + U spacings on the extended arrays -----------
-          xu_gl, xt_gl, dxu_gl = u_centered_grid(dxt_gl)
-          yu_gl, yt_gl, dyu_gl = u_centered_grid(dyt_gl)
+          xu_gl, xt_gl, dxu_gl = u_centered_grid_halo(dxt_gl, halo)
+          yu_gl, yt_gl, dyu_gl = u_centered_grid_halo(dyt_gl, halo)
 
           # origin: first INTERIOR U point at x_origin (pyOM2:
           # xt_gl = xt_gl - xu_gl(1) + x_origin, index 1 = first interior)

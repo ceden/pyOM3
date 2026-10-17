@@ -13,7 +13,8 @@ surface stress and a surface buoyancy loss, harmonic friction and mixing.
                              biharmonic (friction operator), forcing, b_mix
                              (explicit mixing of b; off for the reduction),
                              n_pes_x, n_pes_y (p3dfft: n_pes_x splits y,
-                             n_pes_y splits z), comm, quiet.
+                             n_pes_y splits z), comm, quiet, halo
+                             (halo_points, default 1; halo.py runs 2 and 3).
   step(m, n)                 n steps of the model's own time_step with the
                              cold-start ramp of its loop() (forward Euler,
                              AB2, then AB3); m._tau3 and m._nstep carry the
@@ -23,8 +24,8 @@ surface stress and a surface buoyancy loss, harmonic friction and mixing.
   gathered_state(m)          the same assembled on rank 0
   checksum(state)            one float per field, order-independent sums
 
-Arrays of nh_simple are fortran ordered, (Nx, Ny, Nz) with one halo point on
-each side; the interior is [h:-h, h:-h, h:-h]. The model is dimensional
+Arrays of nh_simple are fortran ordered, (Nx, Ny, Nz) with h = m.halo points
+on each side; the interior is [h:-h, h:-h, h:-h]. The model is dimensional
 here (Ro = dsqr = 1), which the LES closures require.
 
 The LES closure is hooked in through set_forcing, where the model calls it
@@ -49,7 +50,7 @@ LES_FIELDS = ('tke', 'diff', 'shear_prod', 'buoy_prod', 'stokes_prod')   # TKE c
 
 
 def small_model(kind='lid', b_adv='2nd', les=None, biharmonic=False, forcing=True, b_mix=True,
-                n_pes_x=1, n_pes_y=1, comm=None, quiet=True, **extra):
+                n_pes_x=1, n_pes_y=1, comm=None, quiet=True, halo=1, **extra):
     from pyOM3.nh_simple.model import model as _base
     from pyOM3.nh_simple.les import les as _les
 
@@ -76,7 +77,7 @@ def small_model(kind='lid', b_adv='2nd', les=None, biharmonic=False, forcing=Tru
     elif les is not None:
         raise ValueError('les must be None, smag, tke or ducros')
     par.update(extra)
-    kw = dict(n_pes_x=n_pes_x, n_pes_y=n_pes_y)
+    kw = dict(n_pes_x=n_pes_x, n_pes_y=n_pes_y, halo_points=halo)
     if comm is not None:
         kw['comm_in'] = comm
     if quiet:

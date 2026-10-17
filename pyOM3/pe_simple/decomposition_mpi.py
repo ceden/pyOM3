@@ -57,8 +57,8 @@ class decomposition_mpi(setup):
           nx, ny = self.Nx - 2*self.halo, self.Ny - 2*self.halo  # actual grid points of total domain without b. cells
           x_blk, y_blk  = (nx-1)//n_pes_x + 1 ,  (ny-1)//n_pes_y + 1 # grid points of each block
           # indices from fortran versions, also useful here
-          xs_pe, xe_pe = (self.my_blk_x-1)*x_blk + self.halo , np_.minimum(self.my_blk_x*x_blk,nx) 
-          ys_pe, ye_pe = (self.my_blk_y-1)*y_blk + self.halo , np_.minimum(self.my_blk_y*y_blk,ny)
+          xs_pe, xe_pe = (self.my_blk_x-1)*x_blk + 1 , np_.minimum(self.my_blk_x*x_blk,nx)   # 1-based global interior index (was + self.halo, wrong for halo > 1)
+          ys_pe, ye_pe = (self.my_blk_y-1)*y_blk + 1 , np_.minimum(self.my_blk_y*y_blk,ny)
           x_blk, y_blk = xe_pe-xs_pe+1 , ye_pe-ys_pe+1        #last block might have been truncated    
                         
           for pe in range(1):#self.n_pes):

@@ -136,7 +136,7 @@ class main(boundary,grid):
                
           # mask on T grid                     
           for k in range(self.halo,self.Nz-self.halo):  
-             where =  OM.np.logical_and(self.kbot != 0, self.kbot <= k)
+             where =  OM.np.logical_and(self.kbot != 0, self.kbot <= k - self.halo + 1)   # level k-halo+1 (1-based) of index k
              self.maskT =  OM.modify_array(self.maskT, (k,slice(None),slice(None)),
                                            OM.np.where( where ,1.0,0.0) )
               

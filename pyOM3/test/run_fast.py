@@ -4,11 +4,11 @@
 A family whose fast part is not built yet says so and passes."""
 import sys, os, time, importlib
 HERE = os.path.dirname(os.path.abspath(__file__))
-FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'vadv', 'ab3'],   # 4 needs mpirun
-            'nh':  ['reduction', 'identities', 'restart', 'operators', 'golden'],          # nh_simple (4 needs mpirun)
-            'nhr': ['realistic', 'twin_nh_simple', 'restart'],                             # nh_realistic (4 needs mpirun; jax_sharding.py by hand)
+FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'vadv', 'ab3', 'halo'],   # 4 needs mpirun
+            'nh':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'halo'],  # nh_simple (4 needs mpirun)
+            'nhr': ['realistic', 'twin_nh_simple', 'restart', 'halo'],                     # nh_realistic (4 needs mpirun; jax_sharding.py by hand)
             'wim': ['reduction', 'identities', 'restart', 'operators', 'golden',
-                    'symmetry', 'sources', 'budget']}                                   # wim_simple, wim_realistic (wim_idemix: not built)
+                    'symmetry', 'sources', 'budget', 'halo']}                           # wim_simple, wim_realistic (wim_idemix: not built)
 want = sys.argv[1:] or list(FAMILIES)
 t0 = time.time(); ok = True
 for fam in want:
@@ -20,7 +20,7 @@ for fam in want:
         mod = importlib.import_module(name)
         t = time.time(); r = mod.run(); ok &= r
         print('   [%s/%s %.0f s]' % (fam, name, time.time() - t))
-    sys.path.pop(0)
+    sys.path.remove(os.path.join(HERE, fam))           # exactly the family dir (a config may insert more entries in front)
     for name in mods:
         sys.modules.pop(name, None); sys.modules.pop('config', None)
     # test 4 (decomposition) needs a launcher: mpirun on the path or MPIRUN set

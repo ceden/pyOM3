@@ -33,8 +33,11 @@ def run(argv):
     if len(argv) < 3:
         print('4 decomposition: skipped (run under mpirun with NPX NPY, see docstring)'); return True
     npx, npy = int(argv[1]), int(argv[2]); ok = True
-    for explicit, name, vadv, ab in PATHS:
-        st = gathered_state(step(small_model(eps_nh=1e-16, comm=comm, n_pes_x=npx, n_pes_y=npy, explicit=explicit, vadv=vadv), 8, ab))
+    # the four paths with the default halo, then the implicit and the explicit
+    # path with halo_points = 2 (test 16 under MPI) against the same references
+    for explicit, name, vadv, ab, halo in [p + (1,) for p in PATHS] + [p + (2,) for p in PATHS[:2]]:
+        st = gathered_state(step(small_model(eps_nh=1e-16, comm=comm, n_pes_x=npx, n_pes_y=npy, explicit=explicit,
+                                             vadv=vadv, halo=halo), 8, ab))
         if comm.Get_rank() != 0:
             continue
         if not os.path.exists(REF(name)):
@@ -51,7 +54,7 @@ def run(argv):
         # met, which is why the runs here solve to eps_nh = 1e-16 (300
         # iterations): the fields then agree to 1e-10 (tke, K_diss_v), p_nh to 1e-6.
         # With the default 1e-12 the fields differ by 1e-8 between layouts.
-        ok &= line('4 decomposition %dx%d vs 1 PE, %s' % (npx, npy, name), d, 1e-9)
+        ok &= line('4 decomposition %dx%d vs 1 PE, %s%s' % (npx, npy, name, ', halo 2' if halo > 1 else ''), d, 1e-9)
         ok &= line('4 ... p_nh (weakly determined, see the comment)', rel('p_nh'), 1e-5)
     return bool(comm.bcast(ok, root=0))
 

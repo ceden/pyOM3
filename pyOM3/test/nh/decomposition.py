@@ -39,15 +39,17 @@ def run(argv):
     if len(argv) < 3:
         print('4 decomposition: skipped (run under mpirun with NPX NPY, see docstring)'); return True
     npx, npy = int(argv[1]), int(argv[2]); ok = True
-    for name, kw in PATHS:
-        st = gathered_state(step(small_model(comm=comm, n_pes_x=npx, n_pes_y=npy, **kw), 8))
+    # the four paths with the default halo, then lid and les with halo_points = 2
+    # (test 16 under MPI: the wider exchange in y and z) against the same references
+    for name, kw, halo in [p + (1,) for p in PATHS] + [PATHS[0] + (2,), PATHS[2] + (2,)]:
+        st = gathered_state(step(small_model(comm=comm, n_pes_x=npx, n_pes_y=npy, halo=halo, **kw), 8))
         if comm.Get_rank() != 0:
             continue
         if not os.path.exists(REF(name)):
             print('4 decomposition %s: no serial reference (run "serial" first)' % name); ok = False; continue
         ref = np.load(REF(name))
         d = max(float(np.max(np.abs(st[k] - ref[k]))/max(np.max(np.abs(ref[k])), 1e-300)) for k in st)
-        ok &= line('4 decomposition %dx%d (y x z split) vs 1 PE, %s' % (npx, npy, name), d, 0.0)
+        ok &= line('4 decomposition %dx%d (y x z split) vs 1 PE, %s%s' % (npx, npy, name, ', halo 2' if halo > 1 else ''), d, 0.0)
     return bool(comm.bcast(ok, root=0))
 
 

@@ -16,7 +16,8 @@ and dissipation.
                              only), tail_flux, backend (propagation_backend),
                              snl (snonlin_backend), sources (False: adiabatic
                              propagation only, for the conservation
-                             identities), n_pes_x, n_pes_y, comm.
+                             identities), n_pes_x, n_pes_y, comm, halo
+                             (halo_points, default 1; halo.py runs 2 and 3).
   step(m, n)                 n steps of the model's own time_step with the
                              weights of the model's own loop(): forward Euler,
                              then AB2 with eps 0.05
@@ -104,7 +105,7 @@ def ocean_column(kind):
 
 def small_model(kind='realistic', open_coasts=True, energy_consistent=True, reflection=False,
                 current=True, janssen=False, tail_flux='wamdi', backend='numpy', snl='numpy',
-                sources=True, n_pes_x=1, n_pes_y=1, comm=None, quiet=True):
+                sources=True, n_pes_x=1, n_pes_y=1, comm=None, quiet=True, halo=1):
     _new_instance()
     if kind == 'simple':
         from pyOM3.wim_simple.model import model as _base
@@ -130,7 +131,7 @@ def small_model(kind='realistic', open_coasts=True, energy_consistent=True, refl
         par['input_scheme'] = 'janssen'
         par['tail_flux'] = 'input'
     par.update(_grids(kind))
-    kw = dict(n_pes_x=n_pes_x, n_pes_y=n_pes_y, halo_points=1)
+    kw = dict(n_pes_x=n_pes_x, n_pes_y=n_pes_y, halo_points=halo)
     if comm is not None:
         kw['comm_in'] = comm
     if quiet:
