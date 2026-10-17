@@ -47,6 +47,21 @@ class diabatic(boundary):
 
     
 
+      def biharmonic_h_only(self,a,Ahbi):
+          """
+          horizontal biharmonic operator, as biharmonic_h of ps3D
+          returns tendency
+          """
+          fx = -Ahbi*(self.rollx(a,-1) - a)/self.dx
+          fy = -Ahbi*(self.rolly(a,-1) - a)/self.dy
+          _del = self.apply_bc( (fx - self.rollx( fx,1) )/self.dx
+                               +(fy - self.rolly( fy,1) )/self.dy )
+          fx = (self.rollx(_del,-1) - _del)/self.dx
+          fy = (self.rolly(_del,-1) - _del)/self.dy
+          return  ((fx - self.rollx( fx,1) )/self.dx
+                 + (fy - self.rolly( fy,1) )/self.dy )
+
+
       def biharmonic(self,a,Ahbi,Avbi,on_wgrid=False):
           """
           horizontal and vertical biharmonic operator

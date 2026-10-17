@@ -26,6 +26,7 @@ memory, there is no output file. The time loop is written out in the notebook
 | `column_tke1` | test_tke1.f90, test_tke1.py | single column, wind driven mixing with the TKE closure |
 | `barbi_exp1` | barbi_exp1.f90 | warm anomaly in a closed basin on the sphere |
 | `eady1` | eady0.f90, eady0.py, eady1.py, channel1.py | Eady instability with the analytical mode, growth rate check, option `restoring` |
+| `salt_fountain1` | salt_fountain1.f90 | salt fountain, heat conducting wall inside the water column (nh_realistic) |
 
 `lin_stab.py` solves the viscous Taylor-Goldstein problem for U(z), B(z) on the
 model levels and returns the fastest growing mode (growth rate, phase speed,
@@ -47,6 +48,16 @@ sections and the kinetic energy time series of such a file.
 | `eady_jet1.py` | eady_jet1.f90, eady_opv1.f90 | baroclinic jet. Option `balanced` (optimal balance of eady_opv1) |
 | `roullet1.py` | roullet1.f90 | Roullet et al. jet, stretched vertical grid, zonal mean restoring |
 | `ml_front1.py` | ml_front.f90 | mixed layer front (3-D version without the mixed layer parameterisation) |
+| `tide_eddy1.py` | ps3D tide_eddy1.f90 | internal tide beam through a balanced eddy (nh_simple, rigid lids) |
+| `tide_vortical_spec1.py` | ps3D tide_vortical_spec1.f90 | internal tide beam through a spectrum of balanced eddies (nh_simple, rigid lids) |
+| `lee_wave1.py` | ps3D lee_wave1.f90 | wave beam in a background current with a critical layer (nh_simple, periodic, scaled equations) |
+
+The three ps3D configurations use `pyOM3/nh_simple/modes.py`: the eigenmodes
+of the linear equations (geostrophic mode s = 0, gravity wave modes s = +1, -1)
+on the discrete grid, the transforms to spectral space, the projection of a
+field on a mode, a single mode in physical space for the wave makers, and the
+balance of a state to third order in the Rossby number after Warn et al.
+(1995). They run on one process.
 
 ## Conventions
 
@@ -75,3 +86,22 @@ Coriolis parameter `f0`, and buoyancy `b` as the only tracer, relative to the
 background stratification `N0`. Arrays are `(x, y, z)`. The x-z slices with
 `ny = 1` run on one processor only.
 
+`nh_realistic` is `pe_realistic` with a prognostic `w` and a non-hydrostatic
+pressure, so it has the same parameters, coordinates, masks and tracers, on a
+Cartesian grid only. Land cells inside the water column (the wall of
+`salt_fountain1`) cannot be described by `kbot`. They are set in `maskT` in
+`make_topo_masks`, followed by the other masks.
+
+## Not converted
+
+| pyOM2 | reason |
+|---|---|
+| acc_small.f90, energy1.f90, energy2.f90 | small variants of acc1 and acc3 for the energy diagnostics of pyOM2 |
+| eady1_unscaled.f90, eady_periodic1.f90, eady2.py | variants of eady1 that need the 3-D lin_stab module or the QG filter of pyOM2 |
+| isopyc1.f90, test_adv1.f90 | need `enable_momentum_equation = False` |
+| overflow1.f90, overflow1_3D.f90 | non-hydrostatic with topography, not yet set up with nh_realistic |
+| rayleigh2.f90 | rayleigh1 with a localised heat source |
+| saturn1.f90 | unfinished sandbox setup |
+| atmos1.f90 | the ideal gas atmosphere, see hs_atmos.py |
+| test_obta1.f90 | optimal balance of a jet, see `balanced=True` in eady_jet1 |
+| test_idemix1/2, test_lee1, test_rossmix1/2/3, test_bihathk1, test_obc1 | IDEMIX, lee waves, ROSSMIX, biharmonic thickness diffusion and open boundaries are not in pyOM3 |

@@ -160,7 +160,9 @@ $A_h \vn_h^2 + A_v \p_{zz}$, with only one of them the corresponding
 horizontal-only or vertical-only part. Harmonic buoyancy mixing requires
 both \verb|Kh| and \verb|Kv|. Biharmonic friction and mixing
 ($-A_{hbi}\vn_h^4$ etc.) are activated by the pairs \verb|Ahbi|,
-\verb|Avbi| for momentum and \verb|Khbi|, \verb|Kvbi| for buoyancy. All
+\verb|Avbi| for momentum and \verb|Khbi|, \verb|Kvbi| for buoyancy.
+With only \verb|Ahbi| or only \verb|Khbi| the horizontal biharmonic
+operator $-A_{hbi} \vn_h^2 \vn_h^2$ acts alone. All
 these operators are applied with a forward Euler step outside the
 Adams--Bashforth interpolation of the adiabatic tendencies, so their
 coefficients are subject to the usual explicit diffusive stability limits.
@@ -454,10 +456,10 @@ Attribute & Default & Meaning \\
   alone activates the horizontal-only / vertical-only operator \\
 \verb|Kh|, \verb|Kv| & unset & harmonic buoyancy diffusivities (m$^2$/s);
   both must be present \\
-\verb|Ahbi|, \verb|Avbi| & unset & biharmonic viscosities (m$^4$/s); both
-  must be present \\
+\verb|Ahbi|, \verb|Avbi| & unset & biharmonic viscosities (m$^4$/s);
+  \verb|Ahbi| alone activates the horizontal-only operator \\
 \verb|Khbi|, \verb|Kvbi| & unset & biharmonic buoyancy diffusivities
-  (m$^4$/s); both must be present \\
+  (m$^4$/s); \verb|Khbi| alone activates the horizontal-only operator \\
 \hline
 \end{longtable}
 

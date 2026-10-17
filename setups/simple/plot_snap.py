@@ -3,7 +3,8 @@ plot_snap: quick look at the snapshot file of a script configuration
 
     python plot_snap.py acc1.cdf [time index, default -1]
 
-Surface fields, zonal mean sections and the kinetic energy time series.
+Surface fields, zonal mean sections and the kinetic energy time series,
+for the files of pe_realistic (temp, salt, u, v, w, p_s) and of nh_simple (u, v, w, b, p).
 """
 import sys
 import numpy as np
@@ -15,7 +16,9 @@ it   = int(sys.argv[2]) if len(sys.argv) > 2 else -1
 f    = Dataset(name)
 t    = f.variables['time'][:]
 x, y, z = f.variables['xt'][:], f.variables['yt'][:], f.variables['zt'][:]
-u, v, temp, p_s = (np.ma.masked_invalid(f.variables[n][it]) for n in ('u', 'v', 'temp', 'p_s'))
+nh   = 'b' in f.variables
+u, v, temp, p_s = (np.ma.masked_invalid(f.variables[n][it]) for n in ('u', 'v', 'b' if nh else 'temp', 'p' if nh else 'p_s'))
+if nh: p_s = p_s[-1]
 ks = -1                                                     # surface level
 xunit = 'deg' if abs(x).max() < 400 else 'km'
 xs = 1. if xunit == 'deg' else 1e-3

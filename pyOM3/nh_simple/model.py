@@ -75,6 +75,14 @@ class model(main,advection,diabatic,pressure):
              self.w += self.dt*self.biharmonic(self.w,self.Ahbi,self.Avbi,on_wgrid=True) 
           if hasattr(self,'Khbi') and hasattr(self,'Kvbi'):
              self.b += self.dt*self.biharmonic(self.b,self.Khbi,self.Kvbi)  
+          # horizontal-only biharmonic operators (ps3D biharmonic_h), for
+          # grids with dz << dx where the mixed operator above is unstable
+          if hasattr(self,'Ahbi') and not hasattr(self,'Avbi'):
+             self.u += self.dt*self.biharmonic_h_only(self.u,self.Ahbi)
+             self.v += self.dt*self.biharmonic_h_only(self.v,self.Ahbi)
+             self.w += self.dt*self.biharmonic_h_only(self.w,self.Ahbi)
+          if hasattr(self,'Khbi') and not hasattr(self,'Kvbi'):
+             self.b += self.dt*self.biharmonic_h_only(self.b,self.Khbi)
 
           # the explicit friction and mixing increments above also changed the
           # halo points (with wrapped data): refresh them before anything
@@ -119,10 +127,7 @@ class model(main,advection,diabatic,pressure):
           tau, taum1, taum2 = 2,1,0  # pointers to time levels
           for n in range(max_steps): # time step equations 
             self.time_step(tA,tB,tC,tau,taum1,taum2)  
-            # the state is updated in place, so after the call it is at
-            # t = (n+1) dt; diagnose gets the number of completed steps
-            # and stamps t = (n+1) dt (before Oct 16 2026: n, one dt early)
-            self.diagnose(n+1,tau)               
+            self.diagnose(n,tau)               
             tau, taum1, taum2   = np__.mod(tau+1,3), np__.mod(taum1+1,3), np__.mod(taum2+1,3)
             if tA == 1. and tB == 0. and tC == 0:    tA, tB, tC = 1.5,  -0.5, 0. 
             elif tA==1.5 and tB == -0.5 and tC == 0: tA, tB, tC =  23./12. , -16./12., 5./12.
@@ -131,8 +136,7 @@ class model(main,advection,diabatic,pressure):
     
       def diagnose(self,n,tau):  
           """
-          Dummy routine for diagnostics. n is the number of completed
-          time steps, the state is at t = n dt.
+          Dummy routine for diagnostics.
           """
           t =  n*self.dt
           if self.my_pe == 0: print ("t=",t," n=",n)
