@@ -4,7 +4,10 @@ tests (README_test_suite.md): a closed
 wind- and buoyancy-forced box, 16 x 12 x 10 cells, with the TKE closure.
 
   small_model(kind, **opt)   'realistic' (spherical, variable grid: the
-                             default of the suite), 'cartesian' (pe_realistic
+                             default of the suite), 'stretched' (pe_realistic
+                             on a stretched CARTESIAN grid, same topography)
+                             and 'nh' (nh_realistic on that stretched
+                             Cartesian grid, used by test/nhr), 'cartesian' (pe_realistic
                              with coord_degree=False on a uniform grid) or
                              'simple' (pe_simple on the same uniform grid,
                              for the reduction test). Options: explicit
@@ -37,6 +40,11 @@ FIELDS = ('u', 'v', 'w', 'temp', 'salt', 'p_s', 'tke', 'K_diss_v')
 
 
 def _grids(kind):
+    if kind in ('stretched', 'nh'):
+        # the spacings of 'realistic' in metres (nh_realistic refuses degrees)
+        dxt = np.linspace(0.9, 1.1, NX)*50e3; dyt = np.linspace(0.8, 1.2, NY)*50e3
+        dzt = 10.0 + 240.0*0.5*(1.0 - np.cos(np.linspace(0.0, np.pi, 10)))[::-1]
+        return dict(dxt=dxt, dyt=dyt, dzt=dzt, coord_degree=False, x_origin=0.0, y_origin=0.0)
     if kind == 'realistic':
         dxt = np.linspace(0.9, 1.1, NX); dyt = np.linspace(0.8, 1.2, NY)      # degrees
         # thin surface layers (top cell 10 m) so that vertical-order errors are
@@ -57,6 +65,9 @@ def small_model(kind='realistic', explicit=False, mxl_choice=1, tracer_flux=Fals
     if kind == 'simple':
         from pyOM3.pe_simple.model import model as _base
         from pyOM3.pe_simple.tke import tke as _tke
+    elif kind == 'nh':
+        from pyOM3.nh_realistic.model import model as _base
+        from pyOM3.pe_realistic.tke import tke as _tke
     else:
         from pyOM3.pe_realistic.model import model as _base
         from pyOM3.pe_realistic.tke import tke as _tke
@@ -191,9 +202,14 @@ def _interior(m, a):
     return a[..., sl, sl] if a.ndim == 2 else a[sl, sl, sl]
 
 
+def _fields(m):
+    """the prognostic fields, plus p_nh for the nh_realistic model"""
+    return FIELDS + (('p_nh',) if hasattr(m, 'p_nh') else ())
+
+
 def state(m):
     out = {}
-    for f in FIELDS:
+    for f in _fields(m):
         a = np.asarray(getattr(m, f))
         if a.ndim == 3 and f == 'p_s':
             a = a[m._tau3[1]]
@@ -206,7 +222,7 @@ def gathered_state(m):
     if m.n_pes == 1 or OM.jax:                        # JAX: one process, unpad gives the global interior
         return state(m)
     h = m.halo; out = {}
-    for f in FIELDS:
+    for f in _fields(m):
         a = np.asarray(getattr(m, f))
         if a.ndim == 3 and f == 'p_s':
             a = a[m._tau3[1]]

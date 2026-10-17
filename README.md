@@ -3,15 +3,23 @@
 Simple python-based ocean and surface wave models:
 
 
-pyOM3/pe_simple:     Cartesian primitive equation model using Jax sharding or mpi4py for domain decomposition
+pyOM3/pe_simple:     Cartesian primitive equation model using Jax sharding 
+                     or mpi4py for domain decomposition
 
-pyOM3/pe_realistic:  version of pe_simple with pseudo-spherical coordinates for large-scale realistic applications 
+pyOM3/pe_realistic:  version of pe_simple with pseudo-spherical coordinates 
+                     for large-scale realistic applications 
 
-pyOM3/nh_simple:     non-hydrostatic ocean model with FFT solver based on pencil decomposition and MPI message parsing
+pyOM3/nh_simple:     non-hydrostatic ocean model with FFT solver 
+                     based on pencil decomposition and MPI message parsing
 
-pyOM3/wim_simple:    simple spectral surface wave model using Jax sharding or mpi4py for domain decomposition
+pyOM3/nh_realistic:  version of nh_simple with topography and irregular boundaries
+                     but with slower CG solver
 
-pyOM3/wim_realistic: version of wim_simple with pseudo-spherical coordinates for large-scale realistic applications
+pyOM3/wim_simple:    simple spectral surface wave model using Jax sharding 
+                     or mpi4py for domain decomposition
+
+pyOM3/wim_realistic: version of wim_simple with pseudo-spherical coordinates 
+                     for large-scale realistic applications
 
 pyOM3/test:          suite of tests for pe, nh, and wim
    
@@ -20,14 +28,16 @@ based on pyOM2 and ps3D, using P3DFFT, JAX, etc.
 
 # Installation of pyOM3
 
-pyOM3 consists of the Python packages pe_simple, pe_realistic, nh_simple, wim_simple and wim_realistic.
-Required and optional Python packages are described in the detailed installation instructions below.
+pyOM3 consists of the Python packages pe_simple, pe_realistic, nh_simple, nh_realistic,
+wim_simple and wim_realistic. Required and optional Python packages are described 
+in the detailed installation instructions below.
 
-Additionally, nh_simple needs the parallel FFT `p3dfft` in `pyOM3/p3dfft`, which is written in Fortran.
-`p3dfft` needs gfortran, FFTW3 and Open MPI to be installed for compilation (see below).
-wim_simple and wim_realistic use optionally for acceleration the Fortran parts `Snonlin` and `Propagation` in `pyOM3/wim_simple`.
-The Fortran parts are compiled with f2py of numpy.
-With Python 3.12 or newer f2py needs meson and ninja, with Python 3.11 setuptools 65.5.0.
+Additionally, nh_simple needs the parallel FFT `p3dfft` in `pyOM3/p3dfft`, which is 
+written in Fortran. `p3dfft` needs gfortran, FFTW3 and Open MPI to be installed for 
+compilation (see below). wim_simple and wim_realistic use optionally for acceleration 
+the Fortran parts `Snonlin` and `Propagation` in `pyOM3/wim_simple`. The Fortran parts 
+are compiled with f2py of numpy. With Python 3.12 or newer f2py needs meson and ninja, 
+with Python 3.11 setuptools 65.5.0.
 
 ## Obtaining the code
 
@@ -108,8 +118,8 @@ On Linux they set the paths of these libraries in the `.so` files with `patchelf
 
 ## Running the model
 
-A configuration is a Python script or Jupyter notebook, started with as many processes as it expects,
-for instance `mpirun -np 6 python3 acc1.py` in `setups/acc`.
+A configuration is a Python script or Jupyter notebook, started with as many processes 
+as it expects, for instance `mpirun -np 6 python3 acc1.py` in `setups/acc`.
 Many examples are found in `setups/simple`.
 
 

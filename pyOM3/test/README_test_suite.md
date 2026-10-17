@@ -185,6 +185,8 @@ small configuration, restart list and golden checksum:
 
     pe    pe_simple, pe_realistic        hydrostatic ocean (built, below)
     nh    nh_simple                      non-hydrostatic (built, below)
+    nhr   nh_realistic                   non-hydrostatic with topography and
+                                         variable Cartesian grid (built, below)
     wim   wim_simple, wim_realistic      surface waves (built, below);
           wim_idemix                     wim_idemix not built: its column and
                                          calibration scripts
@@ -629,6 +631,74 @@ Not covered: the Ducros closure beyond the restart list (no state), the
 Peclet bound, les_mix_eulerian / les_stokes_prod (need u_S, coupled runs),
 tke_source, snapshot files, the jax path.
 
+
+## State of the implementation (Oct 16 2026), nhr family
+
+`python3 run_fast.py nhr` runs the tests below and, with mpirun, the
+decomposition, for nh_realistic, in about 2 min. The configuration is the
+pe family's (`nhr/config.py` loads `pe/config.py` and builds its
+`small_model('nh')`: the closed box on the stretched CARTESIAN grid, the
+spacings of the spherical one in metres, since nh_realistic refuses
+coord_degree (no spherical metric terms in the w equation), the shelf and
+the seamount, wind and cooling, the TKE closure, implicit or split-explicit
+free surface), so the hydrostatic limit of the package is pe_realistic on
+the same grid (kind 'stretched') and every pe test pattern applies. `state` carries
+p_nh in addition to the pe fields. The 3-D solve stops at a remaining
+divergence epsilon_nh = 1e-12 1/s (its own criterion, see
+nh_realistic/solver.py), 50-150 iterations per step with the columnwise
+preconditioner (500-1400 without it in this box).
+
+    nhr/config.py          small_model / small_model_pe, the rest from pe/config.py
+    nhr/realistic.py       1 hydrostatic limit: enable_nonhydrostatic = False
+                           against pe_realistic, implicit and explicit, exact
+                           (the time steps are pe_realistic's with the nh
+                           lines inserted; this keeps the two in step);
+                           2 the operator -V div grad and the columnwise
+                           preconditioner are symmetric on the masked
+                           stretched grid, A 1 = 0 (1e-14); 3 the projection
+                           removes a discrete gradient dt grad q, 1e-10 (the
+                           property behind the twin with nh_simple; while the
+                           grid was still spherical it found a missing 1/cost
+                           in the east coefficient, which the divergence test
+                           cannot see: the vertical coefficients are 1e6 times
+                           the horizontal ones in this box); 4 the divergence of every wet cell after
+                           8 steps, including the surface cells with the
+                           free-surface w, is below epsilon_nh; 5 the wet-cell
+                           mean of p_nh is zero
+    nhr/twin_nh_simple.py  1b nh_realistic against nh_simple in the nh family's
+                           box (uniform grid, no topography, doubly periodic,
+                           rigid lids): temp with eq_of_state = 0 is b, N0 put
+                           into b, harmonic friction Ah only, 2nd order
+                           advection, f-plane; 10 steps, 1e-11 (measured
+                           1e-13). nh_simple carries the buoyancy in the w
+                           equation and solves one Poisson equation with the
+                           FFT; nh_realistic carries -grad p_h and solves 2-D
+                           then 3-D; the predictors differ by a discrete
+                           gradient, which the projection removes
+    nhr/restart.py         3 exact, implicit and explicit; the pe list plus dw
+                           and p_nh (the first guess of the 3-D solve: the
+                           control without p_nh must differ)
+    nhr/decomposition.py, run_decomposition.py
+                           4 the pe paths (implicit, explicit, split, ab3),
+                           1x2, 2x1, 2x2, the 3-D solve run to eps_nh = 1e-16
+                           (300 iterations): 1e-9 for all fields but p_nh
+                           (measured 1e-10, in tke and K_diss_v) and 1e-5 for
+                           p_nh (measured 1e-6). No layout is exact: the 3-D
+                           CG's global sums reduce in rank order on every
+                           path. The stop criterion is the remaining
+                           divergence, which the vertical part of p_nh fixes;
+                           the horizontal structure of p_nh is weakly
+                           determined in this hydrostatic-aspect box
+                           (vertical coefficients 1e6 times the horizontal
+                           ones) and still moves when the criterion is met,
+                           hence the tight eps_nh here. With the default
+                           1e-12 the fields differ by 1e-8 between layouts,
+                           physically irrelevant but not reproducible; an FFT
+                           preconditioner would be the remedy if it matters
+    nhr/jax_sharding.py    jax 1x1, 1x2, 2x1, 2x2 against numpy on 4 fake CPU
+                           devices, by hand as for pe, same eps_nh and
+                           tolerances (measured 2e-10 and 1e-6)
+
 ## Layout
 
     pyOM3/test/
@@ -639,6 +709,8 @@ tke_source, snapshot files, the jax path.
                              operators, golden (+ golden.json), free_surface/, twins/
         nh/                  reduction, identities, restart, decomposition,
                              operators, golden (+ golden.json)
+        nhr/                 realistic, twin_nh_simple, restart, decomposition,
+                             jax_sharding (on the pe configuration)
         wim/                 reduction, identities, restart, decomposition,
                              operators, golden (+ golden.json), symmetry, sources,
                              budget; benchmarks (slow); the sphere and ecwam slow
