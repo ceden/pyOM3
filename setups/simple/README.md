@@ -36,8 +36,9 @@ u, w, b), used by holmboe1.
 
 Long runs, meant for `mpirun -np N python <name>.py` with `n_pes_x, n_pes_y`
 set in the file, output to the netCDF file `<name>.cdf`.
-`python plot_snap.py <name>.cdf [time index]` shows surface fields, zonal mean
-sections and the kinetic energy time series of such a file.
+The notebook `plot_snap` shows surface fields, zonal mean sections and the
+kinetic energy time series of such a file, set `name` and the time index `it`
+in its first cell.
 
 | script | pyOM2 origin | what |
 |---|---|---|
