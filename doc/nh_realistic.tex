@@ -1,0 +1,433 @@
+\documentclass[12pt]{article}
+\usepackage{lineno}
+%\usepackage{ametsoc}
+\usepackage{natbib}
+\usepackage{a4wide}
+\usepackage{longtable}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+
+\usepackage{color}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex,colorlinks, citecolor=black,linkcolor=black,urlcolor=black]{hyperref}
+\definecolor{darkgreen}{rgb}{0.1,0.4,0.1}
+\definecolor{darkblue}{rgb}{0.1,0.1,0.3}
+
+
+
+\newif\ifdetail
+\global\detailfalse
+%\global\detailtrue
+
+\def\bem#1{\colorbox{green}{\em #1}}
+
+\newcommand{\beq}  { \begin{eqnarray} }
+\newcommand{\eeq}  { \end{eqnarray}}
+\newcommand{\beeq}  { \begin{eqnarray*} }
+\newcommand{\eeeq}  { \end{eqnarray*}}
+\newcommand{\eq }  [1]{Eq.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\eqs }  [1]{Eqs.~(\ref{#1})}
+\newcommand{\sect}  [1]{Sec.~(\ref{#1})}  % Eq. (#1)
+\newcommand{\fig}  [1]{Fig.~\ref{#1}}   % Fig. #1
+\renewcommand{\v}[1]{{\mbox{\boldmath$ #1 $}}}  % Vektor durch Fettdruck
+\newcommand{\m}    [1]{{\bf  #1 }}              % Matrix in sans serif
+\newcommand{\gz}[1] {{{d #1} \over {dz}}}
+\newcommand{\pt}[1]{{\partial_t #1}}
+\newcommand{\ptt}[1]{{\partial_{tt} #1}}
+\newcommand{\pttt}[1]{{\partial_{ttt} #1}}
+\newcommand{\pttx}[1]{{{\partial^3 #1} \over {\partial t^2 \partial x}}}
+\newcommand{\ptty}[1]{{{\partial^3 #1} \over {\partial t^2 \partial y}}}
+\newcommand{\ptx}[1]{{{\partial^2 #1} \over {\partial t \partial x}}}
+\newcommand{\pty}[1]{{{\partial^2 #1} \over {\partial t \partial y}}}
+\newcommand{\pz}[1]{{\partial_z #1}}
+\newcommand{\pzz}[1]{{\partial_{zz} #1}}
+\newcommand{\px}[1]{{\partial_x #1}}
+\newcommand{\py}[1]{{\partial_y #1}}
+\newcommand{\pxi}[1]{{\partial_i #1}}
+\newcommand{\pxj}[1]{{\partial_j #1}}
+\newcommand{\pxk}[1]{{\partial_k #1}}
+\newcommand{\pb}[1]{{{\partial #1} \over {\partial b}}}
+%\newcommand{\pxy}[1]{{{\partial^2 #1} \over {\partial x \partial y}}}
+\newcommand{\pxy}[1]{\partial_{xy} #1}
+\newcommand{\pyy}[1]{\partial_{yy} #1}
+\newcommand{\pxx}[1]{\partial_{xx} #1}
+\newcommand{\kx}{{\bf k} \times}
+\newcommand{\dt}[1]{{{d #1} \over {d t}}}
+\newcommand{\Dt}[1]{{{D #1} \over {D t}}}
+\newcommand{\Div}[1]{ \nabla \cdot #1 }
+\renewcommand{\div}[1]{ \nabla_{yz} \cdot #1 }
+\newcommand{\Bar}[1]{ \overline{ #1} }
+\newcommand{\rvec} [1]{
+    \raisebox{-1.5ex}{$\stackrel{\textstyle #1}{\neg}$} }% rotierter Vektor
+\newcommand{\nablq}   {\rvec\nabla}                    % rotated nabla operator
+\newcommand{\Vec}[1]{\left(\begin{array}{c} #1 \end{array}\right) }
+%\renewcommand{\mho}{\mathcal{W}}
+\newcommand{\pn}[1]{{{\partial #1} \over {\partial n}}}
+\newcommand{\pnn}[1]{{{\partial #1} \over {\partial m}}}
+\newcommand{\ps}[1]{{{\partial #1} \over {\partial s}}}
+\newcommand{\p}{{\partial}}
+\newcommand{\vn}{{\v \nabla}}
+\newcommand{\lk}{\left(}
+\newcommand{\rk}{\right)}
+
+\newcommand{\tl}{\tilde}
+
+\newcommand{\I}{\mathcal{I}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\A}{\mathcal{A}}
+
+\newcommand{\ep}{\epsilon}
+\begin{document}
+
+ \section*{The realistic non-hydrostatic model nh\_realistic}
+
+nh\_realistic is pe\_realistic with a prognostic vertical velocity and a non-hydrostatic pressure.
+This text describes only the differences to pe\_realistic.
+Everything that is not mentioned here is as described in the documentation of pe\_realistic and pe\_simple.
+
+The differences are the following.
+The vertical velocity $w$ has its own momentum equation.
+A three-dimensional pressure $p_{nh}$ makes the velocity free of divergence in every cell.
+The horizontal coordinates must be Cartesian.
+
+The package contains only what is new.
+The grid, the masks, the tracers, the equation of state, the vertical mixing, the TKE closure, the isoneutral mixing, the surface pressure and the split-explicit external mode are imported from pe\_realistic.
+The file \verb|momentum.py| holds the equation for $w$.
+The file \verb|vmix.py| holds the vertical friction of $w$.
+The files \verb|pressure.py| and \verb|solver.py| hold the equation for $p_{nh}$ and its solver.
+The file \verb|model.py| holds the time step.
+
+The formulation follows pyOM2 with \verb|enable_hydrostatic| off and the non-hydrostatic model of Oceananigans.
+The solver for $p_{nh}$ follows Oceananigans.
+The tests and their results are listed in the section on the nhr family of \verb|pyOM3/test/README_test_suite.md|.
+
+\subsection*{Grid}
+
+The grid is that of pe\_realistic with Cartesian coordinates.
+The widths \verb|dxt|, \verb|dyt| and \verb|dzt| are in metres and may vary in all three directions.
+The model stops with an error if \verb|coord_degree| is set.
+On the sphere the equation for $w$ would need the metric term $-(u^2+v^2)/a$ and the Coriolis terms with $\cos \phi$.
+nh\_realistic has neither of them.
+
+The metric factors \verb|cost| and \verb|cosu| of pe\_realistic are therefore 1, and \verb|tantr| is 0.
+The kernels imported from pe\_realistic still contain them.
+The new kernels of nh\_realistic do not.
+The horizontal area of a $T$ cell is $A^t = \Delta x^t \Delta y^t$, and its volume is $V^t = A^t \Delta z^t$.
+
+The vertical velocity $w_k$ sits at the top face of the $T$ cell $k$.
+This face is the centre of the $W$ cell $k$.
+The $W$ cell $k$ reaches from the centre $z^t_k$ to the centre $z^t_{k+1}$.
+Its height is $\Delta z^w_k$, and its volume is $A^t \Delta z^w_k$.
+
+The mask \verb|maskW| of pe\_realistic is open at the surface face, since the free surface needs a vertical velocity there.
+nh\_realistic adds the mask \verb|maskWc|, which is \verb|maskW| with the surface face closed.
+The equation for $w$, its friction and the equation for $p_{nh}$ use \verb|maskWc|.
+The surface face thus belongs to the free surface and not to the equation for $w$.
+
+\subsection*{Pressure}
+
+All pressures are divided by $\rho_0$, as in pe\_realistic.
+The pressure is the sum
+\beq
+ p = p_h + p_s + p_{nh}
+\eeq
+of the hydrostatic pressure $p_h$, the surface pressure $p_s$ and the non-hydrostatic pressure $p_{nh}$.
+$p_h$ and $p_s$ are computed as in pe\_realistic.
+
+The momentum equations are
+\beq \label{eq:mom}
+ \pt{\v u} + \dots = - \vn_h \lk p_h + p_s + p_{nh} \rk ~,~~
+ \pt w + \v u \cdot \vn w = - \pz{p_{nh}} + F_w
+\eeq
+where $\v u = (u,v)$ is the horizontal velocity, the dots stand for all other terms of pe\_realistic, and $F_w$ is the friction of $w$.
+
+The equation for $w$ carries neither the buoyancy nor $p_h$ nor $p_s$.
+The full equation would be $\pt w + \v u \cdot \vn w = - \pz p - g \rho/\rho_0 + F_w$.
+$p_s$ does not depend on $z$.
+$p_h$ is integrated downward from the surface with
+\beq \label{eq:ph}
+ p_h(k) = p_h(k+1) + \frac{g}{2 \rho_0} \lk \rho(k+1) + \rho(k) \rk \Delta z^w_k
+\eeq
+which is the integration of pe\_realistic.
+\eq{eq:ph} gives at the $W$ point $k$ the vertical gradient
+\beq
+ \frac{p_h(k+1) - p_h(k)}{\Delta z^w_k} = - \frac{g}{2 \rho_0} \lk \rho(k+1) + \rho(k) \rk
+\eeq
+The right hand side is the buoyancy force averaged to the $W$ point.
+The vertical gradient of $p_h$ and the buoyancy force therefore cancel exactly, also on a stretched grid.
+Only $p_{nh}$ is left in the equation for $w$.
+
+With $p_{nh} = 0$ and $w$ taken from continuity the model is pe\_realistic.
+The attribute \verb|enable_nonhydrostatic| (default on) selects the non-hydrostatic model.
+With it off the time step is that of pe\_realistic to the last bit.
+This is tested.
+
+\subsection*{Advection and friction of $w$}
+
+The advection of $w$ is the energy-conserving second-order form of the momentum advection of pe\_realistic.
+The transports through the faces of a $T$ cell are
+\beq
+ U_i = \Delta y^t \Delta z^t u_i ~,~~
+ V_j = \Delta x^t \Delta z^t v_j ~,~~
+ W_k = A^t w_k
+\eeq
+with the masks of the faces.
+The transport through a face of the $W$ cell $k$ is the mean of the transports through the same face of the $T$ cells $k$ and $k+1$.
+The fluxes of $w$ are
+\beq
+ f^x_i = - \frac{1}{4} \lk U_{i,k} + U_{i,k+1} \rk \lk w_i + w_{i+1} \rk ~,~~
+ f^z_k = - \frac{1}{4} \lk W_k + W_{k+1} \rk \lk w_k + w_{k+1} \rk
+\eeq
+and $f^y$ correspondingly with $V$.
+$f^z_k$ sits at the $T$ point $k+1$.
+The advective tendency of $w_k$ is the divergence of these fluxes divided by the volume $A^t \Delta z^w_k$ of the $W$ cell.
+
+The divergence of the transports through the $W$ cell $k$ is the mean of the divergences of the $T$ cells $k$ and $k+1$.
+It vanishes when the velocity is free of divergence.
+The advection then conserves $w^2$.
+On a uniform grid it is the advection of $w$ of nh\_simple.
+
+The equation for $w$ has no Coriolis term, as in pyOM2.
+
+The horizontal friction of $w$ uses the coefficients \verb|Ahbi| and \verb|Ah| of the horizontal friction of $u$ and $v$.
+It uses the operator at the $T$ points of pe\_realistic, since $w$ sits at the $T$ points in the horizontal.
+For $w$ this operator is exact.
+A flux exists only between two wet $W$ cells.
+
+The vertical friction of $w$ has the flux at the $T$ point $k$ between the $W$ cells $k-1$ and $k$,
+\beq
+ F_k = A_k \frac{w_k - w_{k-1}}{\Delta z^t_k}
+\eeq
+The tendency of $w_k$ is $(F_{k+1} - F_k)/\Delta z^w_k$.
+The roles of $\Delta z^t$ and $\Delta z^w$ are thus swapped with respect to the vertical friction of $u$ and $v$.
+A flux exists only between two wet $W$ cells.
+
+The coefficient $A_k$ follows the vertical friction of $u$ and $v$.
+It is the constant \verb|A_v| with \verb|vmix_scheme| explicit or implicit.
+With the TKE closure it is the viscosity of the closure averaged from the two $W$ points to the $T$ point.
+The step is a forward step for \verb|vmix_scheme| explicit and an implicit step otherwise.
+The implicit step is the tridiagonal solve of pe\_realistic on the $W$ grid.
+The energy that the friction of $w$ removes is not given to the TKE closure.
+
+\subsection*{Projection}
+
+The velocities are first advanced with all terms except the gradient of $p_{nh}$.
+This gives $u^*$, $v^*$ and $w^*$.
+The surface pressure $p_s$ is already part of $u^*$ and $v^*$.
+The vertical friction is also part of them.
+
+The vertical velocity at the surface face is taken from continuity as in pe\_realistic,
+\beq \label{eq:wsurf}
+ w_{surf} = - \frac{1}{A^t} \sum_k \lk U_i - U_{i-1} + V_j - V_{j-1} \rk
+\eeq
+with $u^*$ and $v^*$ in the transports and the sum over the wet cells of the column.
+With the free surface $w_{surf}$ is the change of the surface elevation in time.
+With the rigid lid it is zero to the tolerance of the surface pressure solver.
+
+The divergence of the $T$ cell is
+\beq
+ D = \frac{1}{V^t} \lk U_i - U_{i-1} + V_j - V_{j-1} + W_k - W_{k-1} \rk
+\eeq
+The velocity is corrected by
+\beq \label{eq:proj}
+ u_i = u^*_i - \Delta t \frac{p_{i+1} - p_i}{\Delta x^u_i} ~,~~
+ v_j = v^*_j - \Delta t \frac{p_{j+1} - p_j}{\Delta y^u_j} ~,~~
+ w_k = w^*_k - \Delta t \frac{p_{k+1} - p_k}{\Delta z^w_k}
+\eeq
+with $p = p_{nh}$, on the wet faces and the interior faces in $z$.
+The surface face is closed in \eq{eq:proj}.
+$w_{surf}$ therefore stays as it is.
+
+The pressure $p_{nh}$ makes $D$ of the corrected velocity vanish in every wet cell.
+Inserting \eq{eq:proj} into $D = 0$ gives
+\beq \label{eq:pnh}
+ a^x_i \lk p_{i+1} - p_i \rk - a^x_{i-1} \lk p_i - p_{i-1} \rk
+ + a^y_j \lk p_{j+1} - p_j \rk - a^y_{j-1} \lk p_j - p_{j-1} \rk && \nonumber \\
+ + a^z_k \lk p_{k+1} - p_k \rk - a^z_{k-1} \lk p_k - p_{k-1} \rk
+ &=& \frac{V^t D^*}{\Delta t}
+\eeq
+with $D^*$ the divergence of $u^*$, $v^*$, $w^*$ and $w_{surf}$.
+The coefficients are
+\beq
+ a^x_i = \frac{\Delta y^t \Delta z^t}{\Delta x^u_i} ~,~~
+ a^y_j = \frac{\Delta x^t \Delta z^t}{\Delta y^u_j} ~,~~
+ a^z_k = \frac{A^t}{\Delta z^w_k}
+\eeq
+on the wet faces and zero on the closed faces.
+\eq{eq:pnh} is the volume times the divergence of the gradient of $p_{nh}$.
+
+The coefficient of a face is the same in the equations of the two cells next to it.
+The matrix of \eq{eq:pnh} is therefore symmetric, also on a stretched grid with topography.
+This is tested.
+Without the volume factor the matrix would not be symmetric on a stretched grid.
+
+All faces at the boundary of the wet region are closed in \eq{eq:pnh}.
+A solution exists only if the right hand side summed over the wet cells vanishes.
+Summed over a column, the transports through the inner faces cancel.
+What is left is the sum of the horizontal transports of the column and $A^t w_{surf}$.
+With \eq{eq:wsurf} this sum is zero.
+The right hand side thus sums to zero in every column, and \eq{eq:pnh} has a solution.
+
+\eq{eq:pnh} fixes $p_{nh}$ only up to a constant.
+After every iteration the mean of $p_{nh}$ over the wet cells is set to zero, as in Oceananigans.
+The same is done with the residual.
+
+\subsection*{Solver}
+
+\eq{eq:pnh} is solved with the method of conjugate gradients with a preconditioner.
+The solver is written for JAX and MPI in the same way as the solver for $p_s$ of pe\_simple.
+The first guess is $p_{nh}$ of the previous time step.
+
+The preconditioner solves the vertical part of \eq{eq:pnh} exactly in every column.
+It drops the horizontal coefficients $a^x$ and $a^y$.
+The vertical part is the tridiagonal system
+\beq
+ - a^z_{k-1} z_{k-1} + (1 + \epsilon) \lk a^z_k + a^z_{k-1} \rk z_k - a^z_k z_{k+1} = r_k
+\eeq
+for the preconditioned residual $z$ with the residual $r$.
+It is solved with the Thomas algorithm.
+The factor $1+\epsilon$ with $\epsilon = 0.01$ makes the system of each column regular, as in Oceananigans.
+In a dry cell and in a wet cell without a wet cell above or below, the preconditioner is the identity.
+The preconditioner is that of Marshall et al.\ (1997).
+
+The preconditioner suits grids with $\Delta z \ll \Delta x$.
+There the vertical coefficients $a^z$ are much larger than the horizontal ones.
+In the test configuration they are larger by a factor of $3 \cdot 10^4$ to $2 \cdot 10^7$.
+The preconditioner reduces the number of iterations there from 1000 to 3500 to 50 to 150 per time step.
+For $\Delta z \approx \Delta x$ it helps less.
+
+The residual $r$ is the right hand side minus the left hand side of \eq{eq:pnh}.
+The divergence of the velocity corrected with the current $p_{nh}$ is $\Delta t\, r/V^t$.
+The iteration stops when $\Delta t \max |r|/V^t$ is smaller than \verb|epsilon_nh| (default $10^{-12}\,$s$^{-1}$).
+\verb|epsilon_nh| is thus the largest divergence that the velocity keeps.
+The iteration also stops after \verb|max_iterations_nh| iterations (default \verb|max_iterations|).
+
+The stopping condition is met by the vertical structure of $p_{nh}$.
+The horizontal structure of $p_{nh}$ is less well determined when $\Delta z \ll \Delta x$.
+It still changes with the round-off of the sums in the solver.
+Runs with different domain decompositions therefore differ by about $10^{-8}$ relative with the default \verb|epsilon_nh|.
+With \verb|epsilon_nh| $= 10^{-16}$ they differ by about $10^{-10}$.
+
+\subsection*{Tracers}
+
+The tracers are advected with $u$, $v$ and $w$ of the end of the previous time step, as in pe\_realistic.
+In pe\_realistic $w$ follows from continuity and the velocity is free of divergence to round-off.
+In nh\_realistic the velocity is free of divergence to \verb|epsilon_nh|.
+A uniform tracer therefore stays uniform only to \verb|epsilon_nh| $\Delta t$ per time step.
+The content of a tracer is still conserved to round-off, since the advection is in flux form.
+
+\subsection*{Time step}
+
+The order of the calls in a time step of the split-explicit scheme is
+\begin{enumerate}
+\item diffusivities of the TKE closure (\verb|set_tke_diffusivities|)
+\item momentum tendencies, Coriolis force and hydrostatic pressure (\verb|momentum_tendency_expl|)
+\item advective tendency of $w$ (\verb|w_tendency|)
+\item forcing of the configuration (\verb|set_forcing|)
+\item horizontal friction of $w$ and Adams--Bashforth update of $w$
+\item bottom friction
+\item external mode with sub cycling (\verb|solve_expl_surface|)
+\item vertical friction of $u$, $v$ and of $w$
+\item surface vertical velocity and the solve for $p_{nh}$ (\verb|nh_projection|)
+\item tracer advection and biharmonic tracer mixing, or the advection outside the Adams--Bashforth step
+\item Adams--Bashforth update of the tracers
+\item isoneutral mixing
+\item vertical mixing of the tracers
+\item density
+\item TKE step (\verb|integrate_tke|)
+\end{enumerate}
+
+The order of the calls in a time step of the rigid lid and of the implicit free surface is
+\begin{enumerate}
+\item diffusivities of the TKE closure
+\item tracer advection and biharmonic tracer mixing
+\item momentum tendencies and hydrostatic pressure (\verb|momentum_tendency_impl|)
+\item advective tendency of $w$ (\verb|w_tendency|)
+\item forcing of the configuration (\verb|set_forcing|)
+\item biharmonic and harmonic friction of $u$, $v$ and of $w$
+\item Adams--Bashforth update of $u$, $v$ and of $w$
+\item direct forcing of the configuration (\verb|set_forcing_direct|)
+\item surface pressure and its gradient (\verb|solve_for_pressure|)
+\item vertical friction of $u$, $v$ and of $w$
+\item bottom friction
+\item surface vertical velocity and the solve for $p_{nh}$ (\verb|nh_projection|)
+\item Adams--Bashforth update of the tracers, or the advection outside the Adams--Bashforth step
+\item isoneutral mixing
+\item vertical mixing of the tracers
+\item density
+\item TKE step
+\end{enumerate}
+In both schemes the steps are those of pe\_realistic.
+The steps for $w$ are added.
+The solve for $p_{nh}$ replaces the vertical velocity from continuity.
+
+The forcing of the configuration may add to the tendency \verb|dw| at the level \verb|tau|, as it does for \verb|du| and \verb|dv|.
+The tendency then enters the Adams--Bashforth step.
+
+The solve for $p_{nh}$ comes after the vertical friction and the bottom friction.
+The velocity at the end of the time step is therefore free of divergence.
+The surface pressure is solved before.
+It removes the depth-averaged divergence, which is the mode with the slowest convergence in \eq{eq:pnh}.
+
+The restart needs the fields of pe\_realistic and in addition \verb|dw| and \verb|p_nh|.
+Without \verb|p_nh| the solver starts from another first guess.
+The run is then no longer identical to the last bit.
+
+\section*{Model parameters and options}
+
+The parameters and options of pe\_realistic are also those of nh\_realistic.
+The tables list only the differences.
+
+\subsection*{Required parameters}
+
+\begin{longtable}{@{}llp{8.4cm}@{}}
+\hline
+Attribute & Unit & Meaning \\
+\hline
+\endhead
+\verb|dxt|, \verb|dyt| & m & widths of the cells in $x$ and $y$, as in pe\_realistic but in metres only \\
+\hline
+\end{longtable}
+
+\noindent
+\verb|coord_degree| must be off.
+
+\subsection*{Options with defaults}
+
+\begin{longtable}{@{}llp{7.6cm}@{}}
+\hline
+Attribute & Default & Meaning \\
+\hline
+\endhead
+\verb|enable_nonhydrostatic| & on & prognostic $w$ and the solve for $p_{nh}$. Off gives pe\_realistic \\
+\verb|epsilon_nh| & $10^{-12}$ & largest divergence (s$^{-1}$) that the solve for $p_{nh}$ leaves \\
+\verb|max_iterations_nh| & \verb|max_iterations| & largest number of iterations of the solve for $p_{nh}$ \\
+\verb|Ah|, \verb|Ahbi| & unset & as in pe\_realistic, also acting on $w$ \\
+\verb|A_v| & $0$ & as in pe\_realistic, also acting on $w$ \\
+\hline
+\end{longtable}
+
+\noindent
+The number of iterations of the last solve for $p_{nh}$ is \verb|congr_itts_nh|.
+The divergence it leaves is \verb|estimated_error_nh|.
+
+\subsection*{Snapshot diagnostics}
+
+The snapshot classes \verb|snap_nc4| and \verb|snap_raw| are those of pe\_realistic.
+\verb|snap_nc4| also writes $p_{nh}$ under the name \verb|p_nh|.
+$w$ is written on the $W$ points as in pe\_realistic.
+It is now the prognostic $w$.
+
+\subsection*{Limits}
+
+\begin{itemize}
+\item The horizontal coordinates must be Cartesian, see the grid above.
+\item The equation for $w$ has no Coriolis term.
+\item The energy that the friction of $w$ removes is not given to the TKE closure.
+\item With the free surface $w_{surf}$ does not enter the advection of $w$, since the surface face is closed in the equation for $w$. The advection of $w$ then does not conserve $w^2$ exactly in the uppermost $W$ cell.
+\item The preconditioner suits $\Delta z \ll \Delta x$. For $\Delta z \approx \Delta x$ the number of iterations grows. A preconditioner with the FFT of a uniform grid, as in Oceananigans, is not available.
+\item Runs with different domain decompositions are not identical to the last bit, see the solver above.
+\item The LES closures of nh\_simple are not part of nh\_realistic.
+\end{itemize}
+
+\end{document}

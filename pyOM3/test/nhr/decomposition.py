@@ -46,7 +46,7 @@ def run(argv):
         # rank order, so no layout is exact, on the explicit path too. The
         # stop criterion is the remaining divergence, which the vertical
         # part of p_nh fixes; the horizontal structure of p_nh is weakly
-        # determined (vertical coefficients 1e6 times the horizontal ones in
+        # determined (vertical coefficients 3e4 to 2e7 times the horizontal ones in
         # this hydrostatic-aspect box) and still moves when the criterion is
         # met, which is why the runs here solve to eps_nh = 1e-16 (300
         # iterations): the fields then agree to 1e-10 (tke, K_diss_v), p_nh to 1e-6.

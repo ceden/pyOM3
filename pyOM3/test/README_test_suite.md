@@ -646,7 +646,7 @@ the same grid (kind 'stretched') and every pe test pattern applies. `state` carr
 p_nh in addition to the pe fields. The 3-D solve stops at a remaining
 divergence epsilon_nh = 1e-12 1/s (its own criterion, see
 nh_realistic/solver.py), 50-150 iterations per step with the columnwise
-preconditioner (500-1400 without it in this box).
+preconditioner (1000-3500 without it in this box).
 
     nhr/config.py          small_model / small_model_pe, the rest from pe/config.py
     nhr/realistic.py       1 hydrostatic limit: enable_nonhydrostatic = False
@@ -660,7 +660,7 @@ preconditioner (500-1400 without it in this box).
                            property behind the twin with nh_simple; while the
                            grid was still spherical it found a missing 1/cost
                            in the east coefficient, which the divergence test
-                           cannot see: the vertical coefficients are 1e6 times
+                           cannot see: the vertical coefficients are 3e4 to 2e7 times
                            the horizontal ones in this box); 4 the divergence of every wet cell after
                            8 steps, including the surface cells with the
                            free-surface w, is below epsilon_nh; 5 the wet-cell
@@ -689,7 +689,7 @@ preconditioner (500-1400 without it in this box).
                            divergence, which the vertical part of p_nh fixes;
                            the horizontal structure of p_nh is weakly
                            determined in this hydrostatic-aspect box
-                           (vertical coefficients 1e6 times the horizontal
+                           (vertical coefficients 3e4 to 2e7 times the horizontal
                            ones) and still moves when the criterion is met,
                            hence the tight eps_nh here. With the default
                            1e-12 the fields differ by 1e-8 between layouts,
