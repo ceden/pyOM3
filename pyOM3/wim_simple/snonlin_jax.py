@@ -397,6 +397,7 @@ class _Snonlin:
           per group.
         """
         kl, ml = self.kl, self.ml
+        self._vec_bad = None
         G = 2*self.mlsthg
         MFR1STFR = -self.mfrstlw + 1
         MFRLSTFR = ml - self.kfrh + MFR1STFR
@@ -434,7 +435,18 @@ class _Snonlin:
                 gw[:, g] = self.c_gw[:, r]; af[g] = self.c_af11[r]
                 tail[g] = 1.0 if interior else self.c_ftail[r]
                 def put(key, m, c):
-                    assert 0 <= m < ml, (key, MC, m)
+                    # A destination outside 0..ML-1 happens only on a
+                    # frequency grid too short for the DIA (ML <= KFRH, e.g.
+                    # the nf = 2 grids of the propagation tests), where the
+                    # Fortran writes out of bounds and the numpy loop fails
+                    # with an IndexError in source(). The tables are then
+                    # marked unusable and source() refuses, so that a model
+                    # on such a grid can still be built and run without the
+                    # nonlinear transfer, as with the numpy backend.
+                    if not 0 <= m < ml:
+                        if self._vec_bad is None:
+                            self._vec_bad = (key, MC, int(m))
+                        return
                     W[key][g, m] += c
                 if ok_c:
                     put('all_AD', MCi, -2.0); put('all_DELAD', MCi, -2.0)
@@ -475,6 +487,10 @@ class _Snonlin:
         Same arithmetic as the Fortran/numpy loop (snonlin_np.py), the sums
         over the groups in a different order (round-off).
         """
+        if self._vec_bad is not None:
+            raise ValueError('Snonlin (jax): the frequency grid has %d frequencies, too few for '
+                             'the DIA (it needs more than KFRH = %d); first destination outside '
+                             'the grid: %s' % (self.ml, self.kfrh, self._vec_bad))
         F = OM.np.asarray(F, dtype=OM.prec)
         nx, ny, kl, ml = F.shape
         assert kl == self.kl and ml == self.ml, (F.shape, self.kl, self.ml)
