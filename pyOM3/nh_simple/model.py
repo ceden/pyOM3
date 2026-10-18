@@ -20,7 +20,9 @@ class model(main,advection,diabatic,pressure):
           one time step of model equations
           """ 
 
-          if    getattr(self,'buoyancy_superbee_advection',False):
+          if    getattr(self,'buoyancy_weno_advection',False):
+             self.db = OM.modify_array(self.db, (tau,None) , self.buoyancy_advection_weno() )
+          elif  getattr(self,'buoyancy_superbee_advection',False):
              self.db = OM.modify_array(self.db, (tau,None) , self.buoyancy_advection_superbee() )  
           elif  getattr(self,'buoyancy_upwind3_advection',False):    
              self.db = OM.modify_array(self.db, (tau,None) , self.buoyancy_advection_upwind3() )  

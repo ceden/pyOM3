@@ -27,7 +27,7 @@ CASES = (('realistic implicit', dict(kind='realistic')),
          ('simple implicit mxl 2', dict(kind='simple', mxl_choice=2)))
 
 
-def run(N=6, halos=(2, 3)):
+def run(N=6, halos=(2, 3, 4)):
     ok = True
     for name, kw in CASES:
         ab = 'ab3' if 'vadv' in kw else (1.6, -0.6, 0.0)

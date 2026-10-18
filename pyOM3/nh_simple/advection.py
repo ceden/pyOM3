@@ -5,6 +5,7 @@
 """
 import pyOM3                    as OM
 from   pyOM3.nh_simple.boundary import boundary
+from   pyOM3                    import advection_weno as weno
 
 
 class advection(boundary):
@@ -122,6 +123,44 @@ class advection(boundary):
                    
 
     
+      def buoyancy_advection_weno(self):
+          """
+          Advection of buoyancy with the fifth-order WENO-Z scheme
+          (pyOM3/advection_weno.py, after Oceananigans). Fifth order in the
+          interior, third order at the faces next to the lids, centred at
+          the lid faces themselves; periodic directions are fifth order
+          throughout. Needs halo_points >= 3. eps = 1e-8 weno_ref_b^2 with
+          weno_ref_b the typical size of b (default 1, i.e. set it: b is
+          of order 1e-3 to 1e-5 m/s^2 in a dimensional LES).
+          """
+          weno.check_halo(self.halo)
+          eps = weno.EPS0*getattr(self,'weno_ref_b',1.0)**2
+          if not hasattr(self,'weno_wet'):
+             # T-cell wet mask: ones, with apply_bc setting the lid halo rows
+             # to zero (periodic and inner halos stay one). Built once.
+             m = self.apply_bc(OM.np.ones_like(self.b))
+             self.weno_wet = tuple(weno.stencil_masks(m, r)
+                                   for r in (self.rollx, self.rolly, self.rollz))
+          var = self.b
+          (w5x,w3x), (w5y,w3y), (w5z,w3z) = self.weno_wet
+          fx = self.u*weno.face_value(var, self.u, self.rollx, w5x, w3x, eps)
+          fy = self.v*weno.face_value(var, self.v, self.rolly, w5y, w3y, eps)
+          fz = self.w*weno.face_value(var, self.w, self.rollz, w5z, w3z, eps)
+          # halo-face fluxes from the owning block, see superbee
+          fx = self.apply_bc(fx)
+          fy = self.apply_bc(fy)
+          fz = self.apply_bc(fz)
+          fz = self.apply_vertical_flux_bc(fz)
+          # implicit vertical buoyancy flux of the scheme beyond the centred
+          # flux, for the LES TKE closure (see buoyancy_advection_superbee)
+          fz_imp = fz - self.apply_vertical_flux_bc(
+                        self.apply_bc(self.w*weno.face_value_centred(var, self.rollz)))
+          self.b_flux_implicit_z = self.Ro*fz_imp
+          return  - self.Ro*((fx  - self.rollx( fx,1) )/self.dx
+                           + (fy  - self.rolly( fy,1) )/self.dy
+                           + (fz  - self.rollz( fz,1) )/self.dz )
+
+
       def momentum_advection_u(self):
           """
           Advection of u-momentum with second order which is energy conserving

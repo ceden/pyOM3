@@ -6,6 +6,7 @@
 import pyOM3                       as OM
 from   pyOM3.pe_simple.main        import main
 from   pyOM3.density               import get_rho
+from   pyOM3                       import advection_weno as weno
 from   functools                   import partial
 
 
@@ -35,12 +36,14 @@ class thermodynamics(main):
            Calculates tendencies due to tracer advection for general tracer var.
            Stores tendency in dvar and overwrites at time level tau.
           """
-          if hasattr(self,'superbee_advection'):
+          if getattr(self,'weno_advection',False):
+                fe,fn,ft   = self.tracer_flux_weno(var,u,v,w,maskU,maskV,maskW,maskT)
+          elif hasattr(self,'superbee_advection'):
              if self.superbee_advection:
-                fe,fn,ft   = self.tracer_flux_superbee(var,u,v,w,maskU,maskV,maskW)  
-             else: raise ValueError    
+                fe,fn,ft   = self.tracer_flux_superbee(var,u,v,w,maskU,maskV,maskW)
+             else: raise ValueError
           else:
-                fe,fn,ft   = self.tracer_flux_2nd(var,u,v,w,maskU,maskV,maskW)   
+                fe,fn,ft   = self.tracer_flux_2nd(var,u,v,w,maskU,maskV,maskW)
               
           _dvar = (  (fe-self.rollx(fe,1))/self.dx + (fn-self.rolly(fn,1))/self.dy 
                    + (ft-self.rollz(ft,1))/self.dz )*maskT 
@@ -80,6 +83,38 @@ class thermodynamics(main):
           
    
     
+      @partial(OM.jaxjit, static_argnums=0)
+      def tracer_flux_weno(self,var,u,v,w,maskU,maskV,maskW,maskT):
+          """
+          WENO5-Z upwind tracer fluxes (pyOM3/advection_weno.py, after
+          Oceananigans). Fifth order where the six cells around a face are
+          wet, third order where four are, centred second order otherwise;
+          the stencil masks come from maskT, so the surface face (maskW
+          opened for the free surface) is treated like a wall. Needs
+          halo_points >= 3. eps = 1e-8 weno_ref^2, weno_ref the typical
+          size of the tracer (default 1, right for degC and psu; set it to
+          the buoyancy scale when the tracer is buoyancy).
+          """
+          weno.check_halo(self.halo)
+          eps = weno.EPS0*getattr(self,'weno_ref',1.0)**2
+          wet5, wet3 = weno.stencil_masks(maskT, self.rollx)
+          fe = - u*weno.face_value(var, u, self.rollx, wet5, wet3, eps)*maskU
+          wet5, wet3 = weno.stencil_masks(maskT, self.rolly)
+          fn = - v*weno.face_value(var, v, self.rolly, wet5, wet3, eps)*maskV
+          wet5, wet3 = weno.stencil_masks(maskT, self.rollz)
+          ft = - w*weno.face_value(var, w, self.rollz, wet5, wet3, eps)*maskW
+          # No advective tracer flux through the surface face, as in
+          # tracer_flux_2nd / tracer_flux_superbee (see the comment there).
+          ks = -(self.halo+1)
+          if getattr(self, 'free_surface_tracer_flux', False):
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  -w[ks]*var[ks]*maskW[ks])
+          else:
+             ft = OM.modify_array(ft, (ks, slice(None), slice(None)),
+                                  OM.np.zeros_like(ft[ks]))
+          return self.apply_bc(fe), self.apply_bc(fn), self.apply_bc(ft)
+
+
       @partial(OM.jaxjit, static_argnums=0)
       def tracer_flux_superbee(self,var,u,v,w,maskU,maskV,maskW):
           """

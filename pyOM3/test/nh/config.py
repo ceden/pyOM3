@@ -8,7 +8,8 @@ surface stress and a surface buoyancy loss, harmonic friction and mixing.
                              the suite, the 2D-FFT + tridiagonal pressure
                              solver) or 'periodic' (periodic in z, the 3D-FFT
                              solver, no surface forcing). Options:
-                             b_adv ('2nd', 'superbee', 'upwind3'),
+                             b_adv ('2nd', 'superbee', 'upwind3', 'weno'; weno
+                             needs halo >= 3),
                              les (None, 'smag', 'tke', 'ducros'),
                              biharmonic (friction operator), forcing, b_mix
                              (explicit mixing of b; off for the reduction),
@@ -68,10 +69,11 @@ def small_model(kind='lid', b_adv='2nd', les=None, biharmonic=False, forcing=Tru
             par.update(Kh=2e-3, Kv=1e-3)
     par['buoyancy_superbee_advection'] = (b_adv == 'superbee')
     par['buoyancy_upwind3_advection'] = (b_adv == 'upwind3')
+    par['buoyancy_weno_advection'] = (b_adv == 'weno')             # needs halo >= 3
     if les == 'smag':
         par.update(enable_smagorinsky=True)
     elif les == 'tke':
-        par.update(enable_tke_closure=True, les_mix_b=(b_adv != 'superbee'))
+        par.update(enable_tke_closure=True, les_mix_b=(b_adv not in ('superbee', 'weno')))
     elif les == 'ducros':
         par.update(enable_ducros_96=True)
     elif les is not None:
