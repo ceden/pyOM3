@@ -95,21 +95,21 @@ class thermodynamics(main):
           The reconstruction uses the coefficients of a uniform grid in
           index space on the variable grid, as Oceananigans does (exact
           for a uniform tracer, conservative, formally lower order where
-          the spacing changes). Fifth order where the six cells around a
-          face are wet, third order where four are, centred second order
-          otherwise; the stencil masks come from maskT, so the surface face
+          the spacing changes). Fifth order where the five cells of the
+          upwind stencil are wet, third order where three are, first-order
+          upwind otherwise (see advection_weno.py); the stencil masks come from maskT, so the surface face
           (maskW opened for the free surface) is treated like a wall. Needs
           halo_points >= 3. eps = 1e-8 weno_ref^2, weno_ref the typical
           size of the tracer (default 1, right for degC and psu).
           """
           weno.check_halo(self.halo)
           eps = weno.EPS0*getattr(self,'weno_ref',1.0)**2
-          wet5, wet3 = weno.stencil_masks(maskT, self.rollx)
-          fe = - u*weno.face_value(var, u, self.rollx, wet5, wet3, eps)*maskU
-          wet5, wet3 = weno.stencil_masks(maskT, self.rolly)
-          fn = - self.cosu_y*v*weno.face_value(var, v, self.rolly, wet5, wet3, eps)*maskV
-          wet5, wet3 = weno.stencil_masks(maskT, self.rollz)
-          ft = - w*weno.face_value(var, w, self.rollz, wet5, wet3, eps)*maskW
+          wet = weno.stencil_masks(maskT, self.rollx)
+          fe = - u*weno.face_value(var, u, self.rollx, wet, eps)*maskU
+          wet = weno.stencil_masks(maskT, self.rolly)
+          fn = - self.cosu_y*v*weno.face_value(var, v, self.rolly, wet, eps)*maskV
+          wet = weno.stencil_masks(maskT, self.rollz)
+          ft = - w*weno.face_value(var, w, self.rollz, wet, eps)*maskW
           # No advective tracer flux through the surface face, as in
           # tracer_flux_2nd / tracer_flux_superbee (see the comment there).
           ks = -(self.halo+1)

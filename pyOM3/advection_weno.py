@@ -20,14 +20,23 @@
  velocity through the face is positive) reads the cells i-2 .. i+2, the
  right-biased one the cells i-1 .. i+3. The flux divergence at the first
  interior cell needs the face in the halo slot, so three halo points are
- required (halo_points = 3). Fifth order is used only where all six cells
- i-2 .. i+3 are wet, third-order WENO where the four cells i-1 .. i+2 are
- wet, and the plain second-order centred value otherwise. This is the
- order reduction of Oceananigans next to walls and land, and it depends on
- the geometry only, never on the sign of the velocity, so the flux stays
- conservative. The wet test is made with the T-cell mask of the tracer
- (maskT), NOT with the face masks: the face mask maskW is opened at the
- surface for the free surface solver, maskT is not.
+ required (halo_points = 3).
+
+ Next to land. The order is lowered where the stencil of the direction in
+ use reaches a dry cell: fifth order where its five cells are wet, third
+ order where the three cells of the WENO3 stencil are, first-order upwind
+ otherwise (for the left-biased value: i-2 .. i+2, i-1 .. i+1, else the
+ value of cell i). Oceananigans lowers the order with the union of the
+ left and right stencils and ends at the centred second-order value. The
+ centred value is not used here: at the faces next to a wall it produced
+ under- and overshoots of half the jump at a sharp front in overflow1_3D
+ (nh_realistic, 10 and 12 degC, a barrier and a shelf edge), where
+ superbee stays bounded; the upwind value removes them. The flux is still
+ one value per face, so the scheme stays conservative, and the order
+ depends on the geometry and the sign of the velocity at that face. The
+ wet test is made with the T-cell mask of the tracer (maskT), NOT with the
+ face masks: maskW is opened at the surface for the free surface solver,
+ maskT is not.
 
  Regularisation. The Z weights contain eps in the denominator beta + eps.
  beta is a squared difference of tracer values, so eps = 1e-8 is a
@@ -115,30 +124,36 @@ def _weno3_biased(a, b, c, eps):
 
 def stencil_masks(maskT, roll):
     """
-    (wet5, wet3) at the face i: wet5 = 1 where the six cells i-2 .. i+3
-    are all wet, wet3 = 1 where the four cells i-1 .. i+2 are. Computed
-    once per direction at setup from the T mask (pe) or from a mask with
-    zero halo rows in the bounded direction (nh lid).
+    The wet masks of the face i for the four biased stencils, computed once
+    per direction at setup from the T mask (pe) or from a mask with zero
+    halo rows in the bounded direction (nh lid):
+      wet5L  cells i-2 .. i+2 wet (left-biased WENO5)
+      wet5R  cells i-1 .. i+3 wet (right-biased WENO5)
+      wet3L  cells i-1 .. i+1 wet (left-biased WENO3)
+      wet3R  cells i   .. i+2 wet (right-biased WENO3)
     """
-    wet3 = roll(maskT, 1)*maskT*roll(maskT, -1)*roll(maskT, -2)
-    wet5 = wet3*roll(maskT, 2)*roll(maskT, -3)
-    return wet5, wet3
+    m0, mp1 = maskT, roll(maskT, -1)
+    wet3L = roll(maskT, 1)*m0*mp1
+    wet3R = m0*mp1*roll(maskT, -2)
+    wet5L = wet3L*roll(maskT, 2)*roll(maskT, -2)
+    wet5R = wet3R*roll(maskT, 1)*roll(maskT, -3)
+    return wet5L, wet5R, wet3L, wet3R
 
 
-def face_value(q, vel, roll, wet5, wet3, eps):
+def face_value(q, vel, roll, wet, eps):
     """
-    Upwind face value of q for the velocity vel through the face i, WENO5
-    where wet5, WENO3 where wet3 only, centred elsewhere. vel > 0 selects
-    the left-biased value. The caller multiplies by the velocity (or the
-    transport) and the face mask.
+    Upwind face value of q for the velocity vel through the face i. wet is
+    the tuple of stencil_masks. vel > 0 selects the left-biased values:
+    WENO5 where wet5L, WENO3 where wet3L only, the upwind cell value q[i]
+    otherwise; vel <= 0 the right-biased ones with q[i+1]. The caller
+    multiplies by the velocity (or the transport) and the face mask.
     """
+    wet5L, wet5R, wet3L, wet3R = wet
     qL5, qR5 = face_value_weno5(q, roll, eps)
     qL3, qR3 = face_value_weno3(q, roll, eps)
-    q2 = face_value_centred(q, roll)
-    up = vel > 0.0
-    q5 = OM.np.where(up, qL5, qR5)
-    q3 = OM.np.where(up, qL3, qR3)
-    return OM.np.where(wet5 > 0.0, q5, OM.np.where(wet3 > 0.0, q3, q2))
+    qL = OM.np.where(wet5L > 0.0, qL5, OM.np.where(wet3L > 0.0, qL3, q))
+    qR = OM.np.where(wet5R > 0.0, qR5, OM.np.where(wet3R > 0.0, qR3, roll(q, -1)))
+    return OM.np.where(vel > 0.0, qL, qR)
 
 
 def check_halo(halo):

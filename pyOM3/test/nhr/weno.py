@@ -15,6 +15,10 @@ Cartesian grid, shelf and seamount, TKE closure), halo_points = 3.
   17c  the result does not depend on the halo width: halo 4 against halo 3
        after N steps, bit for bit, every field including p_nh
   17d  20 AB3 steps stay finite
+  17g  boundedness at a salinity front across the shelf and the seamount
+       (as test 17g of the pe family): after 60 steps inside [35, 36] to
+       2e-4 (measured Oct 18 2026: 6e-5; superbee 2e-7; the centred
+       fallback next to land, replaced that day, 1.9e-3)
   17e  the hydrostatic limit: with the non-hydrostatic pressure switched off
        (enable_nonhydrostatic = False) nh_realistic with WENO5 is
        pe_realistic with WENO5 on the same stretched grid, to round-off
@@ -24,7 +28,7 @@ compared with one PE, at the tolerances of the family's decomposition test
 4 (the 3-D CG reduces in rank order; 1e-9 for the fields, 1e-5 for p_nh)."""
 import numpy as np
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import small_model, small_model_pe, step, state, gathered_state, line, OM
+from config import small_model, small_model_pe, step, state, gathered_state, line, global_index, OM
 from common import reldiff
 
 
@@ -57,6 +61,12 @@ def run(N=6):
     ref = state(step(weno(small_model(halo=3)), N))
     d = max(reldiff(state(step(weno(small_model(halo=4)), N)), ref).values())
     ok &= line('17c nh_realistic: halo 4 = halo 3, WENO5, %d steps' % N, d, 0.0)
+    m = weno(small_model(halo=3, tracer_flux=True)); jg, ig = global_index(m)
+    m.salt = m.apply_bc(OM.np.asarray(35.0 + 1.0*(ig >= 7)[None]*np.ones((m.Nz, 1, 1))))*m.maskT
+    step(m, 60)
+    sal = np.asarray(m.salt)[sl, sl, sl][np.asarray(m.maskT)[sl, sl, sl] > 0]
+    ok &= line('17g nh_realistic: salinity front, max excursion out of [35,36]',
+               float(max(35.0 - sal.min(), sal.max() - 36.0, 0.0)), 2e-4)
     st = state(step(weno(small_model(halo=3)), 20, 'ab3'))
     d = 0.0 if all(np.all(np.isfinite(v)) for v in st.values()) else np.inf
     ok &= line('17d nh_realistic: 20 AB3 steps finite (0 = yes)', d, 0.0)

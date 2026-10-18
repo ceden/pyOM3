@@ -127,9 +127,9 @@ class advection(boundary):
           """
           Advection of buoyancy with the fifth-order WENO-Z scheme
           (pyOM3/advection_weno.py, after Oceananigans). Fifth order in the
-          interior, third order at the faces next to the lids, centred at
-          the lid faces themselves; periodic directions are fifth order
-          throughout. Needs halo_points >= 3. eps = 1e-8 weno_ref_b^2 with
+          interior, third order and then first-order upwind towards the
+          lids where the upwind stencil reaches them; periodic directions
+          are fifth order throughout. Needs halo_points >= 3. eps = 1e-8 weno_ref_b^2 with
           weno_ref_b the typical size of b (default 1, i.e. set it: b is
           of order 1e-3 to 1e-5 m/s^2 in a dimensional LES).
           """
@@ -142,10 +142,10 @@ class advection(boundary):
              self.weno_wet = tuple(weno.stencil_masks(m, r)
                                    for r in (self.rollx, self.rolly, self.rollz))
           var = self.b
-          (w5x,w3x), (w5y,w3y), (w5z,w3z) = self.weno_wet
-          fx = self.u*weno.face_value(var, self.u, self.rollx, w5x, w3x, eps)
-          fy = self.v*weno.face_value(var, self.v, self.rolly, w5y, w3y, eps)
-          fz = self.w*weno.face_value(var, self.w, self.rollz, w5z, w3z, eps)
+          wx, wy, wz = self.weno_wet
+          fx = self.u*weno.face_value(var, self.u, self.rollx, wx, eps)
+          fy = self.v*weno.face_value(var, self.v, self.rolly, wy, eps)
+          fz = self.w*weno.face_value(var, self.w, self.rollz, wz, eps)
           # halo-face fluxes from the owning block, see superbee
           fx = self.apply_bc(fx)
           fy = self.apply_bc(fy)

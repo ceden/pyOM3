@@ -21,6 +21,13 @@ pe_simple ('simple'), pe_realistic on the uniform Cartesian grid
   17f  reduction: pe_realistic on the uniform Cartesian grid with WENO5
        reproduces pe_simple with WENO5 after N steps, to round-off (the
        reduction test 1 pattern, with the scheme switched on)
+  17g  boundedness at a front next to land: salinity 35 west of i = 7 and
+       36 east of it, across the shelf and the seamount, after 60 steps
+       stays inside [35, 36] to 1e-4 (the surface tracer flux option is on,
+       so that the top cell has no -S dt div_h(u) drift). This is what
+       found the centred fallback next to land (Oct 18 2026, overflow1_3D):
+       with it the same run left the interval by 2.5e-4 (pe_simple) and
+       1e-3 (pe_realistic), with the upwind fallback by 2e-5 and 8e-6
   17e  accuracy: a Gaussian advected once around a periodic channel
        (pe_simple, flat bottom, prescribed u, no dynamics, the AB2 weights
        of the runs) has a smaller error with WENO5 than with superbee,
@@ -34,7 +41,7 @@ order, 1e-12 for an x split), the halo-slot fluxes being taken from the
 owning block."""
 import numpy as np
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import small_model, step, state, gathered_state, line, reldiff, NX, NY, NZ, OM
+from config import small_model, step, state, gathered_state, line, reldiff, global_index, NX, NY, NZ, OM
 
 
 KINDS = ('simple', 'cartesian', 'realistic')
@@ -78,6 +85,13 @@ def run_kind(kind, N=6):
     ref = state(step(weno_model(kind), N))
     d = max(reldiff(state(step(weno_model(kind, halo=4), N)), ref).values())
     ok &= line('17c %s: halo 4 = halo 3, WENO5, %d steps' % (kind, N), d, 0.0)
+    # 17g boundedness at a salinity front across the topography
+    m = weno_model(kind, tracer_flux=True); jg, ig = global_index(m)
+    m.salt = m.apply_bc(OM.np.asarray(35.0 + 1.0*(ig >= 7)[None]*np.ones((m.Nz, 1, 1))))*m.maskT
+    step(m, 60)
+    sal = np.asarray(m.salt)[sl, sl, sl][np.asarray(m.maskT)[sl, sl, sl] > 0]
+    ok &= line('17g %s: salinity front, max excursion out of [35,36]' % kind,
+               float(max(35.0 - sal.min(), sal.max() - 36.0, 0.0)), 1e-4)
     # 17d AB3, finite
     st = state(step(weno_model(kind), 20, 'ab3'))
     d = 0.0 if all(np.all(np.isfinite(v)) for v in st.values()) else np.inf
