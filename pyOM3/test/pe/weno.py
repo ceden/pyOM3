@@ -1,25 +1,33 @@
-"""Test 17: WENO5 tracer advection (pe_simple/thermodynamics.py
-tracer_flux_weno, pyOM3/advection_weno.py) on the small configuration with
-its shelf and seamount, pe_simple, halo_points = 3 (the scheme refuses
-less). Serial part:
+"""Test 17: WENO5 tracer advection (tracer_flux_weno of
+pe_simple/thermodynamics.py and pe_realistic/thermodynamics.py,
+pyOM3/advection_weno.py) on the small configuration with its shelf and
+seamount, halo_points = 3 (the scheme refuses less). 17a to 17d run for
+pe_simple ('simple'), pe_realistic on the uniform Cartesian grid
+('cartesian') and on the spherical variable grid of the suite
+('realistic'). Serial part:
 
   17a  a uniform tracer has no advective tendency (with the surface flux
        option, so that the top cell is included): the face value of a
        constant is the constant whatever the order chosen at a face, and
        the velocity is divergence free
-  17b  the scheme is conservative: the advective tendency sums to zero over
-       the wet cells (ft = 0 at the surface, masked faces at the walls and
-       the topography)
+  17b  the scheme is conservative: the advective tendency, times the cell
+       volume (area_t dzt for pe_realistic), sums to zero over the wet
+       cells (ft = 0 at the surface, masked faces at the walls and the
+       topography)
   17c  the result does not depend on the halo width: halo 4 against halo 3
        after N steps, bit for bit
   17d  the scheme runs with AB3 at the suite's time step and stays finite,
        with the LES-free closure of the suite (TKE)
+  17f  reduction: pe_realistic on the uniform Cartesian grid with WENO5
+       reproduces pe_simple with WENO5 after N steps, to round-off (the
+       reduction test 1 pattern, with the scheme switched on)
   17e  accuracy: a Gaussian advected once around a periodic channel
        (pe_simple, flat bottom, prescribed u, no dynamics, the AB2 weights
        of the runs) has a smaller error with WENO5 than with superbee,
        and no over- or undershoot beyond 1e-3 of the amplitude
 
-Under MPI (mpirun -np 4 python3 weno.py 2 2) the WENO run after N steps is
+Under MPI (mpirun -np 4 python3 weno.py 2 2 [simple|realistic]) the WENO
+run (default 'realistic') after N steps is
 compared with one PE, bit for bit for a y split (no global sums in the
 tracer advection; the CG of the implicit free surface reduces in rank
 order, 1e-12 for an x split), the halo-slot fluxes being taken from the
@@ -29,41 +37,61 @@ import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import small_model, step, state, gathered_state, line, reldiff, NX, NY, NZ, OM
 
 
-def weno_model(**kw):
-    m = small_model(kind='simple', halo=kw.pop('halo', 3), **kw)
+KINDS = ('simple', 'cartesian', 'realistic')
+
+
+def weno_model(kind='simple', **kw):
+    m = small_model(kind=kind, halo=kw.pop('halo', 3), **kw)
     m.weno_advection = True
     m.weno_ref = 10.0                  # the temperature range of the box
     return m
 
 
-def run_serial(N=6):
-    ok = True
-    # 17a uniform tracer
-    m = weno_model(tracer_flux=True)
+def _volume(m):
+    """cell volume, interior; 1 for pe_simple (uniform grid)"""
     h = m.halo; sl = slice(h, -h)
-    tau = 0
+    if hasattr(m, 'area_t'):
+        return np.asarray(m.area_t*m.dzt_z)[sl, sl, sl]
+    return 1.0
+
+
+def run_kind(kind, N=6):
+    ok = True; tau = 0
+    # 17a uniform tracer
+    m = weno_model(kind, tracer_flux=True)
+    h = m.halo; sl = slice(h, -h)
     m.dtemp = m.tracer_advection(5.0*m.maskT, m.dtemp, m.u, m.v, m.w, m.maskU, m.maskV, m.maskW, m.maskT, tau)
     d = float(np.max(np.abs(np.asarray(m.dtemp[tau])[sl, sl, sl])))*m.dt
-    ok &= line('17a uniform tracer, |dT| per step after one step', d, 1e-13)
+    ok &= line('17a %s: uniform tracer, |dT| per step, start' % kind, d, 1e-13)
     step(m, 3)                                  # a nontrivial velocity
     m.dtemp = m.tracer_advection(5.0*m.maskT, m.dtemp, m.u, m.v, m.w, m.maskU, m.maskV, m.maskW, m.maskT, tau)
     d = float(np.max(np.abs(np.asarray(m.dtemp[tau])[sl, sl, sl])))*m.dt
-    ok &= line('17a uniform tracer, |dT| per step after 3 steps', d, 1e-13)
+    ok &= line('17a %s: uniform tracer, |dT| per step, 3 steps' % kind, d, 1e-13)
     # 17b conservation (ft = 0 at the surface)
-    m = weno_model()
+    m = weno_model(kind)
     step(m, 3)
     m.dtemp = m.tracer_advection(m.temp, m.dtemp, m.u, m.v, m.w, m.maskU, m.maskV, m.maskW, m.maskT, tau)
-    dT = np.asarray(m.dtemp[tau])[sl, sl, sl]
+    dT = np.asarray(m.dtemp[tau])[sl, sl, sl]*_volume(m)
     d = abs(float(np.sum(dT)))/float(np.sum(np.abs(dT)))
-    ok &= line('17b sum of the advective tendency / sum |tendency|', d, 1e-13)
+    ok &= line('17b %s: sum of volume x tendency / sum |...|' % kind, d, 1e-13)
     # 17c halo independence
-    ref = state(step(weno_model(), N))
-    d = max(reldiff(state(step(weno_model(halo=4), N)), ref).values())
-    ok &= line('17c halo 4 = halo 3, WENO5, %d steps' % N, d, 0.0)
+    ref = state(step(weno_model(kind), N))
+    d = max(reldiff(state(step(weno_model(kind, halo=4), N)), ref).values())
+    ok &= line('17c %s: halo 4 = halo 3, WENO5, %d steps' % (kind, N), d, 0.0)
     # 17d AB3, finite
-    st = state(step(weno_model(), 20, 'ab3'))
+    st = state(step(weno_model(kind), 20, 'ab3'))
     d = 0.0 if all(np.all(np.isfinite(v)) for v in st.values()) else np.inf
-    ok &= line('17d 20 AB3 steps finite (0 = yes)', d, 0.0)
+    ok &= line('17d %s: 20 AB3 steps finite (0 = yes)' % kind, d, 0.0)
+    return ok
+
+
+def run_serial(N=6):
+    ok = True
+    for kind in KINDS:
+        ok &= run_kind(kind, N)
+    # 17f reduction: pe_realistic uniform Cartesian = pe_simple, both WENO5
+    a = state(step(weno_model('simple'), N)); b = state(step(weno_model('cartesian'), N))
+    ok &= line('17f pe_realistic cartesian = pe_simple, WENO5, %d steps' % N, max(reldiff(b, a).values()), 1e-12)
     # 17e accuracy in a periodic channel
     ok &= _channel()
     return ok
@@ -108,15 +136,15 @@ def _channel(nx=64, cfl=0.2):
     return ok
 
 
-def run_mpi(npx, npy, N=6):
+def run_mpi(npx, npy, kind='realistic', N=6):
     from mpi4py import MPI
     comm = MPI.COMM_WORLD
-    st = gathered_state(step(weno_model(comm=comm, n_pes_x=npx, n_pes_y=npy), N))
-    ref = gathered_state(step(weno_model(comm=MPI.COMM_SELF), N)) if comm.Get_rank() == 0 else None
+    st = gathered_state(step(weno_model(kind, comm=comm, n_pes_x=npx, n_pes_y=npy), N))
+    ref = gathered_state(step(weno_model(kind, comm=MPI.COMM_SELF), N)) if comm.Get_rank() == 0 else None
     ok = True
     if comm.Get_rank() == 0:
         d = max(reldiff(st, ref).values())
-        ok = line('17 decomposition %dx%d vs 1 PE, WENO5, %d steps' % (npx, npy, N), d, 0.0 if npx == 1 else 1e-12)
+        ok = line('17 decomposition %dx%d vs 1 PE, WENO5, %s, %d steps' % (npx, npy, kind, N), d, 0.0 if npx == 1 else 1e-12)
     return bool(comm.bcast(ok, root=0))
 
 
@@ -126,5 +154,5 @@ def run():
 
 if __name__ == '__main__':
     if len(sys.argv) >= 3:
-        sys.exit(0 if run_mpi(int(sys.argv[1]), int(sys.argv[2])) else 1)
+        sys.exit(0 if run_mpi(int(sys.argv[1]), int(sys.argv[2]), *sys.argv[3:4]) else 1)
     sys.exit(0 if run() else 1)

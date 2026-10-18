@@ -85,6 +85,10 @@ class vadv_split(main):
           if not getattr(self,'superbee_advection',False):
              raise ValueError('vadv_sub_cycling needs superbee_advection = True: forward '
                               'steps of the centred flux are unstable at any CFL number')
+          if getattr(self,'weno_advection',False):
+             raise ValueError('vadv_sub_cycling does not work with weno_advection: the split '
+                              'sweeps are forward Euler steps of the superbee flux, WENO5 '
+                              'is a method-of-lines scheme for the AB step')
           self.vadv_fs_flux = {}
           return
 
