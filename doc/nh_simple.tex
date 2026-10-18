@@ -112,6 +112,17 @@ the LES closures, see below), and the third-order upwind scheme
 set, the Superbee scheme is used. Momentum advection is
 always the energy-conserving second-order form.
 
+A fourth scheme is the fifth-order WENO scheme of pe\_simple, selected by \verb|buoyancy_weno_advection|.
+It is described in the documentation of pe\_simple.
+The size $T_{ref}$ of the buoyancy in its constant $\epsilon = 10^{-8} T_{ref}^2$ is \verb|weno_ref_b|.
+The default $T_{ref} = 1$ is far too large for a dimensional buoyancy.
+It must be set to the size of the buoyancy differences, for instance $10^{-4}$ m/s$^2$.
+The documentation of pe\_simple explains the choice and gives examples.
+Towards the lids the order is lowered to third order and then to the upstream value.
+In the periodic directions it is fifth order everywhere.
+The scheme needs three halo points.
+If several switches are set, the WENO scheme is used first, then Superbee.
+
 \subsection*{Pressure solver}
 
 The velocity is first advanced with all terms except the pressure gradient
@@ -300,6 +311,10 @@ vanishes on the lids. The buoyancy production is zero only when
 \verb|les_mix_b| is off and the Superbee scheme is not selected, for
 instance with the third-order upwind scheme.
 
+The WENO scheme can take the place of Superbee here.
+Its implicit subgrid flux is its vertical buoyancy flux minus the centred flux $w \Bar b^{z+}$.
+It also vanishes on the lids.
+
 \emph{Peclet bound} (\verb|enable_peclet_bound|): where the grid Peclet
 number of the resolved flow exceeds \verb|Peclet_limit|, the cell-centre
 and horizontal-corner viscosities are raised proportionally. The bound is
@@ -416,7 +431,7 @@ Attribute & Unit & Meaning \\
 The constructor additionally takes \verb|n_pes_x|, \verb|n_pes_y|
 (processor grid over the $y$ and $z$ pencils, default $1 \times 1$;
 their product must equal the communicator size), \verb|halo_points|
-(default 1) and \verb|comm_in| (default: MPI world communicator).
+(default 1, at least 3 for \verb|buoyancy_weno_advection|) and \verb|comm_in| (default: MPI world communicator).
 
 \subsection*{Forcing hooks and coupling fields}
 
@@ -452,6 +467,12 @@ Attribute & Default & Meaning \\
   Superbee flux limiter instead of the centred second-order scheme \\
 \verb|buoyancy_upwind3_advection| & off & third-order upwind buoyancy
   advection \\
+\verb|buoyancy_weno_advection| & off & fifth-order WENO buoyancy advection
+  of pe\_simple. It needs \verb|halo_points| $=3$ and takes precedence
+  over the other two schemes \\
+\verb|weno_ref_b| & $1$ & size $T_{ref}$ of the buoyancy (m/s$^2$) in
+  $\epsilon = 10^{-8} T_{ref}^2$ of the WENO weights. Set it to the size of
+  the buoyancy differences \\
 \verb|Ah|, \verb|Av| & unset & harmonic viscosities (m$^2$/s); either one
   alone activates the horizontal-only / vertical-only operator \\
 \verb|Kh|, \verb|Kv| & unset & harmonic buoyancy diffusivities (m$^2$/s);
@@ -485,7 +506,8 @@ Attribute & Default & Meaning \\
   Smagorinsky closure at the rigid lids (no effect on the other
   closures) \\
 \verb|les_mix_b| & on & explicit SGS buoyancy diffusion; switch off when a
-  flux-limited advection scheme provides the scalar SGS mixing \\
+  flux-limited advection scheme (Superbee or WENO) provides the scalar SGS
+  mixing \\
 \verb|les_stokes_prod| & \verb|None| & Stokes production of subgrid TKE
   (TKE closure only). \verb|'A'| uses
   $-\langle \v u' w' \rangle \cdot \pz{\v u_S}$ (McWilliams et al.\ 1997),

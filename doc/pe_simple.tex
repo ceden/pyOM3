@@ -243,6 +243,136 @@ The external-mode treatment is selected by the attributes
 \verb|implicit_free_surface| and \verb|explicit_free_surface|: both false
 gives the rigid lid, the first the implicit free surface (both solved with
 the iterative solver above), the second the split-explicit scheme.
+
+\subsection*{Tracer advection}
+
+A tracer $T$ lives at the centre of a cell.
+The advective flux through a face of the cell is the velocity through the face times a value $T_f$ of the tracer at the face.
+The face between cell $i$ and cell $i+1$ in one direction is used below.
+The other directions are treated in the same way.
+Three choices of $T_f$ are available.
+
+The default is the mean of the two cells, $T_f = (T_i + T_{i+1})/2$.
+This value is of second order.
+It conserves the variance of the tracer.
+It produces under- and overshoots at fronts.
+
+With \verb|superbee_advection| the face value is the mean minus a correction from the Superbee flux limiter, as in MITgcm.
+The correction contains the Courant number $|u| \Delta t/\Delta x$.
+In a forward step the scheme is monotone.
+Inside the Adams--Bashforth step with the weights $1.6$ and $-0.6$ it is stable up to a Courant number of about $0.45$.
+It sharpens fronts and flattens smooth extrema.
+
+With \verb|weno_advection| the face value is the fifth-order WENO reconstruction of Oceananigans.
+The code is the module \verb|advection_weno.py| in \verb|pyOM3|.
+For a flow from cell $i$ to cell $i+1$ the five cells $i-2$ to $i+2$ are used.
+Three parabolas through three neighbouring cells each give a value at the face,
+\beeq
+p_0 = \frac{2 T_{i-2} - 7 T_{i-1} + 11 T_i}{6} ~,~~
+p_1 = \frac{- T_{i-1} + 5 T_i + 2 T_{i+1}}{6} ~,~~
+p_2 = \frac{2 T_i + 5 T_{i+1} - T_{i+2}}{6} ~.
+\eeeq
+The face value is $T_f = \omega_0 p_0 + \omega_1 p_1 + \omega_2 p_2$ with weights $\omega_r$ that sum to one.
+For a flow from cell $i+1$ to cell $i$ the cells $i-1$ to $i+3$ are used in mirrored order.
+
+The weights are
+\beeq
+\omega_r = \frac{\alpha_r}{\alpha_0 + \alpha_1 + \alpha_2} ~,~~
+\alpha_r = C_r \lk 1 + \lk \frac{\tau}{\beta_r + \epsilon} \rk^2 \rk
+\eeeq
+with $C_0 = 1/10$, $C_1 = 6/10$ and $C_2 = 3/10$.
+$\beta_r$ is the smoothness of parabola $r$ after Jiang and Shu (1996).
+$\tau = |\beta_0 - \beta_2|$ is the global smoothness after Borges et al.\ (2008).
+Where $T$ is smooth all $\beta_r$ are nearly equal, the weights are close to $C_r$ and $T_f$ is of fifth order.
+Where the three cells of a parabola cross a jump its $\beta_r$ is large and its weight falls to zero.
+
+$\beta_r$ is of the size of the squared difference $\Delta T^2$ between neighbouring cells.
+It is compared with the constant $\epsilon = 10^{-8}\, T_{ref}^2$.
+$T_{ref}$ is given by \verb|weno_ref| in the unit of the tracer.
+The weights therefore react only to differences larger than about $10^{-4}\, T_{ref}$.
+Only differences enter, so the mean value of the tracer plays no role.
+A salinity of $35$ does not ask for $T_{ref} = 35$.
+
+$T_{ref}$ should be the size of the jumps and fronts of interest, up to about three times that.
+Where a jump is much smaller than $T_{ref}$, all $\beta_r$ are small against $\epsilon$.
+The weights then stay at $C_r$ and the scheme oscillates at the jump like a linear fifth-order scheme.
+Where a feature is about as large as $T_{ref}$ or larger, the weights react to it.
+A smooth feature only a few cells wide is then treated like a jump and its peak is cut.
+
+Table \ref{tab:weno_ref} shows both effects.
+A jump of size $1$ and Gaussians of amplitude $1$ were advected once over $200$ cells, with AB3 and the Courant number $0.3$.
+The over- and undershoot at the jump grows in proportion to $T_{ref}$.
+The Gaussian with a width of $6$ cells is cut for $T_{ref}$ up to the amplitude.
+The Gaussian with a width of $12$ cells does not depend on $T_{ref}$.
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{@{}rccc@{}}
+\hline
+$T_{ref}$ & excursion at the jump & peak, width 6 cells & peak, width 12 cells \\
+\hline
+$0.1$ & $8 \cdot 10^{-6}$ & $0.73$ & $0.999$ \\
+$1$ & $3 \cdot 10^{-5}$ & $0.61$ & $0.999$ \\
+$3$ & $1 \cdot 10^{-4}$ & $0.98$ & $0.999$ \\
+$10$ & $4 \cdot 10^{-4}$ & $0.98$ & $0.999$ \\
+$100$ & $4 \cdot 10^{-3}$ & $0.98$ & $0.999$ \\
+$10^{4}$ & $6 \cdot 10^{-2}$ & --- & --- \\
+\hline
+\end{tabular}
+\end{center}
+\caption{A jump of size $1$ and Gaussians of amplitude $1$ advected once over $200$ cells with the WENO scheme, for different $T_{ref}$.
+The width of a Gaussian is its value of $\sigma$ in cells.
+The last row is buoyancy of order $10^{-4}$ m/s$^2$ with the default $T_{ref} = 1$.}
+\label{tab:weno_ref}
+\end{table}
+
+Table \ref{tab:weno_ref_examples} gives values of $T_{ref}$ for common cases.
+The same $T_{ref}$ is used for temperature and salinity.
+$T_{ref} = 1$ suits both in an ocean model.
+If unsure, take the largest difference between neighbouring cells in the initial field, or the range across a front.
+A $T_{ref}$ wrong by a factor of $3$ does no harm.
+A $T_{ref}$ too large by a factor of $100$ or more makes the scheme oscillate at jumps.
+
+\begin{table}[h]
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\hline
+tracer & typical jump & $T_{ref}$ \\
+\hline
+temperature in degC, ocean fronts & $0.1$ to $5$ K & $1$ (default) \\
+salinity in psu & $0.1$ to $1$ & $1$ (default) \\
+temperature $10$ and $12$ degC in overflow1\_3D & $2$ K & $2$ \\
+buoyancy as tracer (\verb|eq_of_state| $=0$) & $10^{-3}$ to $10^{-2}$ m/s$^2$ & $10^{-2}$ \\
+buoyancy anomaly of a dimensional LES & $10^{-4}$ to $10^{-3}$ m/s$^2$ & $10^{-4}$ to $10^{-3}$ \\
+non-dimensional buoyancy & of order $1$ & $1$ (default) \\
+dye between $0$ and $1$ & $1$ & $1$ \\
+age in years & $10$ to $100$ & $30$ to $100$ \\
+\hline
+\end{tabular}
+\end{center}
+\caption{Values of $T_{ref}$ (\texttt{weno\_ref}, in nh\_simple \texttt{weno\_ref\_b}) for common cases.}
+\label{tab:weno_ref_examples}
+\end{table}
+
+Next to land not all five cells are wet.
+If the three cells $i-1$ to $i+1$ are wet, the third-order WENO value of these three cells is used.
+Otherwise the value of the upstream cell is used, $T_f = T_i$.
+The wet cells are taken from the mask of the $T$ cells.
+The surface face is therefore treated like a wall.
+Oceananigans uses the mean of the two cells in this last case.
+In overflow1\_3D this mean produced undershoots of half a jump next to land, where Superbee stays bounded.
+The upstream value removes them.
+Each face has one flux, so the content of the tracer is conserved in all cases.
+
+The scheme needs three halo points, \verb|halo_points| $= 3$.
+Inside the Adams--Bashforth step its Courant number may reach about $0.40$ with AB3 and $0.45$ with the weights $1.6$ and $-0.6$.
+The mean of the two cells allows $0.72$ and $0.50$.
+The scheme is not monotone.
+In the tests its excursions beyond the initial range stay below $10^{-4}$ of a jump.
+At a single sharp front Superbee is sharper and cheaper.
+The WENO scheme pays where the tracer is smooth.
+
+If both switches are set, the WENO scheme is used.
   
 
 \section*{Vertical mixing and friction options}
@@ -547,7 +677,8 @@ Attribute & Unit & Meaning \\
 
 \noindent
 The constructor additionally takes \verb|n_pes_x|, \verb|n_pes_y| (processor
-grid, default $1 \times 1$), \verb|halo_points| (default 1) and
+grid, default $1 \times 1$), \verb|halo_points| (default 1, at least 3 for
+\verb|weno_advection|) and
 \verb|comm_in| (default: MPI world communicator). The constants
 \verb|grav| $=9.81$ and \verb|rho_0| $=1024$ are set internally (note: they
 overwrite any value passed in the parameter dictionary). Coriolis parameter,
@@ -600,6 +731,12 @@ Attribute & Default & Meaning \\
   Superbee flux limiter instead of the second-order fluxes (momentum
   advection is always second order). Note: setting it to false raises an
   error; leave it unset for the second-order scheme \\
+\verb|weno_advection| & off & tracer advection with the fifth-order WENO
+  scheme, see the section on tracer advection. It needs \verb|halo_points|
+  $=3$. It takes precedence over \verb|superbee_advection| \\
+\verb|weno_ref| & $1$ & size $T_{ref}$ of the tracer in
+  $\epsilon = 10^{-8} T_{ref}^2$ of the WENO weights, in the unit of the
+  tracer, the same for temperature and salinity \\
 \verb|Khbi| & unset & biharmonic horizontal tracer diffusion coefficient
   (m$^4$/s); active if present, forward Euler \\
 \verb|Ahbi| & unset & biharmonic horizontal friction coefficient (m$^4$/s);

@@ -203,6 +203,9 @@ The tracer fluxes are those of pe\_simple.
 The meridional flux is multiplied by $\cos \phi^u$.
 The flux divergence is divided by $\cos \phi^t \Delta x^t$, $\cos \phi^t \Delta y^t$ and $\Delta z^t$.
 The Superbee scheme uses the Courant numbers $|u| \Delta t /(\cos \phi^t \Delta x^t)$, $|\cos \phi^u v| \Delta t / (\cos \phi^t \Delta y^t)$ and $|w| \Delta t / \Delta z^t$.
+The WENO scheme uses the coefficients of pe\_simple, those of a uniform grid, as Oceananigans does.
+A uniform tracer then stays uniform and the content is conserved.
+Where the widths of the cells change, the face value is of lower than fifth order.
 
 The momentum advection is that of pe\_simple with volume transports.
 The transports through the faces are $u \Delta z^t \Delta y^t$, $v \Delta z^t \cos \phi^u \Delta x^t$ and $w A^t$.
@@ -417,6 +420,9 @@ Each of them is a forward step of the Superbee scheme, as in MITgcm.
 The vertical Courant number may then be as large as $M$.
 The Adams--Bashforth step adds only the forcing of the tracers.
 The option needs \verb|superbee_advection|.
+It cannot be combined with \verb|weno_advection|, and the model stops with an error then.
+The steps outside the Adams--Bashforth step are forward steps of the Superbee scheme.
+The WENO scheme is written for the Adams--Bashforth step.
 
 All of the advection has to leave the Adams--Bashforth step, not the vertical part alone.
 Horizontal and vertical advection cancel in a flow along isopycnals.
@@ -533,6 +539,9 @@ Attribute & Default & Meaning \\
 \verb|K_iso|, \verb|K_gm| & unset & three-dimensional diffusivities, set from \verb|K_iso_0| and \verb|K_gm_0| if not given \\
 \verb|vadv_sub_cycling| & $0$ & number $M$ of vertical steps of the tracer advection outside the Adams--Bashforth step.
   $0$ keeps the advection in the Adams--Bashforth step \\
+\verb|weno_advection| & off & as in pe\_simple, with the coefficients of a uniform grid.
+  Not together with \verb|vadv_sub_cycling| \\
+\verb|weno_ref| & $1$ & as in pe\_simple \\
 \hline
 \end{longtable}
 
@@ -551,6 +560,7 @@ $z^w$ is written under the name \verb|zu|.
 \item TEM friction, the EKE model and IDEMIX of pyOM2 are not part of pe\_realistic.
 \item With varying $\Delta x^t$ in a periodic direction pe\_realistic and pyOM2 build different $x^t$ and $\Delta x^u$ in the halo.
 \item $\Delta z^t$ must vary smoothly, see the grid above.
+\item \verb|weno_advection| and \verb|vadv_sub_cycling| exclude each other.
 \end{itemize}
 
 \end{document}

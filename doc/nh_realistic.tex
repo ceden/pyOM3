@@ -315,6 +315,8 @@ In pe\_realistic $w$ follows from continuity and the velocity is free of diverge
 In nh\_realistic the velocity is free of divergence to \verb|epsilon_nh|.
 A uniform tracer therefore stays uniform only to \verb|epsilon_nh| $\Delta t$ per time step.
 The content of a tracer is still conserved to round-off, since the advection is in flux form.
+The WENO scheme of pe\_realistic works in nh\_realistic unchanged.
+For a uniform tracer it gives the same tendency as the mean of the two cells, the tracer times the divergence that the solve leaves.
 
 \subsection*{Time step}
 
@@ -404,6 +406,8 @@ Attribute & Default & Meaning \\
 \verb|max_iterations_nh| & \verb|max_iterations| & largest number of iterations of the solve for $p_{nh}$ \\
 \verb|Ah|, \verb|Ahbi| & unset & as in pe\_realistic, also acting on $w$ \\
 \verb|A_v| & $0$ & as in pe\_realistic, also acting on $w$ \\
+\verb|weno_advection|, \verb|weno_ref| & off, $1$ & WENO tracer advection as in pe\_realistic.
+  It needs \verb|halo_points| $=3$ \\
 \hline
 \end{longtable}
 

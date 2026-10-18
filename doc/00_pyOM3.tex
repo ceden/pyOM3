@@ -118,6 +118,10 @@ A realistic package is documented by its differences to the simple package.
 The documentation of pe\_realistic thus needs the one of pe\_simple.
 The same holds for nh\_realistic, which needs pe\_realistic and pe\_simple, and for wim\_realistic.
 
+The WENO reconstruction of the tracers is the module \verb|advection_weno.py| in \verb|pyOM3|.
+It is used by pe\_simple, pe\_realistic, nh\_simple and nh\_realistic.
+It is described in the documentation of pe\_simple.
+
 The routine tests and their results are described in \verb|pyOM3/test/README_test_suite.md|.
 The coupled configurations are described in \verb|setups/README.md|.
 
