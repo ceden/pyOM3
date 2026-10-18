@@ -138,8 +138,8 @@ Test 4 has a fourth case, 'ab3' (implicit path, M = 2, AB3).
 
 ### 16. Halo width (`<family>/halo.py`, all four families)
 
-The small model with `halo_points = 2` and `3` against the default `1`,
-after six steps, every field of the family's `state`, bit for bit on one
+The small model with `halo_points = 2` and `3` against the default `1`
+(pe: also `4`, since Oct 18 2026), after six steps, every field of the family's `state`, bit for bit on one
 PE. Nothing in the discrete problem changes with the halo width, so a
 difference is an index that counts from the array edge instead of from the
 halo, a sum that runs over halo points, or a grid recursion anchored in the
@@ -185,6 +185,17 @@ restart, twins untouched):
    `Nz - 2` instead of `Nz - 2 halo` (the todo in its header). Used by the
    snapshots and the tests; same packages as 4.
 
+6. `pe_simple/pressure.py` and `pe_realistic/pressure.py` took the
+   surface mask of the surface-pressure solver as `maskT[Nz - 2 halo]`.
+   The surface level is `Nz - halo - 1`, so the solver used the mask
+   `halo - 1` levels below the surface. Found Oct 18 2026 with halo 4 for
+   WENO: test 16 passed with halo 2 and 3 because the shelf of the small
+   configuration has two wet levels, so the mask one and two levels down
+   is the same as at the surface. With halo 4 the shelf was land for the
+   solver (pe_simple 0.5 relative in p_s). Fixed to `maskT[-halo-1]` in
+   all six places; halo 1 is unchanged, halo 1 to 4 are now bit for bit
+   the same. A shelf with one wet level would have shown it with halo 2.
+
 Under MPI, test 4 of every family now runs its first path(s) once more
 with `halo_points = 2` against the same serial references (pe and nhr:
 implicit and explicit; nh: lid and les; wim: default) -- the wider halo
@@ -203,6 +214,65 @@ Times on two cores: pe 6 min, nhr 6.5 min, wim 16 min.
 
 Not covered: the fortran propagation and DIA kernels under a wider halo
 (the suite runs the numpy backends; the kernels take `halo` as an argument).
+
+### 17. WENO5 tracer advection (`pe/weno.py`, `nh/weno.py`, `nhr/weno.py`)
+
+Options `weno_advection` (pe_simple, pe_realistic, nh_realistic) and
+`buoyancy_weno_advection` (nh_simple), all with `halo_points = 3`
+(`pyOM3/advection_weno.py`, the fifth-order WENO-Z reconstruction of
+Oceananigans; off by default, and then tests 1 to 16 are the test that
+nothing changed).
+
+pe family, for pe_simple, pe_realistic on the uniform Cartesian grid and
+pe_realistic on the spherical variable grid:
+
+* 17a a uniform tracer has no advective tendency, at the start and after
+  three steps (with `free_surface_tracer_flux`, so the top cell is
+  included), 1e-13 per step.
+* 17b the tendency times the cell volume sums to zero over the wet cells,
+  1e-13 relative.
+* 17c halo 4 = halo 3 after six steps, bit for bit.
+* 17d 20 AB3 steps stay finite.
+* 17g a salinity front, 35 west and 36 east of the global index i = 7,
+  across the shelf and the seamount: after 60 steps inside [35, 36] to
+  1e-4. Measured 2e-5 (pe_simple) and 8e-6 (pe_realistic).
+* 17f pe_realistic on the uniform Cartesian grid = pe_simple, both with
+  WENO5, six steps, 1e-12 (measured 1.6e-14).
+* 17e a Gaussian (sigma 6 cells) once around a periodic channel with the
+  weights (1.6, -0.6): L1 error of WENO5 below half that of superbee
+  (measured 0.27), no excursion beyond 1e-3 of the amplitude.
+
+Under MPI `mpirun -np 4 python3 weno.py 2 2 [simple|realistic]`: against
+one PE, 1x2 exact, 2x1 and 2x2 1e-12 (the CG reduces in rank order).
+
+nhr family (nh_realistic on the stretched Cartesian box):
+
+* 17a uniform tracer after six steps with `epsilon_nh = 1e-16`: below
+  1e-12 per step, and equal to the tendency of the centred flux to 1e-14
+  (what is left is the tracer times the divergence the 3-D solve leaves).
+* 17b, 17c, 17d as in the pe family.
+* 17g the salinity front, to 2e-4 (measured 6e-5, superbee 2e-7).
+* 17e with `enable_nonhydrostatic = False` equal to pe_realistic with
+  WENO5, exactly.
+
+Under MPI `mpirun -np 4 python3 weno.py 2 2`: the tolerances of test 4,
+1e-9 for the fields and 1e-5 for p_nh.
+
+nh family (nh_simple, `weno_ref_b = 1e-4`), lid and periodic in z: 17a
+uniform buoyancy, 17b conservation, 17c halo 4 = halo 3, 17d 20 steps with
+the TKE closure on the implicit flux of the scheme (`les_mix_b` off).
+
+History. Test 17g was added after overflow1_3D (nh_realistic, a 10/12 degC
+front at a barrier) left the initial range by half the jump. The scheme
+then fell back to the centred mean at faces next to land, as Oceananigans
+does. It now falls back to the upwind value, chosen from the stencil of the
+flow direction. With the centred fallback 17g gives 2.5e-4 (pe_simple),
+1e-3 (pe_realistic) and 1.9e-3 (nh_realistic). In the overflow the
+temperature now stays between 9.97 and 12.00 degC, superbee between 10 and
+12.
+
+Not covered: JAX sharding with WENO (`jax_sharding.py` does not switch it
+on), nh_simple under MPI with WENO.
 
 ## Slow part, nightly or before a release
 
@@ -780,11 +850,11 @@ preconditioner (1000-3500 without it in this box).
         run_slow.py          tests 7-9, 15, and the jax layouts (J)
         pe/                  reduction, identities, restart, decomposition,
                              operators, golden (+ golden.json), vadv, ab3, halo,
-                             free_surface/, twins/
+                             weno, free_surface/, twins/
         nh/                  reduction, identities, restart, decomposition,
-                             operators, golden (+ golden.json), halo
+                             operators, golden (+ golden.json), halo, weno
         nhr/                 realistic, twin_nh_simple, restart, decomposition,
-                             halo, jax_sharding (on the pe configuration)
+                             halo, weno, jax_sharding (on the pe configuration)
         wim/                 reduction, identities, restart, decomposition,
                              operators, golden (+ golden.json), symmetry, sources,
                              budget, halo; benchmarks (slow); the sphere and ecwam slow
