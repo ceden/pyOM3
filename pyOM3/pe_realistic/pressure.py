@@ -25,10 +25,10 @@ class pressure(main,solver):
           fpx, fpy = self.apply_bc(fpx), self.apply_bc(fpy)
           fpyc = fpy*self.cosu_y[0]
           fc = (  (fpx - self.rollx(fpx ,1))/(self.cost_y[0]*self.dxt_x[0]) 
-                + (fpyc- self.rolly(fpyc,1))/(self.cost_y[0]*self.dyt_y[0]) )*maskT[self.Nz-2*self.halo,:,:]
+                + (fpyc- self.rolly(fpyc,1))/(self.cost_y[0]*self.dyt_y[0]) )*maskT[-self.halo-1,:,:]
           
           if self.implicit_free_surface: 
-              fc += - p_s[taum1,:,:]/(self.grav*self.dt**2)*maskT[self.Nz-2*self.halo,:,:] 
+              fc += - p_s[taum1,:,:]/(self.grav*self.dt**2)*maskT[-self.halo-1,:,:] 
           sol =  2*p_s[taum1,:,:] - p_s[taum2,:,:]
 
           #solve for surface pressure, different choices for solver (does not matter much). 
@@ -62,7 +62,7 @@ class pressure(main,solver):
           The flux factor h/dxu (h*cosu/dyu) is built BEFORE the shift so
           the shifted term carries its own face's spacing.
           """
-          maskM = maskT[self.Nz-2*self.halo,:,:]
+          maskM = maskT[-self.halo-1,:,:]
           a = slice(None)
           gx = hu/self.dxu_x[0]
           wx = 1.0/(self.dxt_x[0]*self.cost_y[0]**2)
