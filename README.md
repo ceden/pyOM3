@@ -86,10 +86,11 @@ For Macs with an Intel processor 0.4.38 is the last version of jaxlib.
 module purge
 module load miniforge3/25.11.0
 module load meson/1.2.2-gcc-12.2.0 ninja/1.11.1-gcc-12.2.0 patchelf/0.18.0-gcc-12.2.0
-export HWLOC_HIDE_ERRORS=2 # for sh/bash etc or setenv HWLOC_HIDE_ERRORS 2 for csh/tsch
+export HWLOC_HIDE_ERRORS=2 # for sh/bash etc or setenv HWLOC_HIDE_ERRORS 2 for csh/tcsh
 ```
 Then compile the Fortran parts (see below).
 The modules must be loaded running the code or when `make` is called to compile.
+The daily use on marin, including Jupyter notebooks, is described in [howto_marin.md](howto_marin.md).
 
 
 ## Choosing the backend
@@ -126,4 +127,3 @@ as it expects, for instance `mpirun -np 6 python3 acc1.py` in `setups/acc`.
 Many examples are found in `setups/simple`. If the pyOM3 modules are not found, set 
 `export PYOM3_ROOT=${HOME}/pyOM3` for sh,bash, etc. or `setenv PYOM3_ROOT ${HOME}/pyOM3` for csh,tcsh,
 which should point to wherever you installed pyOM3.
-
