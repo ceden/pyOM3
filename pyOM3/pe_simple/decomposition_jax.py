@@ -32,6 +32,7 @@ class decomposition_jax(setup):
            Defines what's needed to deal with JAX sharding.
           """
           self.my_pe, self.n_pes = OM.jax.process_index() ,   OM.jax.device_count()
+          self.comm = None                     # no communicator: mpi_barrier/pe0_bcast/global_* in decomposition_mpi.py fall through
           self.n_pes_x , self.n_pes_y = n_pes_x, n_pes_y
           
           # positional arguments: the keyword was renamed axis_shapes -> axis_sizes in jax 0.7.
