@@ -50,7 +50,7 @@ pip install "jax[cuda12]"       # NVIDIA GPUs with CUDA 12
 ```
 
 Then compile the Fortran parts (see below).
-The environment must be active when `make` is called to compile.
+The environment must be active running the code or when `make` is called to compile.
 
 ## Installing on Linux with system packages
 
@@ -78,8 +78,20 @@ pip install "jax==0.4.38" "jaxlib==0.4.38"       # Intel processor
 ```
 
 Then compile the Fortran parts (see below).
-The environment must be active when `make` is called to compile.
+The environment must be active running the code or when `make` is called to compile.
 For Macs with an Intel processor 0.4.38 is the last version of jaxlib.
+
+## Installing on marin0X.cen.uni-hamburg.de
+
+```
+module purge
+module load miniforge3/25.11.0
+module load meson/1.2.2-gcc-12.2.0 ninja/1.11.1-gcc-12.2.0 patchelf/0.18.0-gcc-12.2.0
+setenv HWLOC_HIDE_ERRORS 2
+```
+Then compile the Fortran parts (see below).
+The modules must be loaded running the code or when `make` is called to compile.
+
 
 ## Choosing the backend
 
