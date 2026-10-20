@@ -34,8 +34,7 @@ with Python 3.11 setuptools 65.5.0.
 ## Obtaining the code
 
 ```
-git clone https://github.com/ceden/pyOM3.git ~/src/pyOM3
-export PYTHONPATH=~/src/pyOM3:$PYTHONPATH
+git clone https://github.com/ceden/pyOM3.git 
 ```
 
 ## Installing on Linux with conda
