@@ -9,12 +9,13 @@ deflected by the rotation of the tank.
 
 run:    python overflow1_3D.py     (mpirun -np N python overflow1_3D.py with n_pes_x*n_pes_y = N)
 """
-import sys; sys.path.append('../..')
+import os, sys
+sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.nh_realistic.snapshot import snap_nc4
 
-fac        = 2.0
+fac        = 1.0
 mix        = 2e-6
 nx, ny, nz = int(60*fac), int(60*fac), int(20*fac)
 dx         = 0.01/fac
@@ -25,8 +26,8 @@ slope      = nx//4                  # last index of the shelf, the barrier is at
 shelf      = H0/4                   # depth of the shelf
 gap1, gap2 = nx*2//3, nx*5//6       # the gap in the barrier, in y index
 runlen     = 600.
-snapint    = 5.
-n_pes_x, n_pes_y = 1, 1
+snapint    = 2.
+n_pes_x, n_pes_y = 2, 3
 
 par = dict(nx=nx, ny=ny, nz=nz, dxt=dx, dyt=dx, dzt=dx, dt=dt,
            coord_degree=False, set_zero_at_surface=True,

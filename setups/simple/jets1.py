@@ -8,7 +8,8 @@ southern walls, baroclinic instability of the mean state generates eddies and je
 
 run:    python jets1.py
 """
-import sys; sys.path.append('../..')
+import os, sys
+sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.pe_realistic.snapshot import snap_nc4

@@ -2,8 +2,16 @@
 
 The configurations of pyOM2 (`for_config/*.f90`, `py_config/*.py`) for pyOM3,
 as notebooks for the short experiments and as scripts for the long ones.
-Everything is self contained in this directory, `sys.path.append('../..')`
-finds the `pyOM3` package two levels up.
+Everything is self contained in this directory. Each notebook and script
+starts with
+
+    import os, sys
+    sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
+
+`PYOM3_ROOT` is the directory that contains the `pyOM3` package, as for the
+coupled setups. Without it the package is found two levels above the current
+directory, which is this directory when a notebook is opened or a script is
+started here. Set `PYOM3_ROOT` to run a script from somewhere else.
 
 ## Notebooks
 

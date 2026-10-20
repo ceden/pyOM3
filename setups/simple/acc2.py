@@ -7,7 +7,8 @@ surface temperature restoring, isoneutral mixing with GM, TKE vertical mixing.
 
 run:    python acc2.py
 """
-import sys; sys.path.append('../..')
+import os, sys
+sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.pe_realistic.snapshot import snap_nc4

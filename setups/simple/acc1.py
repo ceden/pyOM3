@@ -7,7 +7,8 @@ wind stress and surface temperature restoring, TKE vertical mixing.
 
 run:    python acc1.py             (mpirun -np N python acc1.py with n_pes_x*n_pes_y = N)
 """
-import sys; sys.path.append('../..')
+import os, sys
+sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.pe_realistic.snapshot import snap_nc4

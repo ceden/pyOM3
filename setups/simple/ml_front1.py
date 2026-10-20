@@ -8,7 +8,8 @@ prognostic tracer (eq_of_state=0).
 
 run:    python ml_front1.py
 """
-import sys; sys.path.append('../..')
+import os, sys
+sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.pe_realistic.snapshot import snap_nc4
