@@ -60,8 +60,8 @@ class model(thermodynamics,momentum,pressure,free_surface,damping,implicit_vmix,
           All input fields are full size, thus this method might request too much memory
           for large models.
           """
-          self.u = self.apply_bc(  self.pad(  OM.jax.device_put( _u , self.sharding_3D)  )  ) #*self.maskU
-          self.v = self.apply_bc(  self.pad(  OM.jax.device_put( _v , self.sharding_3D)   )  ) #*self.maskV
+          self.u = self.apply_bc(  self.pad(  OM.jax.device_put( _u , self.sharding_3D)  )  )*self.maskU
+          self.v = self.apply_bc(  self.pad(  OM.jax.device_put( _v , self.sharding_3D)   )  )*self.maskV
           self.w    = self.vertical_velocity(self.u,self.v,self.w,self.maskW) 
           self.temp = self.apply_bc( self.pad(  OM.jax.device_put( _temp , self.sharding_3D)  ) )#*self.maskT
           self.salt = self.apply_bc( self.pad(  OM.jax.device_put( _salt , self.sharding_3D)  ) )#*self.maskT
@@ -86,8 +86,8 @@ class model(thermodynamics,momentum,pressure,free_surface,damping,implicit_vmix,
           
           a,b = slice(None), slice(self.halo,-self.halo)
           ex = (a,slice(self.ys_pe-1,self.ye_pe),slice(self.xs_pe-1,self.xe_pe))          
-          self.u    = self.apply_bc( OM.modify_array(self.u ,(b,b,b), _u[ex]) ) #*self.maskU
-          self.v    = self.apply_bc( OM.modify_array(self.v ,(b,b,b), _v[ex]) ) #*self.maskV
+          self.u    = self.apply_bc( OM.modify_array(self.u ,(b,b,b), _u[ex]) )*self.maskU
+          self.v    = self.apply_bc( OM.modify_array(self.v ,(b,b,b), _v[ex]) )*self.maskV
           self.w    = self.vertical_velocity(self.u,self.v,self.w,self.maskW) 
           self.temp = self.apply_bc( OM.modify_array(self.temp ,(b,b,b), _temp[ex]) ) #*self.maskT
           self.salt = self.apply_bc( OM.modify_array(self.salt ,(b,b,b), _salt[ex]) ) #*self.maskT         
