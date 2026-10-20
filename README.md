@@ -123,6 +123,7 @@ On Linux they set the paths of these libraries in the `.so` files with `patchelf
 
 A configuration is a Python script or Jupyter notebook, started with as many processes 
 as it expects, for instance `mpirun -np 6 python3 acc1.py` in `setups/acc`.
-Many examples are found in `setups/simple`.
-
+Many examples are found in `setups/simple`. If the pyOM3 modules are not found, set 
+`export PYOM3_ROOT=${HOME}/pyOM3` for sh,bash, etc. or `setenv PYOM3_ROOT ${HOME}/pyOM3` for csh,tcsh,
+which should point to wherever you installed pyOM3.
 
