@@ -9,7 +9,7 @@
 #SBATCH --nodes=1               # Specify number of nodes
 #SBATCH --ntasks-per-node=128        # Specify number of (MPI) tasks on each node
 #SBATCH --time=01:30:00            # Set a limit on the total run time
-#SBATCH --account=uo0780            # Charge resources on this project account
+#SBATCH --account=XXXXXX            # Charge resources on this project account
 #SBATCH --output=log.cpu_%j        # File name for standard output
 
 module purge
@@ -37,7 +37,7 @@ srun --ntasks=$SLURM_NTASKS --cpu_bind=cores --distribution=block:cyclic  python
 #SBATCH --exclusive
 ###SBATCH --constraint=a100_80
 #SBATCH --time=02:40:00           # Set a limit on the total run time
-#SBATCH --account=uo0780          # Charge resources on this project account
+#SBATCH --account=XXXXXX          # Charge resources on this project account
 #SBATCH --output=log.out_%j       # File name for standard output
 
 module purge
