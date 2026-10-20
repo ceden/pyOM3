@@ -8,7 +8,8 @@ FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden',
             'nh':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'halo', 'weno'],  # nh_simple (4 needs mpirun)
             'nhr': ['realistic', 'twin_nh_simple', 'restart', 'halo', 'weno'],                     # nh_realistic (4 needs mpirun; jax_sharding.py in run_slow.py)
             'wim': ['reduction', 'identities', 'restart', 'operators', 'golden',
-                    'symmetry', 'sources', 'budget', 'halo']}                           # wim_simple, wim_realistic (wim_idemix: not built)
+                    'symmetry', 'sources', 'budget', 'halo'],                           # wim_simple, wim_realistic (wim_idemix: not built)
+            'coupled': ['golden', 'forcing', 'identities', 'restart', 'halo', 'wave']}   # setups/coupled_common + forcing_common (4 needs mpirun; jax_backend.py in run_slow.py)
 want = sys.argv[1:] or list(FAMILIES)
 t0 = time.time(); ok = True
 for fam in want:

@@ -295,14 +295,126 @@ sub-cycle counts and for deep, shallow and polar boxes.
                 the surface elevation carries the gravity waves the implicit
                 path damps (5-13 %) and is reported, not tested
 
-### 9. Coupled smoke test
+### 9. Coupled family: the shared coupling and forcing code (`coupled/`)
 
-Two short segments of the coupled model over a restart, on a few ranks per
-component. Check that the exchange fields arrive on every rank, that the
-restart continues, and that the identities of test 2 still hold.
+Built Oct 20 2026, in the FAST part (22 s, decomposition included). It
+tests `setups/coupled_common` (exp_ocean.py, exp_wave.py, exp_common.py,
+coupler_io.py) and `setups/forcing_common` (forcing_base.py, the
+ecmwf_clim source) WITHOUT run.py, input files or a wave model: the ocean
+of a configuration is assembled as run.py assembles it (ocean_common + tke
++ snap_raw on pe_realistic, the box of the pe family, TEOS-10), forced by
+a synthetic source that serves all ten interface fields analytically in
+the global coordinates and the model time, and the wave fields the coupler
+would deliver (u_S, the stress, phi_oc, tau_in, Hs) are synthetic and
+analytic too, applied every step as coupler_loop.run_ocean applies them.
+The experiment module is an object (`config.Setup`) with the names the
+shared classes read; every model gets its own copy, so options never leak
+between models. The source is registered as 'synthetic' in
+forcing_base.SOURCES by importing config.py (no package change).
 
-This is the test that would have caught the missing broadcast of the
-significant wave height, in one minute instead of a whole ensemble.
+The point of the family: the numpy path of this code is the REFERENCE
+for its jaxification. Every option that changes a code path has a case,
+so a change to one branch shows in one line.
+
+    9   golden      checksum of 8 steps for six cases (forced; relwind +
+                    ice factor + SW_BOTTOM + piston + light budget + 6 h
+                    means; a source without solar/restoring/freshwater;
+                    coupled; coupled + direct branch + Stokes shear +
+                    NEMO mixing length with z0 = HS_FACTOR Hs; coupled with
+                    the depth-distributed stress)                    1e-13
+    18  forcing     the interface: calendar, pyOM2's climatology weights,
+                    clean_forcing, the block cut, the ecmwf_clim source on
+                    a 12-record file written by the test (both readers),
+                    the U/V average of tau, the absent-key rule, the
+                    relative-wind stress (|tau_rel| = |tau_E| at rest,
+                    parallel to u10, the cap, d_int >= 0, STRESS_UO), the
+                    ice rule (stress factor on U/V, zero fluxes where
+                    frozen and cooling)                        exact / 1e-15
+    19  identities  booked at application: the vortex force does no work
+                    (1e-21 of W_tau), W_h + W_p = 0 of the Stokes shear
+                    force, the exchange C against KE(u + du) - KE(u), the
+                    stress-work field against the diagnostic, the direct
+                    branch tau_a - tau_in and its clipping, the TKE budget,
+                    KE_ph = CONV, the D_h identity, heat and salt content
+                    against the AB-weighted flux (1e-16 of content/dt),
+                    the shortwave column integral (zero over full columns,
+                    over all with SW_BOTTOM), the surface TKE flux (phi_oc
+                    coupled, Craig-Banner alone), z0_surf = HS_FACTOR Hs
+    20  restart     coupler_io ocean_restart_write/read, gathered AND raw
+                    form: N + N vs 2N steps bit for bit, the partial sums
+                    of the means too; four cases                     exact
+    16  halo        halo_points 2, 3 vs 1, five cases                exact
+    4   decomp.     1x2, 2x1, 2x2 vs 1 PE, five cases + two with halo 2
+                    (mpirun); y-split exact, x-split 1e-10 (the CG's rank
+                    order, amplified to 1.5e-11 by the closure)
+    21  wave side   exp_wave on wim_realistic: the mask from the ocean's
+                    kbot (and the any-wet rule coarsened by 2), u*/udir
+                    from the source, the coarse grid's area-mean stress
+                    VECTOR (control: the mean of u* differs), the 'coupled'
+                    source under relwind (u* = 0 before the first set(),
+                    every wet cell seeded), sum p_in A = wind_work on both
+                    grids, snl_work against int U.k S_nl dk
+    J   jax         coupled/jax_backend.py, in run_slow.py: the six cases
+                    on PYOM3_BACKEND=jax, 1x1 and 2x2 shards, against the
+                    numpy references, 1e-10 (the closure's round-off)
+
+Not covered: the ERA5 readers (forcing_era5*.py: file sets of the prep
+scripts), the MPI block exchange between the components
+(coupler_mpi.BlockExchange, bx_coarse_test.py covers the coarsened one),
+coupler_loop's loops themselves (the test's `step` repeats their sequence),
+the atmosphere (exp_atmos.py), the near-inertial diagnostic (ni_diag.py),
+the mixed layer depth against a brute-force search, the KE budget's text
+file.
+
+Writing it found (Oct 20 2026, nothing changed in setups/):
+
+1. **exp_ocean.set_topography shifts the topography by halo - 1 levels for
+   halo_points > 1** (`kbot = where(kbot > 0, kbot + (halo - 1), 0)`,
+   lines 569-571): a leftover of the convention the package used before the
+   Oct 17 make_topo_masks fix, which compares kbot with the 1-based level
+   number and is halo-independent. With the three lines removed every halo
+   and decomposition case of the family is bit-identical. run.py hard-codes
+   halo = 1, so no run was affected. Tests 16 and 4 (halo 2) FAIL until it
+   is removed.
+2. **The relative-wind stress is decomposition dependent** (STRESS_MODE
+   'relwind', 1x2: 7e-5, 2x1: 1e-3 after 8 steps). `_relative_wind_stress`
+   forms tau on the padded T points from surface_velocity, whose np.roll
+   wraps at the first row and column, so the halo of trx/try_ holds wrapped
+   values; the U/V average then puts them into the halo of taux/tauy, and
+   the Craig-Banner TKE flux (`_surface_forcing`, U/V -> T average) reads
+   that halo at the first interior row/column of every PE block. One PE: the
+   halo is a wall (masked). The fix is `return self.apply_bc(trx),
+   self.apply_bc(try_)` at the end of `_relative_wind_stress`; with it the
+   case is exact in every layout. Affects the forced relwind runs on many
+   ranks (the TKE surface flux along block edges), not the stress the waves
+   receive (interior only). Test 4 forced_relwind FAILS until it is fixed.
+3. **stress_work_field with use_stress_work is not the local form of
+   stress_work_diag** (19d coupled_stress: 3e-2): it dots the SURFACE
+   velocity with the depth-integrated stress, the diagnostic dots u(z) with
+   tau(z) level by level; the docstring claims sum w_o A_t = rho_0 x
+   stress_work_diag. Only q_int of the coupled atmosphere reads the field.
+4. **ke_budget with use_stress_work raises AttributeError** (`self.taux`
+   in W_tau, line 1092): the distributed-stress run has no taux. The
+   coupled_stress cases therefore run with KE_BUDGET = 0.
+5. **SSS_PISTON**: the README table says m/day, exp_ocean uses cfg.SSS_PISTON
+   as m/s (`piston = cfg.SSS_PISTON if > 0 else dz/t_rest`, and the log
+   line multiplies by 86400). Whichever is meant, one of the two is wrong;
+   the test passes 0.5/86400.
+6. The surface_velocity docstring says u_o = u_L - u_S for 'eulerian'; it is
+   (test 18g confirms), and the relwind docstring's "tau = tau_E where
+   u_o = 0" holds for the magnitude and the direction of u10, not for the
+   direction of tau_E (the synthetic source has the two not parallel).
+7. On the jax backend (1x1) all six cases already RUN and agree to 7e-11;
+   on 2x2 shards every case stops in exp_ocean.set_topography:
+   block_io.local_block assumes the MPI layout (Ny - 2h interior rows), the
+   jax layout holds all shards with inline halos. That is the first item of
+   the jaxification; the family's J test is its acceptance test.
+
+Running it: `python3 run_fast.py coupled` (test 4 needs mpirun on the path
+or MPIRUN), `python3 coupled/jax_backend.py` for J. Work files go to
+`coupled/_work/` (snapshots, energy files, restarts, mean files), the
+references next to the tests (golden.json, decomp_ref_*.npz,
+jax_ref_*.npz).
 
 
 ## Deliberately not in the suite
@@ -328,7 +440,8 @@ small configuration, restart list and golden checksum:
     wim   wim_simple, wim_realistic      surface waves (built, below);
           wim_idemix                     wim_idemix not built: its column and
                                          calibration scripts
-    coupled                              test 9, the wave-ocean coupler
+    coupled                              setups/coupled_common + forcing_common on
+                                         the pe box (built, test 9 above)
 
 Every family directory carries a `config.py` with the same contract
 (`small_model`, `step`, `state`, `RESTART_FIELDS`, `TESTS`) so that
@@ -345,13 +458,11 @@ closed box with a shelf and a seamount, wind + surface cooling, TKE, 900 s
 steps, spherical variable grid; 'cartesian'/'simple' variants for the
 reduction) in about 2 s, one line per check with the measured number and
 its threshold. `python3 run_slow.py` runs 8 (pe/free_surface/) and, with PYOM2 set, 7
-(pe/twins/); 9 is not written. Test 4 runs under mpirun, from run_fast.py when a launcher is
+(pe/twins/). Test 4 runs under mpirun, from run_fast.py when a launcher is
 available, else standalone (see decomposition.py). State Sep 15 2026: tests 1-6 and 8 run and pass on the pe
-family; 7 needs the pyOM2 build; 9 (coupled smoke test) is the one not
-written -- planned as a wrapper around coupled_global4/run.py: two short
-segments over a restart against one of double length, restart files compared
-bit for bit, the log checked for the exchange fields arriving on every ocean
-rank.
+family; 7 needs the pyOM2 build. (9, once planned as a coupled smoke test
+around run.py, became the coupled family of Oct 20 2026, see above: the
+shared coupling and forcing code on the pe box, without run.py.)
 
 The first run of the fast part found two bugs: the explicit free-surface
 path dropped the surface heat/salt flux (set_forcing ran before the
@@ -847,7 +958,7 @@ preconditioner (1000-3500 without it in this box).
     pyOM3/test/
         common.py            helpers shared by the families
         run_fast.py          tests 1-6 of every built family, prints the table
-        run_slow.py          tests 7-9, 15, and the jax layouts (J)
+        run_slow.py          tests 7, 8, 15, and the jax layouts (J)
         pe/                  reduction, identities, restart, decomposition,
                              operators, golden (+ golden.json), vadv, ab3, halo,
                              weno, free_surface/, twins/
@@ -859,7 +970,9 @@ preconditioner (1000-3500 without it in this box).
                              operators, golden (+ golden.json), symmetry, sources,
                              budget, halo; benchmarks (slow); the sphere and ecwam slow
                              tests stay in wim_realistic/development/
-        coupled/             test 9
+        coupled/             golden (+ golden.json), forcing, identities, restart,
+                             halo, wave, decomposition (+ run_decomposition),
+                             jax_backend (slow); _work/ holds the run files
 
 The harnesses of tests 1, 5 and 8 exist already in
 `pyOM3/pe_realistic/development/` and in the mixing-length work; tests 2, 3,
