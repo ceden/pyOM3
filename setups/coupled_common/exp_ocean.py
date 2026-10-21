@@ -25,17 +25,58 @@ FORCING_CYCLE_DAYS.
 """
 import os
 import shutil
+from functools import partial
 import numpy as np
 import pyOM3 as OM
 from netCDF4 import Dataset
 from mpi4py  import MPI
 from pyOM3.density import get_rho
-from block_io import local_block
+from block_io import local_block, pad_block, interior
 from forcing_base import make as make_forcing
 from ni_diag import ni_common
 
 
 class ocean_common(ni_common):
+
+    # --- THE TWO LAYOUTS (block_io): every interior sum and every interior
+    # cut of the shared code goes through these two, so the same code runs
+    # on an MPI block (halo ring) and on the JAX layout (inline shard halos)
+    def _isum(self, x):
+        """sum of a padded 2-D/3-D model field over the interior (local
+        block under MPI, the whole domain under JAX), as a float"""
+        if OM.jax:
+            return float(OM.np.sum(self.unpad(x)))
+        h = self.halo
+        return float(np.sum(np.asarray(x)[(slice(h, -h),)*np.ndim(x)]))
+
+    def _int(self, x):
+        """the interior of a padded 2-D/3-D field as a numpy array"""
+        return interior(self, x)
+
+    def _isum_a(self, x):
+        """_isum as a 0-d array: usable INSIDE a jitted function (a float()
+        of a tracer is not), the caller converts with float()"""
+        if OM.jax:
+            return OM.np.sum(self.unpad(x))
+        h = self.halo
+        return np.sum(np.asarray(x)[(slice(h, -h),)*np.ndim(x)])
+
+    # ------------------------------------------------------------------
+    # JIT. The per-step arithmetic of this class sits in a few PURE
+    # functions below (_forcing_core, _direct_core, _stokes_shear_core,
+    # _relwind_core, _tau_uv, _craig_banner, _surface_velocity_core),
+    # decorated with OM.jaxjit as the package's kernels are: `self` is
+    # static (the grid constants, masks, areas and switches are read from
+    # it at trace time and baked into the compiled function; the state and
+    # the forcing fields are ARGUMENTS, never read from self), the options
+    # that change the code path are static keyword arguments, and nothing
+    # inside calls float(), hasattr() on arrays, or numpy on a model field.
+    # On the numpy backend OM.jaxjit is the identity and the functions run
+    # as before, bit for bit. The methods that the model calls (set_forcing,
+    # set_forcing_direct, stokes_shear_force, ...) are the wrappers: they
+    # fetch the forcing, decide the flags, call the core and store what
+    # the diagnostics need.
+    # ------------------------------------------------------------------
 
     # the KE budget (ke_budget below, cfg.KE_BUDGET 1 full | 2 light): the
     # columns of the energy text file and the accumulation interval. An
@@ -314,9 +355,11 @@ class ocean_common(ni_common):
         the criterion is never met the MLD is the depth of the column."""
         h  = self.halo
         sl = slice(h, -h)
+        # on the full horizontal layout (halo columns included, they are
+        # masked or ignored by the caller), interior levels only
         rho = np.asarray(get_rho(self.salt, self.temp, self.p0*0.0,
-                                 self.eq_of_state))[sl, sl, sl][::-1]     # surface first
-        wet = np.asarray(self.maskT)[sl, sl, sl][::-1] > 0
+                                 self.eq_of_state))[sl][::-1]             # surface first
+        wet = np.asarray(self.maskT)[sl][::-1] > 0
         d   = np.asarray(self.zw[-h-1] - self.zt)[sl][::-1]              # T-point depths
         dzw = np.asarray(self.dzt)[sl][::-1]
         nk  = len(d)
@@ -338,10 +381,7 @@ class ocean_common(ni_common):
         frac = np.clip((thr - r_up)/np.maximum(r_c - r_up, 1e-12), 0.0, 1.0)
         mld  = d_up + frac*(d[kc] - d_up)
         col  = np.sum(wet*dzw[:, None, None], axis=0)                      # column depth
-        mld  = np.where(has, mld, col)*wet[0]
-        out = np.zeros((self.Ny, self.Nx))
-        out[sl, sl] = mld
-        return out
+        return np.where(has, mld, col)*wet[0]
 
     def average_setup(self, file_name, mode):
         """Create the mean file and zero the sums. mode from parse_average;
@@ -463,8 +503,8 @@ class ocean_common(ni_common):
     def average_reset(self):
         if getattr(self, '_avg', None) is None:
             return
-        h = self.halo
-        nz_, ny_, nx_ = self.Nz - 2*h, self.Ny - 2*h, self.Nx - 2*h
+        _, _, ny_, nx_ = local_block(self)
+        nz_ = self.Nz - 2*self.halo
         self._avg_sum = {nme: np.zeros((nz_, ny_, nx_) if len(dims) == 4 else (ny_, nx_))
                          for nme, dims, *_ in self._avg_spec}
         self._avg_n, self._avg_t0 = 0, -1.0
@@ -504,11 +544,8 @@ class ocean_common(ni_common):
         """Add the state after step n; write and restart the window at its end."""
         if getattr(self, '_avg', None) is None:
             return
-        h  = self.halo
-        s3 = (slice(h, -h),)*3
         for nme, dims, _, _, get in self._avg_spec:
-            a = np.asarray(get(tau))
-            self._avg_sum[nme] += a[s3] if len(dims) == 4 else a[s3[1:]]
+            self._avg_sum[nme] += self._int(get(tau))
         if self._avg_n == 0:
             self._avg_t0 = n*self.dt
         self._avg_n += 1
@@ -563,10 +600,7 @@ class ocean_common(ni_common):
     def set_topography(self):
         kb = self.cfg.kbot_global()
         j0, i0, ny_loc, nx_loc = local_block(self)
-        kbot = np.zeros((self.Ny, self.Nx), np.float64)
-        sl = slice(self.halo, -self.halo)
-        kbot[sl, sl] = kb[j0:j0+ny_loc, i0:i0+nx_loc]
-        self.kbot = self.apply_bc(OM.np.asarray(kbot))
+        self.kbot = pad_block(self, kb[j0:j0+ny_loc, i0:i0+nx_loc])
         return
 
     # --- forcing: ERA5 + the two climatologies + the shortwave profile ------
@@ -577,7 +611,13 @@ class ocean_common(ni_common):
         h  = self.halo
         sl = slice(h, -h)
         ks = -h-1
-        geom = {'xt': np.asarray(self.xt)[sl], 'yt': np.asarray(self.yt)[sl],
+        # the block's T coordinates: the local interior under MPI, the whole
+        # grid under JAX (xt holds the inline shard halos there)
+        if OM.jax:
+            xt_b, yt_b = np.asarray(self.xt_gl), np.asarray(self.yt_gl)
+        else:
+            xt_b, yt_b = np.asarray(self.xt)[sl], np.asarray(self.yt)[sl]
+        geom = {'xt': xt_b, 'yt': yt_b,
                 'block': local_block(self), 'comm': getattr(self, 'comm', None),
                 'xt_gl': self.xt_gl, 'yt_gl': self.yt_gl}
         self._relwind = (str(self.cfg.STRESS_MODE) == 'relwind')
@@ -661,11 +701,8 @@ class ocean_common(ni_common):
     def tracer_advection(self, var, dvar, u, v, w, maskU, maskV, maskW, maskT, tau):
         out = super().tracer_advection(var, dvar, u, v, w, maskU, maskV, maskW, maskT, tau)
         if getattr(self, 'free_surface_tracer_flux', False) and int(self.cfg.KE_BUDGET) == 1:
-            h = self.halo; ks = -h-1
-            I2 = (slice(h, -h), slice(h, -h))
-            f = -float(np.sum((np.asarray(w)[ks]*np.asarray(var)[ks]
-                               *np.asarray(maskW)[ks]*np.asarray(maskT)[ks]
-                               *np.asarray(self.area_t)[0])[I2]))
+            ks = -self.halo-1
+            f = -self._isum(w[ks]*var[ks]*maskW[ks]*maskT[ks]*self.area_t[0])
             # temp is advected first, salt second (pe_realistic/model.py), and
             # the object itself says which one this is
             if var is self.salt:
@@ -816,11 +853,15 @@ class ocean_common(ni_common):
         omega dt = 0.09 at u_S(0) = 0.3 m/s and 0.17 at 0.6 m/s, against
         the AB3 limit 0.72: no time step change is needed.
         """
+        Fu, Fv, W_h, W_p, p_SS = self._stokes_shear_core(self.u, self.v, self.w, self.u_S, self.v_S)
+        self.p_SS = p_SS
+        return Fu, Fv, float(W_h), float(W_p)
+
+    @partial(OM.jaxjit, static_argnums=0)
+    def _stokes_shear_core(self, u, v, w, u_S, v_S):
+        """the arithmetic of stokes_shear_force: (F_x, F_y, W_h, W_p, p_SS)"""
         h  = self.halo
-        ks = -h-1
-        si = slice(h, -h)
         rx, ry, rz = self.rollx, self.rolly, self.rollz
-        u, v, w = self.u, self.v, self.w
         mT, mU, mV, mW = self.maskT, self.maskU, self.maskV, self.maskW
         dzt, dzw = self.dzt_z, self.dzw_z
         At, Au, Av = self.area_t, self.area_u, self.area_v
@@ -828,8 +869,8 @@ class ocean_common(ni_common):
         # the Stokes shear at the W faces, zero at the surface face (and in
         # the halo above it, where u_S is not defined)
         face = (OM.np.arange(self.Nz) < self.Nz - h - 1).astype(float)[:, None, None]
-        Su = (rz(self.u_S, -1) - self.u_S)/dzw*mW*face
-        Sv = (rz(self.v_S, -1) - self.v_S)/dzw*mW*face
+        Su = (rz(u_S, -1) - u_S)/dzw*mW*face
+        Sv = (rz(v_S, -1) - v_S)/dzw*mW*face
 
         # --- horizontal part: w dz(u_S), w dz(v_S) ----------------------------
         wSu, wSv = w*mW*Su, w*mW*Sv                           # at the W faces
@@ -838,7 +879,7 @@ class ocean_common(ni_common):
         AHu, AHv = self.apply_bc(At*Hu), self.apply_bc(At*Hv)
         Fu = 0.5*(AHu + rx(AHu, -1))/Au*mU
         Fv = 0.5*(AHv + ry(AHv, -1))/Av*mV
-        W_h = float(OM.np.sum((u*Fu*Au + v*Fv*Av)[si, si, si]*dzt[si]))
+        W_h = self._isum_a((u*Fu*Au + v*Fv*Av)*dzt)
 
         # --- vertical part, as the pressure p_SS ------------------------------
         uT = 0.5*(u + rx(u, 1))*mT                             # the transposes of the averages above
@@ -850,22 +891,19 @@ class ocean_common(ni_common):
         # p_SS(k) = sum over the faces k' >= k (the surface face carries 0)
         p_SS = OM.np.cumsum(G[::-1], axis=0)[::-1]*mT
         p_SS = self.apply_bc(p_SS)
-        self.p_SS = p_SS
         Fpu = -(rx(p_SS, -1) - p_SS)/(self.cost_y*self.dxu_x)*mU
         Fpv = -(ry(p_SS, -1) - p_SS)/self.dyu_y*mV
-        W_p = float(OM.np.sum((u*Fpu*Au + v*Fpv*Av)[si, si, si]*dzt[si]))
-        return Fu + Fpu, Fv + Fpv, W_h, W_p
+        W_p = self._isum_a((u*Fpu*Au + v*Fpv*Av)*dzt)
+        return Fu + Fpu, Fv + Fpv, W_h, W_p, p_SS
 
     def _direct_work(self, u, v):
         """Surface work of the direct branch tau_a - tau_in (zero when the
         branch is off), against the velocity (u, v) handed in."""
         if not hasattr(self, '_tau_dir_x'):
             return 0.0
-        h  = self.halo
-        sl = slice(h, -h)
-        ks = -h-1
-        return OM.np.sum((u[ks]*self._tau_dir_x*self.maskU[ks]*self.area_u[0]
-                        + v[ks]*self._tau_dir_y*self.maskV[ks]*self.area_v[0])[sl, sl])
+        ks = -self.halo-1
+        return self._isum(u[ks]*self._tau_dir_x*self.maskU[ks]*self.area_u[0]
+                        + v[ks]*self._tau_dir_y*self.maskV[ks]*self.area_v[0])
 
     def stress_work_diag(self):
         """Work of the SURFACE MOMENTUM FORCING on the model velocity u_L, the
@@ -879,11 +917,10 @@ class ocean_common(ni_common):
         if self.use_stress_work:
             Fu = 0.5*(self.tau_work_x + self.rollx(self.tau_work_x, -1))*self.maskU
             Fv = 0.5*(self.tau_work_y + self.rolly(self.tau_work_y, -1))*self.maskV
-            w = OM.np.sum((self.u*Fu*self.area_u + self.v*Fv*self.area_v)[sl, sl, sl]
-                          *self.dzt_z[sl])
+            w = self._isum((self.u*Fu*self.area_u + self.v*Fv*self.area_v)*self.dzt_z)
         else:
-            w = OM.np.sum((self.u[ks]*self.taux*self.maskU[ks]*self.area_u[0]
-                         + self.v[ks]*self.tauy*self.maskV[ks]*self.area_v[0])[sl, sl])
+            w = self._isum(self.u[ks]*self.taux*self.maskU[ks]*self.area_u[0]
+                         + self.v[ks]*self.tauy*self.maskV[ks]*self.area_v[0])
         w = w + self._direct_work(self.u, self.v)
         return self._reduce(w)
 
@@ -900,11 +937,10 @@ class ocean_common(ni_common):
         if self.use_stress_work:
             Fu = 0.5*(self.tau_work_x + self.rollx(self.tau_work_x, -1))*self.maskU
             Fv = 0.5*(self.tau_work_y + self.rolly(self.tau_work_y, -1))*self.maskV
-            w = OM.np.sum((uE*Fu*self.area_u + vE*Fv*self.area_v)[sl, sl, sl]
-                          *self.dzt_z[sl])
+            w = self._isum((uE*Fu*self.area_u + vE*Fv*self.area_v)*self.dzt_z)
         else:
-            w = OM.np.sum((uE[ks]*self.taux*self.maskU[ks]*self.area_u[0]
-                         + vE[ks]*self.tauy*self.maskV[ks]*self.area_v[0])[sl, sl])
+            w = self._isum(uE[ks]*self.taux*self.maskU[ks]*self.area_u[0]
+                         + vE[ks]*self.tauy*self.maskV[ks]*self.area_v[0])
         w = w + self._direct_work(uE, vE)
         return self._reduce(w)
 
@@ -968,9 +1004,13 @@ class ocean_common(ni_common):
         coupled wave model delivers as phi_oc."""
         if self.coupled:
             return super()._surface_forcing()
+        return self._craig_banner(self.taux, self.tauy)
+
+    @partial(OM.jaxjit, static_argnums=0)
+    def _craig_banner(self, taux, tauy):
         ks = -self.halo - 1
-        tx = 0.5*(self.taux + self.rollx(self.taux, 1))       # U -> T
-        ty = 0.5*(self.tauy + self.rolly(self.tauy, 1))       # V -> T
+        tx = 0.5*(taux + self.rollx(taux, 1))                 # U -> T
+        ty = 0.5*(tauy + self.rolly(tauy, 1))                 # V -> T
         F = self.alpha_CB*OM.np.hypot(tx, ty)**1.5*self.maskT[ks]
         return self.apply_bc(F)
 
@@ -990,34 +1030,31 @@ class ocean_common(ni_common):
         # clipping; reconstruct it from tke_surf_corr = -neg*(0.5 dzw)/dt
         tke_pre = OM.modify_array(self.tke*1.0, (ks, slice(None), slice(None)),
                                   self.tke[ks] - self.tke_surf_corr*self.dt/(0.5*self.dzw[ks]))
-        lhs = float(OM.np.sum((V*(self.tke - tke0))[sl, sl, sl]))/self.dt
-        rhs = float(OM.np.sum((V*(self.K_diss_v - self.P_diss_v))[sl, sl, sl])) \
-            + float(OM.np.sum(((self.forc_tke_surface + self.tke_surf_corr)
-                               *self.area_t[0]*self.maskW[ks])[sl, sl])) \
-            - float(OM.np.sum((V*self.c_eps/self.mxl_eps*self.sqrttke*tke_pre)[sl, sl, sl]))
+        lhs = self._isum(V*(self.tke - tke0))/self.dt
+        rhs = self._isum(V*(self.K_diss_v - self.P_diss_v)) \
+            + self._isum((self.forc_tke_surface + self.tke_surf_corr)*self.area_t[0]*self.maskW[ks]) \
+            - self._isum(V*self.c_eps/self.mxl_eps*self.sqrttke*tke_pre)
         self._tke_lhs, self._tke_rhs = lhs, rhs
         return
 
     def _ke_of(self, u, v):
         """local int |u|^2/2 dV (no reduction)"""
-        h = self.halo; sl = slice(h, -h)
-        return 0.5*float(OM.np.sum((u*u*self.area_u + v*v*self.area_v)[sl, sl, sl]
-                                   *self.dzt_z[sl]))
+        return 0.5*self._isum((u*u*self.area_u + v*v*self.area_v)*self.dzt_z)
 
     def ke_budget(self, n, tau, efile=None):
         # run.py sets energy_file, one file per segment
         efile = getattr(self, 'energy_file', None) or efile or self.cfg.exp_name + '_energy.txt'
         h = self.halo; ks = -h-1
-        I  = (slice(h, -h), slice(h, -h), slice(h, -h)); I2 = (slice(h, -h), slice(h, -h))
+        I = I2 = self._int                                # the interior of a padded field (block_io)
         gs = lambda x: self._reduce(float(np.sum(x)))     # global sum over the ocean PEs
         rx = lambda a, s: np.roll(a, s, axis=-1); ry = lambda a, s: np.roll(a, s, axis=-2)
         rz = lambda a, s: np.roll(a, s, axis=0)
         if not hasattr(self, 'eb_area'):
             At, Au, Av = (np.asarray(x) for x in (self.area_t, self.area_u, self.area_v))
             dz = np.asarray(self.dzt_z)
-            self.eb_mu = (np.asarray(self.maskU)*Au*dz)[I]
-            self.eb_mv = (np.asarray(self.maskV)*Av*dz)[I]
-            self.eb_A2 = (np.asarray(self.maskT)[ks]*At[0])[I2]
+            self.eb_mu = I(np.asarray(self.maskU)*Au*dz)
+            self.eb_mv = I(np.asarray(self.maskV)*Av*dz)
+            self.eb_A2 = I2(np.asarray(self.maskT)[ks]*At[0])
             self.eb_area = gs(self.eb_A2)
             self.eb_last = None; self.eb_acc = np.zeros(15); self.eb_chk = np.zeros(5); self.eb_n = 0
             self.eb_fs = 0.0; self.eb_ss = 0.0
@@ -1041,10 +1078,10 @@ class ocean_common(ni_common):
         cost, cosu = np.asarray(self.cost_y), np.asarray(self.cosu_y)
         dxt, dxu, dyt, dyu = (np.asarray(x) for x in (self.dxt_x, self.dxu_x, self.dyt_y, self.dyu_y))
         Au3, Av3, At3 = (np.asarray(x) for x in (self.area_u, self.area_v, self.area_t))
-        KEu = lambda a, b: gs((u*a)[I]*self.eb_mu) + gs((v*b)[I]*self.eb_mv)
+        KEu = lambda a, b: gs(I(u*a)*self.eb_mu) + gs(I(v*b)*self.eb_mv)
         # reservoirs
-        KE  = 0.5*gs((u[I]**2)*self.eb_mu) + 0.5*gs((v[I]**2)*self.eb_mv)
-        PEs = 0.5*gs((p_s*p_s/self.grav)[I2]*self.eb_A2)
+        KE  = 0.5*gs(I(u)**2*self.eb_mu) + 0.5*gs(I(v)**2*self.eb_mv)
+        PEs = 0.5*gs(I2(p_s*p_s/self.grav)*self.eb_A2)
         if light:
             p_h = np.asarray(self.p_h)
             du_ph = -(rx(p_h, -1) - p_h)/(cost*dxu)*mU;  dv_ph = -(ry(p_h, -1) - p_h)/dyu*mV
@@ -1074,8 +1111,8 @@ class ocean_common(ni_common):
             # KE_ph - (CONV_int + CONV_top) must be round-off; CONV_int written
             # with p_h differences equals -(g/rho_0) sum w 0.5(rho+rho_up) dzw A_t.
             wk = w*mW
-            CONV_int = gs((wk*(rz(p_h, -1) - p_h)*At3)[h:ks, h:-h, h:-h])
-            CONV_top = -gs((wk[ks]*p_h[ks]*At3[0])[I2])
+            CONV_int = gs(I(wk*(rz(p_h, -1) - p_h)*At3)[:-1])
+            CONV_top = -gs(I2(wk[ks]*p_h[ks]*At3[0]))
             CONV_chk = KE_ph - (CONV_int + CONV_top)
             # CHECK of the advection: the centred flux form telescopes exactly to
             # -1/2 sum u^2 (div T) with T the face transports the fluxes use
@@ -1088,13 +1125,13 @@ class ocean_common(ni_common):
               return d
             Tx = 0.5*(utr + rx(utr, -1)); Ty = 0.5*(vtr + rx(vtr, -1)); Tz = 0.5*(wtr + rx(wtr, -1))
             Tz[ks] = 0.0
-            KE_div = -0.5*gs((u*u*divT(Tx, Ty, Tz)*mU)[I])
+            KE_div = -0.5*gs(I(u*u*divT(Tx, Ty, Tz)*mU))
             Tx = 0.5*(utr + ry(utr, -1)); Ty = 0.5*(vtr + ry(vtr, -1)); Tz = 0.5*(wtr + ry(wtr, -1))
             Tz[ks] = 0.0
-            KE_div += -0.5*gs((v*v*divT(Tx, Ty, Tz)*mV)[I])
+            KE_div += -0.5*gs(I(v*v*divT(Tx, Ty, Tz)*mV))
         # surface forcing as applied in set_forcing (surface-stress mode)
-        W_tau = gs((u[ks]*np.asarray(self.taux)*mU[ks]*Au3[0])[I2]) \
-              + gs((v[ks]*np.asarray(self.tauy)*mV[ks]*Av3[0])[I2])
+        W_tau = gs(I2(u[ks]*np.asarray(self.taux)*mU[ks]*Au3[0])) \
+              + gs(I2(v[ks]*np.asarray(self.tauy)*mV[ks]*Av3[0]))
         W_dir = gs(self._direct_work(self.u, self.v))
         # exact bookings at the moment of application
         W_vortex = gs(getattr(self, '_vortex_step', 0.0))
@@ -1104,12 +1141,12 @@ class ocean_common(ni_common):
         D_bot    = gs(getattr(self, '_ke_bfric', 0.0))/self.dt
         D_v      = gs(getattr(self, '_ke_vfric', 0.0))/self.dt
         D_v_num  = gs(getattr(self, '_ke_vnum', 0.0))/self.dt
-        K_diss   = gs(np.sum((np.asarray(self.K_diss_v)*At3*np.asarray(self.dzw_z))[I])) \
+        K_diss   = gs(I(np.asarray(self.K_diss_v)*At3*np.asarray(self.dzw_z))) \
                    if hasattr(self, 'K_diss_v') else 0.0
         # surface potential energy tendency by the divergence of the transport
         divU = np.sum(((u*mU - rx(u*mU, 1))/(cost*dxt)
                        + ((v*mV*cosu) - ry(v*mV*cosu, 1))/(cost*dyt))*dz3*mT, axis=0)
-        PEs_dot = -gs((p_s*divU)[I2]*self.eb_A2)
+        PEs_dot = -gs(I2(p_s*divU)*self.eb_A2)
         if self.eb_last is None: self.eb_last = KE + PEs
         # TRACER CONSERVATION: the content change per step must equal the
         # AB-weighted surface flux (all interior operators are flux-form);
@@ -1117,9 +1154,9 @@ class ocean_common(ni_common):
         if light:
             Tc = Sc = FT = FS = 0.0
         else:
-            Tc = gs((np.asarray(self.temp)*At3*dz3*mT)[I]); Sc = gs((np.asarray(self.salt)*At3*dz3*mT)[I])
-            FT = gs(((np.asarray(self.forc_temp_surface) + np.asarray(getattr(self, '_sw_col', 0.0)))*At3[0]*mT[ks])[I2])
-            FS = gs((np.asarray(self.forc_salt_surface)*At3[0]*mT[ks])[I2])
+            Tc = gs(I(np.asarray(self.temp)*At3*dz3*mT)); Sc = gs(I(np.asarray(self.salt)*At3*dz3*mT))
+            FT = gs(I2((np.asarray(self.forc_temp_surface) + np.asarray(getattr(self, '_sw_col', 0.0)))*At3[0]*mT[ks]))
+            FS = gs(I2(np.asarray(self.forc_salt_surface)*At3[0]*mT[ks]))
         # the tracer carried through the moving surface, booked in
         # tracer_advection above (zero unless free_surface_tracer_flux)
         F_fs_T = self._reduce(getattr(self, '_fs_flux_T', 0.0))
@@ -1131,8 +1168,8 @@ class ocean_common(ni_common):
         # var m/s, already masked): it enters the identity unweighted.
         U_fs_T = U_fs_S = 0.0
         if getattr(self, 'vadv_sub_cycling', 0) > 0:
-            U_fs_T = gs((np.asarray(self.vadv_fs_flux['temp'])*At3[0]*mT[ks])[I2])
-            U_fs_S = gs((np.asarray(self.vadv_fs_flux['salt'])*At3[0]*mT[ks])[I2])
+            U_fs_T = gs(I2(np.asarray(self.vadv_fs_flux['temp'])*At3[0]*mT[ks]))
+            U_fs_S = gs(I2(np.asarray(self.vadv_fs_flux['salt'])*At3[0]*mT[ks]))
             F_fs_T = U_fs_T                      # for the 'free surface' size in the line
         # the weights of THIS step (coupler_loop sets _ab; AB3 has three) and
         # the fluxes of the two steps before. After a restart the old levels
@@ -1155,7 +1192,7 @@ class ocean_common(ni_common):
         self.eb_acc += self.dt*np.array([KE_adv, KE_cor, KE_ph, KE_ps, W_tau, W_dir, W_vortex, C,
                                          D_h, D_v, D_v_num, K_diss, PEs_dot, KE_div, D_bot])
         self.eb_chk += self.dt*np.abs([CONV_chk, gs(D_h_chk), gs(TKE_chk), gs(getattr(self, '_ke_hnum', 0.0)),
-                                       gs(getattr(self, '_sw_col', 0.0)*At3[0]*mT[ks])])
+                                       gs(I2(np.asarray(getattr(self, '_sw_col', 0.0))*At3[0]*mT[ks]))])
         self.eb_fs += self.dt*abs(F_fs_T)
         self.eb_ss += self.dt*W_ss
         self.eb_n += 1
@@ -1208,19 +1245,20 @@ class ocean_common(ni_common):
         if not hasattr(self, 'u_S_old'):
             self._C_step = 0.0
             return
-        dus = self.u_S - self.u_S_old
-        dvs = self.v_S - self.v_S_old
+        self.u, self.v, C = self._direct_core(self.u, self.v, self.u_S, self.v_S,
+                                              self.u_S_old, self.v_S_old)
+        self._C_step = float(C)
+        return
+
+    @partial(OM.jaxjit, static_argnums=0)
+    def _direct_core(self, u, v, u_S, v_S, u_S_old, v_S_old):
+        dus = u_S - u_S_old
+        dvs = v_S - v_S_old
         incu = 0.5*(dus + self.rollx(dus, -1))*self.maskU
         incv = 0.5*(dvs + self.rolly(dvs, -1))*self.maskV
-        h  = self.halo
-        sl = slice(h, -h)
-        self._C_step = float(OM.np.sum(
-            ((self.u + 0.5*incu)*incu*self.area_u
-           + (self.v + 0.5*incv)*incv*self.area_v)[sl, sl, sl]
-            *self.dzt_z[sl])/self.dt)
-        self.u = self.apply_bc(self.u + incu)
-        self.v = self.apply_bc(self.v + incv)
-        return
+        C = self._isum_a(((u + 0.5*incu)*incu*self.area_u
+                        + (v + 0.5*incv)*incv*self.area_v)*self.dzt_z)/self.dt
+        return self.apply_bc(u + incu), self.apply_bc(v + incv), C
 
     # ----------------------------------------------------------------------
     def surface_forcing_fields(self, t):
@@ -1235,19 +1273,23 @@ class ocean_common(ni_common):
         ks = -h-1
         F  = self._forcing.get(t)
 
-        def pad(a):
-            b = np.zeros((self.Ny, self.Nx))
-            b[sl, sl] = a
-            return self.apply_bc(OM.np.asarray(b))
+        pad = lambda a: pad_block(self, a)
         tx, ty = pad(F['taux']), pad(F['tauy'])
         mT  = self.maskT[ks]
         if getattr(self, '_relwind', False):
             tx, ty = self._relative_wind_stress(tx, ty, pad(F['u10']), pad(F['v10']), mT)
-        tax = 0.5*(tx + self.rollx(tx, -1))*self.maskU[ks]/self.cfg.rho_0
-        tay = 0.5*(ty + self.rolly(ty, -1))*self.maskV[ks]/self.cfg.rho_0
+        tax, tay = self._tau_uv(tx, ty)
         g = lambda k: pad(F[k])*mT if k in F else None
         return (tax, tay, g('qnet'), g('qsol'), g('sst_star'), g('emp'),
                 g('dqdt'), g('sss_star'))
+
+    @partial(OM.jaxjit, static_argnums=0)
+    def _tau_uv(self, tx, ty):
+        """T-point stress [N/m2] -> U/V points, kinematic [m2/s2]"""
+        ks = -self.halo-1
+        tax = 0.5*(tx + self.rollx(tx, -1))*self.maskU[ks]/self.cfg.rho_0
+        tay = 0.5*(ty + self.rolly(ty, -1))*self.maskV[ks]/self.cfg.rho_0
+        return tax, tay
 
     # ------------------------------------------------------------------
     # THE RELATIVE-WIND STRESS (cfg.STRESS_MODE = 'relwind'), the forced
@@ -1273,7 +1315,25 @@ class ocean_common(ni_common):
     def _relative_wind_stress(self, tx, ty, u10, v10, mT):
         """tx, ty: ERA5 stress [N/m2], u10, v10 [m/s], all padded T-point
         fields -> the relative-wind stress [N/m2] on the T points."""
-        uo, vo = self.surface_velocity(self.cfg.STRESS_UO)
+        has_uS = hasattr(self, 'u_S')
+        uS = self.u_S if has_uS else self.u
+        vS = self.v_S if has_uS else self.v
+        trx, try_, d_int, cdr = self._relwind_core(tx, ty, u10, v10, self.u, self.v, uS, vS,
+                                                   mode=str(self.cfg.STRESS_UO), has_uS=has_uS)
+        self._d_int = d_int                                   # interface sink [W/m2], >= 0
+        self._cd_rho = cdr
+        self._u10, self._v10 = u10*mT, v10*mT
+        self._tau_rel_T = (self._int(trx), self._int(try_))                    # for the waves
+        return trx, try_
+
+    @partial(OM.jaxjit, static_argnums=0, static_argnames=('mode', 'has_uS'))
+    def _relwind_core(self, tx, ty, u10, v10, u, v, u_S, v_S, mode='eulerian', has_uS=False):
+        """(trx, try_, d_int, cd_rho): the relative-wind stress on the T
+        points with its halo exchanged, the interface sink and the drag
+        coefficient (both masked)"""
+        ks = -self.halo-1
+        mT = self.maskT[ks]
+        uo, vo = self._surface_velocity_core(u, v, u_S, v_S, mode=mode, has_uS=has_uS)
         du, dv = (u10 - uo)*mT, (v10 - vo)*mT
         s10 = OM.np.maximum(OM.np.hypot(u10, v10), float(self.cfg.STRESS_U10_MIN))
         # C_D rho_a [kg/m3], capped: the ERA5 stress is the mean over the hour
@@ -1285,26 +1345,98 @@ class ocean_common(ni_common):
                             float(self.cfg.STRESS_CD_MAX)*float(self.cfg.rho_air))
         sd  = OM.np.hypot(du, dv)
         trx, try_ = cdr*sd*du, cdr*sd*dv
-        self._d_int = (du*trx + dv*try_)*mT                   # interface sink [W/m2], >= 0
-        self._cd_rho = cdr*mT
-        self._u10, self._v10 = u10*mT, v10*mT
-        h = self.halo; hb = slice(h, -h)
-        self._tau_rel_T = (np.asarray(trx)[hb, hb], np.asarray(try_)[hb, hb])   # for the waves
-        # halo exchange: surface_velocity's np.roll wraps at the first row and
+        d_int = (du*trx + dv*try_)*mT
+        # halo exchange: the surface velocity's roll wraps at the first row and
         # column, so the halo of trx/try_ is wrong there; the U/V average
-        # below and the Craig-Banner flux (U/V -> T) read it at the first
+        # and the Craig-Banner flux (U/V -> T) read it at the first
         # interior row/column of every PE block (test/coupled, Oct 20 2026)
-        return self.apply_bc(trx), self.apply_bc(try_)
+        return self.apply_bc(trx), self.apply_bc(try_), d_int, cdr*mT
+
+    @partial(OM.jaxjit, static_argnums=0, static_argnames=('mode', 'has_uS'))
+    def _surface_velocity_core(self, u, v, u_S, v_S, mode='eulerian', has_uS=False):
+        """surface_velocity on model fields (u_S, v_S ignored unless has_uS)"""
+        ks = -self.halo-1
+        rx, ry = self.rollx, self.rolly
+        uT = 0.5*(u[ks] + rx(u[ks], 1)); vT = 0.5*(v[ks] + ry(v[ks], 1))
+        if mode == 'eulerian' and has_uS:
+            uT = uT - u_S[ks]; vT = vT - v_S[ks]
+        mT = self.maskT[ks]
+        return uT*mT, vT*mT
 
     def set_forcing(self, tau):
+        """The surface forcing and the coupling terms of this step, added to
+        the tendencies at time level tau. This is the wrapper: it fetches
+        the forcing fields, decides which branches are on, calls the jitted
+        _forcing_core and stores what the diagnostics, the TKE closure and
+        the restart need. The physics is documented in _forcing_core."""
+        t = self._gitt*self.dt                       # model time of this step
+        (tax, tay, qqnet, qsol, tstar, fw,
+         qqnec, sstar) = self.surface_forcing_fields(t)
+        z2 = OM.np.zeros_like(tax)
+        z3 = OM.np.zeros_like(self.u)
+        ice_tau = float(self.cfg.ICE_TAU_FRAC)
+        coupled = bool(self.coupled)
+        vortex = coupled and hasattr(self, 'u_S')
+        direct = coupled and bool(self.cfg.direct_stress_branch) and hasattr(self, 'tau_in_x')
+        shear = vortex and bool(self.cfg.STOKES_SHEAR)
+        sw = bool(self.use_stress_work)
+        flags = dict(tau=int(tau), ice=ice_tau < 1.0, coupled=coupled, stress_work=sw,
+                     direct=direct, vortex=vortex, shear=shear,
+                     restoring=(qqnec is not None and tstar is not None),
+                     has_sstar=sstar is not None, has_fw=fw is not None, has_qsol=qsol is not None)
+        out = self._forcing_core(
+            tax, tay,
+            qqnet, qsol if qsol is not None else z2, tstar if tstar is not None else z2,
+            fw if fw is not None else z2, qqnec if qqnec is not None else z2,
+            sstar if sstar is not None else z2,
+            self.u, self.v, self.w, self.temp, self.salt,
+            self.du, self.dv, self.dtemp, self.dsalt,
+            self.tau_work_x if sw else self.taux, self.tau_work_y if sw else self.tauy,
+            self.tau_in_x if direct else z2, self.tau_in_y if direct else z2,
+            self.u_S if vortex else z3, self.v_S if vortex else z3, **flags)
+        (self.du, self.dv, self.dtemp, self.dsalt, stx, sty,
+         self.forc_temp_surface, self.forc_salt_surface, self._sw_col,
+         vortex_step, ss_step, w_p, tdx, tdy, ice_mask, p_SS) = out
+        # the stress that was applied, for the TKE surface flux, the KE
+        # budget and the restart (ocean alone: tau_a; coupled: tau_o, both
+        # with the ice factor); the distributed stress is not stored here
+        if not sw:
+            self.taux, self.tauy = stx, sty
+        if ice_tau < 1.0:
+            self._ice_mask = ice_mask
+        if direct:
+            self._tau_dir_x, self._tau_dir_y = tdx, tdy
+        if vortex:
+            self._vortex_step = float(vortex_step)
+            if shear:
+                self._ss_step = float(ss_step)
+                self._vortex_step += float(ss_step) + float(w_p)
+                self.p_SS = p_SS
+        return
+
+    @partial(OM.jaxjit, static_argnums=0,
+             static_argnames=('tau', 'ice', 'coupled', 'stress_work', 'direct', 'vortex', 'shear',
+                              'restoring', 'has_sstar', 'has_fw', 'has_qsol'))
+    def _forcing_core(self, tax, tay, qqnet, qsol, tstar, fw, qqnec, sstar,
+                      u, v, w, temp, salt, du, dv, dtemp, dsalt, stx, sty, tau_in_x, tau_in_y, u_S, v_S,
+                      tau=0, ice=False, coupled=False, stress_work=False, direct=False, vortex=False,
+                      shear=False, restoring=False, has_sstar=False, has_fw=False, has_qsol=False):
+        """The arithmetic of set_forcing. Arguments: the forcing fields of
+        surface_forcing_fields (tax, tay on U/V points, kinematic; the rest
+        on T points, masked; a field the source does not deliver comes as
+        zeros with its flag off), the state, the tendencies at all time
+        levels, the stress stx/sty (taux/tauy, or tau_work_x/y with
+        stress_work; coupled it is the stress the waves released, alone it
+        is overwritten by tax/tay below), tau_in and u_S (zeros when their
+        flag is off). Returns the four tendencies, the stored stress, the
+        two surface tracer fluxes, the shortwave column integral, the
+        vortex and Stokes-shear work bookings, the direct branch, the ice
+        mask and p_SS (zeros when off)."""
         h  = self.halo
         ks = -h-1                                    # surface (top) level index
         sl_srf = (tau, ks, slice(None), slice(None))
         sl_all = (tau, slice(None), slice(None), slice(None))
-
-        t = self._gitt*self.dt                       # model time of this step
-        (tax, tay, qqnet, qsol, tstar, fw,
-         qqnec, sstar) = self.surface_forcing_fields(t)
+        zero = OM.np.zeros(())
 
         # --- THE ICE MASK ---------------------------------------------------
         # A cell at or below the freezing point is taken to be ice covered.
@@ -1327,16 +1459,16 @@ class ocean_common(ni_common):
         # the stress itself is, so a cell at the ice edge sees the mean of
         # its two neighbours rather than a step.
         ice_tau = float(self.cfg.ICE_TAU_FRAC)
-        if ice_tau < 1.0:
+        if ice:
             frz = float(self.cfg.ICE_T_FREEZE)
-            fT  = OM.np.where(self.temp[ks]*self.maskT[ks] <= frz, ice_tau, 1.0)
+            fT  = OM.np.where(temp[ks]*self.maskT[ks] <= frz, ice_tau, 1.0)
             f_u = 0.5*(fT + self.rollx(fT, -1))
             f_v = 0.5*(fT + self.rolly(fT, -1))
-            self._ice_mask = OM.np.where(self.temp[ks]*self.maskT[ks] <= frz,
-                                         1.0, 0.0)*self.maskT[ks]
+            ice_mask = OM.np.where(temp[ks]*self.maskT[ks] <= frz, 1.0, 0.0)*self.maskT[ks]
             tax, tay = tax*f_u, tay*f_v
         else:
             f_u = f_v = 1.0
+            ice_mask = OM.np.zeros_like(tax)
 
         # --- surface momentum -------------------------------------------------
         # coupled: the stress the WAVES release to the ocean (taux/tauy are
@@ -1345,22 +1477,20 @@ class ocean_common(ni_common):
         # see the stress that was applied -- which is why the ice factor is
         # applied BEFORE the store: under ice the TKE surface flux, the KE
         # budget and the diagnostics must all see the reduced stress too.
-        if not self.coupled:
-            self.taux, self.tauy = tax, tay
-        elif ice_tau < 1.0:
-            self.taux, self.tauy = self.taux*f_u, self.tauy*f_v
-        if self.use_stress_work:
-            self.du = OM.add_to_array(self.du, sl_all,
-                0.5*(self.tau_work_x + self.rollx(self.tau_work_x, -1))
-                * (f_u if ice_tau == 1.0 else f_u[None, :, :])*self.maskU)
-            self.dv = OM.add_to_array(self.dv, sl_all,
-                0.5*(self.tau_work_y + self.rolly(self.tau_work_y, -1))
-                * (f_v if ice_tau == 1.0 else f_v[None, :, :])*self.maskV)
+        if not coupled:
+            stx, sty = tax, tay
+        elif ice:
+            stx, sty = stx*f_u, sty*f_v
+        if stress_work:
+            du = OM.add_to_array(du, sl_all,
+                0.5*(stx + self.rollx(stx, -1))
+                * (f_u if not ice else f_u[None, :, :])*self.maskU)
+            dv = OM.add_to_array(dv, sl_all,
+                0.5*(sty + self.rolly(sty, -1))
+                * (f_v if not ice else f_v[None, :, :])*self.maskV)
         else:
-            self.du = OM.add_to_array(self.du, sl_srf,
-                self.taux/self._dz_surf*self.maskU[ks])
-            self.dv = OM.add_to_array(self.dv, sl_srf,
-                self.tauy/self._dz_surf*self.maskV[ks])
+            du = OM.add_to_array(du, sl_srf, stx/self._dz_surf*self.maskU[ks])
+            dv = OM.add_to_array(dv, sl_srf, sty/self._dz_surf*self.maskV[ks])
 
         # --- OPTIONAL direct branch tau_a - tau_in --------------------------
         # The wave model delivers only the momentum that passed through the
@@ -1370,18 +1500,18 @@ class ocean_common(ni_common):
         # where the sea is young and tau_in exceeds tau_a).
         # (tax, tay are already the ice-masked stress, so the branch carries
         # the same factor and tau_o + branch is still the applied tau_a)
-        if self.coupled and self.cfg.direct_stress_branch and hasattr(self, 'tau_in_x'):
+        if direct:
             ta  = OM.np.hypot(tax, tay)
-            tin = OM.np.hypot(0.5*(self.tau_in_x + self.rollx(self.tau_in_x, -1)),
-                              0.5*(self.tau_in_y + self.rolly(self.tau_in_y, -1)))
+            tin = OM.np.hypot(0.5*(tau_in_x + self.rollx(tau_in_x, -1)),
+                              0.5*(tau_in_y + self.rolly(tau_in_y, -1)))
             frac = OM.np.maximum(0.0, 1.0 - tin/OM.np.maximum(ta, 1e-20))
-            self.du = OM.add_to_array(self.du, sl_srf,
-                tax*frac/self._dz_surf*self.maskU[ks])
-            self.dv = OM.add_to_array(self.dv, sl_srf,
-                tay*frac/self._dz_surf*self.maskV[ks])
+            du = OM.add_to_array(du, sl_srf, tax*frac/self._dz_surf*self.maskU[ks])
+            dv = OM.add_to_array(dv, sl_srf, tay*frac/self._dz_surf*self.maskV[ks])
             # kept for stress_work_diag / stress_work_eul_diag: the surface
             # momentum forcing of u_L is tau_o PLUS this branch
-            self._tau_dir_x, self._tau_dir_y = tax*frac, tay*frac
+            tdx, tdy = tax*frac, tay*frac
+        else:
+            tdx = tdy = OM.np.zeros_like(tax)
 
         # --- vortex force, u_L formulation (Eq. 5), pseudo-spherical --------
         # The model velocity is the Lagrangian mean u_L; its flux-form
@@ -1398,9 +1528,11 @@ class ocean_common(ni_common):
         # below). The Coriolis-Stokes block is GONE (the core Coriolis
         # acts on u_L, which IS f zhat x u_L), and tracers are advected by
         # u_L with its own continuity w.
-        if self.coupled and hasattr(self, 'u_S'):
-            uSU = 0.5*(self.u_S + self.rollx(self.u_S, -1))*self.maskU
-            vSV = 0.5*(self.v_S + self.rolly(self.v_S, -1))*self.maskV
+        vortex_step = ss_step = w_p = zero
+        p_SS = OM.np.zeros_like(u)
+        if vortex:
+            uSU = 0.5*(u_S + self.rollx(u_S, -1))*self.maskU
+            vSV = 0.5*(v_S + self.rolly(v_S, -1))*self.maskV
             zeta_S = ((self.rollx(vSV, -1) - vSV)/(self.cosu_y*self.dxu_x)
                     - (self.rolly(uSU*self.cost_y, -1) - uSU*self.cost_y)
                       /(self.cosu_y*self.dyu_y))
@@ -1414,18 +1546,14 @@ class ocean_common(ni_common):
             # included -- vortex_work() is a pure round-off monitor of it.
             # (Dropping the area weights, as on the uniform acc1 grid, would
             # leave a spurious O(dy/R) source here.)
-            P = self.area_z*zeta_S*0.5*(self.v + self.rollx(self.v, -1))
-            Q = self.area_z*zeta_S*0.5*(self.u + self.rolly(self.u, -1))
+            P = self.area_z*zeta_S*0.5*(v + self.rollx(v, -1))
+            Q = self.area_z*zeta_S*0.5*(u + self.rolly(u, -1))
             Fu = -0.5*(P + self.rolly(P, 1))/self.area_u*self.maskU
             Fv =  0.5*(Q + self.rollx(Q, 1))/self.area_v*self.maskV
             # book the work HERE, against the velocities the pairing used
-            h_ = self.halo
-            si = slice(h_, -h_)
-            self._vortex_step = float(OM.np.sum(
-                (self.u*Fu*self.area_u + self.v*Fv*self.area_v)[si, si, si]
-                *self.dzt_z[si]))
-            self.du = OM.add_to_array(self.du, sl_all, Fu)
-            self.dv = OM.add_to_array(self.dv, sl_all, Fv)
+            vortex_step = self._isum_a((u*Fu*self.area_u + v*Fv*self.area_v)*self.dzt_z)
+            du = OM.add_to_array(du, sl_all, Fu)
+            dv = OM.add_to_array(dv, sl_all, Fv)
 
             # --- OPTIONAL full force: the Stokes shear force as well --------
             # cfg.STOKES_SHEAR = 1 adds the w dz(u_S) terms omitted above AND
@@ -1434,59 +1562,57 @@ class ocean_common(ni_common):
             # pressure p_SS (stokes_shear_force). The two do no net work on
             # u_L, exactly, so W_vortex stays the round-off monitor of the
             # whole force; W_ss in the log is the size of the cancelling pair.
-            if self.cfg.STOKES_SHEAR:
-                Fu, Fv, w_h, w_p = self.stokes_shear_force()
-                self._ss_step = w_h
-                self._vortex_step += w_h + w_p
-                self.du = OM.add_to_array(self.du, sl_all, Fu)
-                self.dv = OM.add_to_array(self.dv, sl_all, Fv)
+            if shear:
+                Fu, Fv, ss_step, w_p, p_SS = self._stokes_shear_core(u, v, w, u_S, v_S)
+                du = OM.add_to_array(du, sl_all, Fu)
+                dv = OM.add_to_array(dv, sl_all, Fv)
 
         # --- buoyancy forcing: structure of global4_pe.py, ERA5 fluxes -------
         # Q = Q_ERA5 + dQ/dT (SST_ERA5 - SST): the linearisation of the ERA5
         # bulk fluxes around the SST they were computed with
         # (with an ERA5 source; a source without dqdt/sst_star has no
         # restoring, one without sss_star no salinity restoring)
-        if qqnec is not None and tstar is not None:
-            f_t = ((qqnet + qqnec*(tstar - self.temp[ks]))
+        if restoring:
+            f_t = ((qqnet + qqnec*(tstar - temp[ks]))
                    * self.maskT[ks]/self.cfg.cp_0/self.cfg.rho_0)
         else:
             f_t = qqnet*self.maskT[ks]/self.cfg.cp_0/self.cfg.rho_0
         # restoring as a piston velocity, plus the virtual salt flux of the
         # freshwater flux, S (E - P), with the LOCAL surface salinity
         piston = self.cfg.SSS_PISTON if self.cfg.SSS_PISTON > 0.0 else self._dz_surf/self.cfg.t_rest
-        if sstar is not None:
-            f_s = piston*(sstar - self.salt[ks])*self.maskT[ks]
+        if has_sstar:
+            f_s = piston*(sstar - salt[ks])*self.maskT[ks]
         else:
-            f_s = 0.0*self.salt[ks]
-        if fw is not None:
-            f_s = f_s - self.salt[ks]*fw*self.maskT[ks]
+            f_s = 0.0*salt[ks]
+        if has_fw:
+            f_s = f_s - salt[ks]*fw*self.maskT[ks]
 
-        sst = self.temp[ks]*self.maskT[ks]
-        ice = OM.np.logical_and(sst <= -1.8, f_t <= 0.0)
-        f_t = OM.np.where(ice, 0.0, f_t)
-        f_s = OM.np.where(ice, 0.0, f_s)
+        sst = temp[ks]*self.maskT[ks]
+        ice_c = OM.np.logical_and(sst <= -1.8, f_t <= 0.0)
+        f_t = OM.np.where(ice_c, 0.0, f_t)
+        f_s = OM.np.where(ice_c, 0.0, f_s)
         # surface tracer FLUXES for the TKE closure's surface buoyancy-flux
         # term (pyOM2 forc_temp_surface / forc_salt_surface, K m/s, psu m/s)
-        self.forc_temp_surface, self.forc_salt_surface = f_t, f_s
-        ice_f = OM.np.where(ice, 0.0, 1.0)
+        ice_f = OM.np.where(ice_c, 0.0, 1.0)
 
-        self.dtemp = OM.add_to_array(self.dtemp, sl_srf, f_t/self._dz_surf)
-        self.dsalt = OM.add_to_array(self.dsalt, sl_srf, f_s/self._dz_surf)
+        dtemp = OM.add_to_array(dtemp, sl_srf, f_t/self._dz_surf)
+        dsalt = OM.add_to_array(dsalt, sl_srf, f_s/self._dz_surf)
 
         # penetrating shortwave: 3-D temperature source, zeroed under ice.
         # Q_ERA5 already contains ssr at the surface, the source moves the
         # penetrating part down (its column integral is zero)
-        if qsol is None:                  # the source has no solar part
-            self._sw_col = 0.0*f_t
-            return
-        src = (qsol[None, :, :]*self._divpen
-               * ice_f[None, :, :]*self.maskT/self.cfg.cp_0/self.cfg.rho_0)
-        self.dtemp = OM.add_to_array(self.dtemp, sl_all, src)
-        # column integral of the applied shortwave source [K m/s]: zero over a
-        # full column (pen(0) = pen(nz) = 0), NONZERO where the column is
-        # shallower than the light penetration -- the light absorbed below the
-        # bottom is lost (pyOM2 setup1 does the same); booked for the heat
-        # conservation identity and printed as "SW leak". With EXP_SW_BOTTOM
-        # the remainder goes into the deepest wet cell and this is round-off
-        self._sw_col = OM.np.sum(src*self.dzt_z, axis=0)
-        return
+        if not has_qsol:                  # the source has no solar part
+            sw_col = 0.0*f_t
+        else:
+            src = (qsol[None, :, :]*self._divpen
+                   * ice_f[None, :, :]*self.maskT/self.cfg.cp_0/self.cfg.rho_0)
+            dtemp = OM.add_to_array(dtemp, sl_all, src)
+            # column integral of the applied shortwave source [K m/s]: zero over a
+            # full column (pen(0) = pen(nz) = 0), NONZERO where the column is
+            # shallower than the light penetration -- the light absorbed below the
+            # bottom is lost (pyOM2 setup1 does the same); booked for the heat
+            # conservation identity and printed as "SW leak". With EXP_SW_BOTTOM
+            # the remainder goes into the deepest wet cell and this is round-off
+            sw_col = OM.np.sum(src*self.dzt_z, axis=0)
+        return (du, dv, dtemp, dsalt, stx, sty, f_t, f_s, sw_col,
+                vortex_step, ss_step, w_p, tdx, tdy, ice_mask, p_SS)

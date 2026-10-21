@@ -14,16 +14,68 @@ sits on a sub-communicator next to the wave ranks and a COMM_WORLD collective
 would deadlock.
 """
 import numpy as np
+import pyOM3 as OM
 from netCDF4 import Dataset
 
 
+# ---------------------------------------------------------------------------
+# THE TWO LAYOUTS. Under MPI a process holds ITS block of the grid with one
+# halo ring, (Ny, Nx) = (ny_loc + 2h, nx_loc + 2h), and the block's position
+# is ys_pe/xs_pe. Under JAX one process holds the WHOLE grid, and the
+# sharded array carries every shard's halo INLINE: (Ny, Nx) =
+# (ny + 2h n_pes_y, nx + 2h n_pes_x), with model.pad/unpad converting
+# between the global interior and that layout. The three helpers below are
+# the only place the shared code needs to know which it is: a block is the
+# whole grid under JAX, a padded field is made with pad (not with a zero
+# array and a slice), and an interior is taken with unpad (not with a
+# slice, which would keep the inline halos).
+# ---------------------------------------------------------------------------
 def local_block(M):
     """(j0, i0, ny_loc, nx_loc) of THIS PE's interior block, 0-based global
-    start indices. Derived from Ny/Nx and ys_pe/xs_pe only: pe_realistic sets
-    xe_pe = Nx (the PADDED extent) in the serial case, so xe_pe/ye_pe must
-    not be used to size anything."""
+    start indices. MPI: derived from Ny/Nx and ys_pe/xs_pe only (pe_realistic
+    sets xe_pe = Nx, the PADDED extent, in the serial case, so xe_pe/ye_pe
+    must not be used to size anything). JAX: the whole grid."""
     h = M.halo
+    if OM.jax:                            # pe: Nx - 2h n_pes_x; wim keeps nx/ny as the global size
+        ny, nx = M.Ny - 2*h*M.n_pes_y, M.Nx - 2*h*M.n_pes_x
+        return 0, 0, ny, nx
     return M.ys_pe - 1, M.xs_pe - 1, M.Ny - 2*h, M.Nx - 2*h
+
+
+def pad_block(M, a, exchange=True):
+    """The interior block `a` ((ny_loc, nx_loc) or (nz, ny_loc, nx_loc),
+    numpy) as a padded model field with the halo exchanged (apply_bc), i.e.
+    what `b = zeros(Ny, Nx); b[h:-h, h:-h] = a; apply_bc(b)` did under MPI.
+    exchange=False leaves the halo at zero (an interior mask, say)."""
+    a = np.asarray(a, np.float64)
+    if OM.jax:
+        b = M.pad(OM.np.asarray(a))
+    else:
+        h = M.halo
+        shape = (M.Nz, M.Ny, M.Nx) if a.ndim == 3 else (M.Ny, M.Nx)
+        b = np.zeros(shape); b[(slice(h, -h),)*a.ndim] = a
+        b = OM.np.asarray(b)
+    return M.apply_bc(b) if exchange else b
+
+
+def interior(M, a, lead=0):
+    """The interior of a padded field as a numpy array: MPI the local block,
+    JAX the global interior (every inline halo removed). `lead` = number of
+    leading axes that carry a halo as well (the wave model's 4-D fields:
+    lead=2 for (nd, nf, ny, nx)); the trailing two are y and x, a 3-D field
+    with lead=0 is (nz, ny, nx) with the z halo removed too."""
+    a = OM.np.asarray(a) if OM.jax else np.asarray(a)
+    if OM.jax:
+        try:
+            return np.asarray(M.unpad(a, lead) if lead else M.unpad(a))
+        except TypeError:                 # pe's unpad has no lead argument
+            return np.asarray(M.unpad(a))
+    h = M.halo; s = slice(h, -h)
+    n = a.ndim
+    sl = (s,)*lead + (slice(None),)*(n - lead - 2) + (s, s) if lead else (s,)*n
+    if not lead and n == 2:
+        sl = (s, s)
+    return a[sl]
 
 
 class BlockScatter:

@@ -356,7 +356,13 @@ so a change to one branch shows in one line.
                     grids, snl_work against int U.k S_nl dk
     J   jax         coupled/jax_backend.py, in run_slow.py: the six cases
                     on PYOM3_BACKEND=jax, 1x1 and 2x2 shards, against the
-                    numpy references, 1e-10 (the closure's round-off)
+                    numpy references: the state (1e-10, the closure's
+                    round-off) AND the diagnostics (stress work, C, vortex
+                    work, TKE lhs/rhs, the KE budget terms, the means'
+                    partial sums, the mixed layer depth, on the scale of
+                    the stress work), and the wave side (exp_wave on both
+                    grids: mask, u*, udir, p_in, wind_work, E after one
+                    step). About 3 min.
 
 Not covered: the ERA5 readers (forcing_era5*.py: file sets of the prep
 scripts), the MPI block exchange between the components
@@ -366,7 +372,57 @@ the atmosphere (exp_atmos.py), the near-inertial diagnostic (ni_diag.py),
 the mixed layer depth against a brute-force search, the KE budget's text
 file.
 
-Writing it found (Oct 20 2026, nothing changed in setups/):
+THE JAX LAYOUT (Oct 20 2026, second delivery). Under MPI a process holds
+its block with one halo ring; under JAX one process holds the whole grid
+and the sharded arrays carry every shard's halo INLINE, so a slice
+`[h:-h, h:-h]` keeps the inner halos and `ys_pe - 1` is not a block
+position. The shared code now goes through three helpers in
+`forcing_common/block_io.py`: `local_block` (the whole grid under JAX),
+`pad_block` (interior block -> padded field, `pad` + `apply_bc` under
+JAX, the zero-array-and-slice form under MPI) and `interior` (padded
+field -> interior, `unpad` under JAX, the slice under MPI; `lead` for the
+wave model's spectral axes). exp_ocean.py has two methods on them,
+`_isum` (interior sum of a model field) and `_int`, and every interior
+sum and cut of the shared code uses them: the bookings in set_forcing,
+set_forcing_direct and stokes_shear_force, the work diagnostics,
+integrate_tke, tracer_advection, ke_budget (its `[I]`/`[I2]` slices are
+`_int` calls now; the SW-leak column of eb_chk was summed over the halo
+too before and is interior-only now), mixed_layer_depth (computed on the
+full layout, the caller takes the interior), the means, set_topography,
+localise_forcing (the forcing geom is the global grid under JAX, `xt_gl`),
+surface_forcing_fields, the relwind stress handed to the waves; in
+exp_wave.py set_topography, set_initial, update_forcing, wind_input_field,
+wind_work, snl_work. The numpy path is bit-identical (all goldens and
+every test unchanged), and the J test passes on 1x1 and 2x2 shards,
+ocean and wave side, state and diagnostics. Not touched: ni_diag.py (28
+slices, NI_DIAG off), coupler_io.py (the restart gathers are MPI),
+coupler_loop.py and exp_atmos.py (MPI by construction), and nothing is
+jitted in that delivery.
+
+THE JIT (Oct 21 2026, third delivery, exp_ocean.py only). The per-step
+arithmetic now sits in pure functions decorated with OM.jaxjit as the
+package's kernels are (`self` static: grid constants, masks, areas and
+switches are read from it at trace time; the state and the forcing fields
+are arguments; the options that change the code path are static keyword
+arguments; nothing inside calls float() or numpy on a model field):
+`_forcing_core` (all of set_forcing: ice factor, the stress on U/V or
+distributed, the direct branch, the vortex force with its booking, the
+Stokes shear force, the buoyancy fluxes, the shortwave source),
+`_direct_core` (set_forcing_direct), `_stokes_shear_core`, `_relwind_core`
+and `_surface_velocity_core`, `_tau_uv` (the T -> U/V stress average) and
+`_craig_banner` (the surface TKE flux of the ocean alone). The methods the
+model calls are wrappers: they fetch the forcing, decide the flags, call
+the core and store what the diagnostics, the closure and the restart
+need. On the numpy backend OM.jaxjit is the identity and every golden is
+unchanged; the J test passes on 1x1 and 2x2 shards. On the sandbox's CPU
+jax, set_forcing went from 7-17 ms to 2-3 ms per step on the test box,
+the remainder being the forcing object (numpy) and the device transfer of
+its eight fields. Still op by op: the once-per-coupling-step diagnostics
+(stress_work_diag, stress_work_eul_diag, ocean_ke) and ke_budget (numpy
+by design).
+
+Writing it found (Oct 20 2026; 1, 2 and 3 FIXED the same day in
+exp_ocean.py, the rest as stated):
 
 1. **exp_ocean.set_topography shifts the topography by halo - 1 levels for
    halo_points > 1** (`kbot = where(kbot > 0, kbot + (halo - 1), 0)`,
@@ -374,8 +430,7 @@ Writing it found (Oct 20 2026, nothing changed in setups/):
    Oct 17 make_topo_masks fix, which compares kbot with the 1-based level
    number and is halo-independent. With the three lines removed every halo
    and decomposition case of the family is bit-identical. run.py hard-codes
-   halo = 1, so no run was affected. Tests 16 and 4 (halo 2) FAIL until it
-   is removed.
+   halo = 1, so no run was affected. Fixed (the lines are gone).
 2. **The relative-wind stress is decomposition dependent** (STRESS_MODE
    'relwind', 1x2: 7e-5, 2x1: 1e-3 after 8 steps). `_relative_wind_stress`
    forms tau on the padded T points from surface_velocity, whose np.roll
@@ -387,12 +442,13 @@ Writing it found (Oct 20 2026, nothing changed in setups/):
    self.apply_bc(try_)` at the end of `_relative_wind_stress`; with it the
    case is exact in every layout. Affects the forced relwind runs on many
    ranks (the TKE surface flux along block edges), not the stress the waves
-   receive (interior only). Test 4 forced_relwind FAILS until it is fixed.
+   receive (interior only). Fixed.
 3. **stress_work_field with use_stress_work is not the local form of
    stress_work_diag** (19d coupled_stress: 3e-2): it dots the SURFACE
    velocity with the depth-integrated stress, the diagnostic dots u(z) with
    tau(z) level by level; the docstring claims sum w_o A_t = rho_0 x
    stress_work_diag. Only q_int of the coupled atmosphere reads the field.
+   Fixed: the field now sums u(z) tau(z) over the levels too.
 4. **ke_budget with use_stress_work raises AttributeError** (`self.taux`
    in W_tau, line 1092): the distributed-stress run has no taux. The
    coupled_stress cases therefore run with KE_BUDGET = 0.
@@ -404,11 +460,10 @@ Writing it found (Oct 20 2026, nothing changed in setups/):
    (test 18g confirms), and the relwind docstring's "tau = tau_E where
    u_o = 0" holds for the magnitude and the direction of u10, not for the
    direction of tau_E (the synthetic source has the two not parallel).
-7. On the jax backend (1x1) all six cases already RUN and agree to 7e-11;
-   on 2x2 shards every case stops in exp_ocean.set_topography:
-   block_io.local_block assumes the MPI layout (Ny - 2h interior rows), the
-   jax layout holds all shards with inline halos. That is the first item of
-   the jaxification; the family's J test is its acceptance test.
+7. On the jax backend (1x1) all six cases already RAN and agreed to 7e-11;
+   on 2x2 shards every case stopped in exp_ocean.set_topography:
+   block_io.local_block assumed the MPI layout. Fixed by the layout
+   helpers above (second delivery); the J test is the acceptance test.
 
 Running it: `python3 run_fast.py coupled` (test 4 needs mpirun on the path
 or MPIRUN), `python3 coupled/jax_backend.py` for J. Work files go to

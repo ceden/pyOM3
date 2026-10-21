@@ -421,6 +421,28 @@ def state(m, fields=None):
     return out
 
 
+def diagnostics(m):
+    """the scalar and reduced diagnostics of the shared code after a step
+    (numpy): the exact bookings, the KE budget accumulators, the online
+    means' partial sums, the mixed layer depth. Compared across backends and
+    layouts by jax_backend.py, since none of them is in the state."""
+    out = {'stress_work': np.array([m.stress_work_diag()]),
+           'exchange_C': np.array([m.exchange_work_C()]),
+           'vortex': np.array([m.vortex_work()])}
+    if m.coupled:
+        out['stress_work_eul'] = np.array([m.stress_work_eul_diag()])
+        out['stress_work_field'] = _interior(m, np.asarray(m.stress_work_field()))
+    if hasattr(m, '_tke_lhs'):
+        out['tke_lhs_rhs'] = np.array([m._tke_lhs, m._tke_rhs])
+    if hasattr(m, 'eb_acc'):
+        out['eb_acc'] = m.eb_acc.copy()         # (eb_chk, eb_trc are round-off residuals: test 19)
+    if getattr(m, '_avg', None) is not None:
+        for nme, a in m.average_state()[0]:
+            out['avg_' + nme] = np.asarray(a)
+    out['mld'] = _interior(m, np.asarray(m.mixed_layer_depth()))
+    return out
+
+
 def gathered_state(m, fields=None):
     """state assembled on rank 0 across the model's PEs (None elsewhere)"""
     if m.n_pes == 1 or OM.jax:
@@ -480,3 +502,21 @@ def small_wave(coarsen=1, n_pes_x=1, n_pes_y=1, comm=None, halo=1, quiet=True, r
         os.chdir(cwd)
     m._setup = setup
     return m
+
+
+def wave_state(m, nstep=1):
+    """the wave side of the shared code after `nstep` steps (numpy, global
+    interior): the mask, u*, udir, the wind input field and the two work
+    diagnostics; compared across backends and layouts by jax_backend.py"""
+    from block_io import interior
+    tau, taum1, taum2 = 2, 1, 0
+    import io, contextlib
+    with contextlib.redirect_stdout(io.StringIO()):
+        for k in range(nstep):
+            tA, tB, tC = (1., 0., 0.) if k == 0 else (1.55, -0.55, 0.)
+            m.time_step(tA, tB, tC, tau, taum1, taum2)
+            tau, taum1, taum2 = (tau+1) % 3, (taum1+1) % 3, (taum2+1) % 3
+    m.update_forcing(nstep*m.dt)
+    return {'kbot': interior(m, m.kbot), 'ustar': interior(m, m.ustar), 'udir': interior(m, m.udir),
+            'p_in': np.asarray(m.wind_input_field()),            # (ny, nx), interior already
+            'wind_work': np.array([m.wind_work()]), 'E': interior(m, m.E, lead=2)}

@@ -19,7 +19,8 @@ t_rest   = 30 * 86400.0
 phi0     = -25.0 / 180.0 * np.pi
 omega    = 7.292123516990375e-05
 radius   = 6370.0e3
-
+grav     = 9.81
+rho_0    = 1024.0
 
 nx = int(128 * hRESOLVE)
 ny = int(128 * hRESOLVE)
@@ -611,6 +612,10 @@ class ocean(tke_mixin, ocean_base):
         bstar2 = OM.np.asarray(self._bstar[:, None] * OM.np.ones((1, self.Nx)), np.float64)
         restore = OM.np.zeros_like(self.dtemp[tau])
         forc = (1.0 / t_rest) * (bstar2 - self.temp[ks, :, :])
+        # surface buoyancy FLUX (tendency x cell thickness) for the TKE closure's
+        # surface buoyancy-flux term (pyOM2 forc_temp_surface); eq_of_state=0:
+        # temp is b, so this is the buoyancy flux itself [m^2/s^3]
+        self.forc_temp_surface = forc * dz * self.maskT[ks]
         restore = OM.modify_array(restore, (ks, slice(None), slice(None)),
                                   forc * self.maskT[ks])
         self.dtemp = OM.modify_array(self.dtemp, (tau, slice(None), slice(None), slice(None)),
@@ -621,7 +626,7 @@ class ocean(tke_mixin, ocean_base):
 def get_ocean_parameter():
     return dict(
         nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz, dt=ocean_dt,
-        eq_of_state=0,
+        rho_0=rho_0, grav=grav, eq_of_state=0,
         periodic_in_x=True, periodic_in_y=False,
         implicit_free_surface=True, explicit_free_surface=False,
         superbee_advection=True,

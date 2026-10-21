@@ -20,7 +20,7 @@ import numpy as np
 import pyOM3 as OM
 from mpi4py import MPI
 from pyOM3.wim_realistic.grid import u_centered_grid
-from block_io import local_block
+from block_io import local_block, pad_block, interior
 from forcing_base import make as make_forcing
 
 
@@ -48,11 +48,7 @@ class wave_common:
             kb = np.maximum.reduceat(np.maximum.reduceat(kb, self.cfg._je_w[:-1], axis=0),
                                      self.cfg._ie_w[:-1], axis=1)
         j0, i0, ny_loc, nx_loc = local_block(self)
-        ocean_cell = np.where(kb[j0:j0+ny_loc, i0:i0+nx_loc] > 0, 1.0, 0.0)
-        kbot = np.zeros((self.Ny, self.Nx), np.float64)
-        sl = slice(self.halo, -self.halo)
-        kbot[sl, sl] = ocean_cell
-        self.kbot = self.apply_bc(OM.np.asarray(kbot))
+        self.kbot = pad_block(self, np.where(kb[j0:j0+ny_loc, i0:i0+nx_loc] > 0, 1.0, 0.0))
         return
 
     def set_initial(self):
@@ -97,7 +93,11 @@ class wave_common:
                     'block': (ja, ia, jb - ja, ib - ia),
                     'xt_gl': xt_f, 'yt_gl': yt_f, 'wet': wet[ja:jb, ia:ib]}
         else:
-            geom = {'xt': np.asarray(self.xt)[h:-h], 'yt': np.asarray(self.yt)[h:-h],
+            # the block's coordinates: the local interior under MPI, the whole
+            # grid under JAX (xt holds the inline shard halos there)
+            xt_b = np.asarray(self.xt_gl) if OM.jax else np.asarray(self.xt)[h:-h]
+            yt_b = np.asarray(self.yt_gl) if OM.jax else np.asarray(self.yt)[h:-h]
+            geom = {'xt': xt_b, 'yt': yt_b,
                     'block': (j0, i0, ny_loc, nx_loc),
                     'xt_gl': self.xt_gl, 'yt_gl': self.yt_gl,
                     'wet': wet[j0:j0+ny_loc, i0:i0+nx_loc]}
@@ -158,10 +158,8 @@ class wave_common:
             ty = self._group_sum(self._fw*ty)/self._fws
         us = np.sqrt(np.hypot(tx, ty)/self.cfg.rho_air)
         ud = np.arctan2(tx, ty)                    # theta=0 north, pi/2 east
-        self.ustar = OM.modify_array(self.ustar, (sl, sl), us)
-        self.udir  = OM.modify_array(self.udir,  (sl, sl), ud)
-        self.ustar = self.apply_bc(self.ustar)*self.maskTp
-        self.udir  = self.apply_bc(self.udir)
+        self.ustar = pad_block(self, us)*self.maskTp
+        self.udir  = pad_block(self, ud)
         return
 
     def wind_input_field(self):
@@ -171,13 +169,13 @@ class wave_common:
         coupled atmosphere (energy_cycle.tex Eq. eq_qint)."""
         h  = self.halo
         sl = slice(h, -h)
-        fld = self.grav*np.sum(np.sum((self.gamma_in*self.E)[sl, sl, sl, sl]
+        fld = self.grav*np.sum(np.sum(interior(self, self.gamma_in*self.E, lead=2)
                                       *self.dd, axis=0)
                                *self.dft[sl, None, None], axis=0)
         if hasattr(self, '_tail_input_factors'):
             _, fac_phi, _, _ = self._tail_input_factors()
             Ecg = self.E[:, -h, :, :]
-            fld = fld + np.sum((Ecg*fac_phi*self.dd)[sl, sl, sl], axis=0)
+            fld = fld + np.sum(interior(self, Ecg*fac_phi*self.dd, lead=1), axis=0)
         return self.cfg.rho_0*np.asarray(fld)
 
     # --- diagnostic: wind -> wave energy input ------------------------------
@@ -188,18 +186,19 @@ class wave_common:
         spherical cell area. Collective over the wave communicator."""
         h  = self.halo
         sl = slice(h, -h)
-        fld = self.grav*np.sum(np.sum((self.gamma_in*self.E)[sl, sl, sl, sl]
+        fld = self.grav*np.sum(np.sum(interior(self, self.gamma_in*self.E, lead=2)
                                       *self.dd, axis=0)
                                *self.dft[sl, None, None], axis=0)
-        p = float(np.sum(fld*self.area_t[sl, sl]))
+        At = interior(self, self.area_t)
+        p = float(np.sum(fld*At))
         # analytic beyond-grid tail input (tail_flux='input'): the wind pumps
         # energy directly into f > f_grid and Phi_oc carries it, so the input
         # book must too, or 'dissipation' persistently exceeds 'wind work'.
         if hasattr(self, '_tail_input_factors'):
             _, fac_phi, _, _ = self._tail_input_factors()
             Ecg = self.E[:, -h, :, :]
-            p += float(np.sum(np.sum((Ecg*fac_phi*self.dd)[sl, sl, sl], axis=0)
-                              *self.area_t[sl, sl]))
+            p += float(np.sum(np.sum(interior(self, Ecg*fac_phi*self.dd, lead=1), axis=0)
+                              *At))
         comm = getattr(self, 'comm', None)
         if comm is not None and comm.Get_size() > 1:
             p = comm.allreduce(p, op=MPI.SUM)
@@ -220,9 +219,9 @@ class wave_common:
         Uk = (self.ocean_U[None, :, :, :]*self.sinth[:, None, None, None]
             + self.ocean_V[None, :, :, :]*self.costh[:, None, None, None]) \
             * self.omega_t[None, :, None, None]
-        fld = np.sum(np.sum((Uk*self.S_nl)[sl, sl, sl, sl]*self.dd, axis=0)
+        fld = np.sum(np.sum(interior(self, Uk*self.S_nl, lead=2)*self.dd, axis=0)
                      *self.dft[sl, None, None], axis=0)
-        p = float(np.sum(fld*self.area_t[sl, sl]))
+        p = float(np.sum(fld*interior(self, self.area_t)))
         comm = getattr(self, 'comm', None)
         if comm is not None and comm.Get_size() > 1:
             p = comm.allreduce(p, op=MPI.SUM)

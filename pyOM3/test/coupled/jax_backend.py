@@ -28,7 +28,7 @@ TOL = 1e-10
 
 def run(npx, npy, write_ref=False):
     import io, contextlib, traceback
-    from config import small_ocean, step, state, line, OM
+    from config import small_ocean, step, state, diagnostics, line, OM
     from golden import CASES
     if write_ref and OM.jax or not write_ref and not OM.jax:
         print('   wrong backend (jax %s), set PYOM3_BACKEND' % bool(OM.jax)); return False
@@ -36,7 +36,9 @@ def run(npx, npy, write_ref=False):
     for name, kw in CASES:
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                st = state(step(small_ocean(n_pes_x=npx, n_pes_y=npy, tag='j_' + name, **kw), 8))
+                m = step(small_ocean(n_pes_x=npx, n_pes_y=npy, tag='j_' + name, **kw), 8)
+                st = state(m)
+                st.update({'diag_' + k: v for k, v in diagnostics(m).items()})
         except Exception:
             tb = traceback.format_exc().splitlines()
             print('J coupled jax %dx%d, %s: does not run on the jax backend' % (npx, npy, name))
@@ -46,6 +48,30 @@ def run(npx, npy, write_ref=False):
             np.savez(REF(name), **st); continue
         if not os.path.exists(REF(name)):
             print('J coupled jax: no numpy reference for %s' % name); ok = False; continue
+        ref = np.load(REF(name))
+        d = max(float(np.max(np.abs(st[k] - ref[k]))/max(np.max(np.abs(ref[k])), 1e-300))
+                for k in ref if not k.startswith('diag_'))
+        ok &= line('J coupled jax %dx%d vs numpy, %s' % (npx, npy, name), d, TOL)
+        # the diagnostics; the vortex work is a round-off monitor (1e-14 of
+        # the stress work), so every scalar is compared on the stress-work scale
+        scale = float(np.abs(ref['diag_stress_work'][0]))
+        d = max(float(np.max(np.abs(st[k] - ref[k]))/max(np.max(np.abs(ref[k])), scale, 1e-300))
+                for k in ref if k.startswith('diag_'))
+        ok &= line('J coupled jax %dx%d vs numpy, %s, diagnostics' % (npx, npy, name), d, TOL)
+    # the wave side: exp_wave on wim_realistic, both grids, one step
+    from config import small_wave, wave_state
+    for c in (1, 2):
+        name = 'wave_c%d' % c
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                st = wave_state(small_wave(coarsen=c, n_pes_x=npx, n_pes_y=npy))
+        except Exception:
+            tb = traceback.format_exc().splitlines()
+            print('J coupled jax %dx%d, %s: does not run on the jax backend' % (npx, npy, name))
+            print('\n'.join('      ' + l for l in tb[-6:]))
+            ok = False; continue
+        if write_ref:
+            np.savez(REF(name), **st); continue
         ref = np.load(REF(name))
         d = max(float(np.max(np.abs(st[k] - ref[k]))/max(np.max(np.abs(ref[k])), 1e-300)) for k in ref)
         ok &= line('J coupled jax %dx%d vs numpy, %s' % (npx, npy, name), d, TOL)

@@ -133,6 +133,14 @@ def wave_restart_write(M, fname, ny, nx, n_cpl, pre, tau, taum1, taum2, tA, tB, 
     sl = slice(M.halo, -M.halo)
     A_g  = gather_unpadded_mpi(M, M.A[sl, sl, sl, sl], ny, nx)
     dA_g = gather_unpadded_mpi(M, M.dA[:, sl, sl, sl, sl], ny, nx)
+    # HIGH-FREQUENCY GHOST SLAB (as in the global4 coupler): imphftail keeps
+    # the imposed f^-5 continuation in the frequency ghost bins every source
+    # step, and the f-advection boundary flux and the tail diagnostics read
+    # exactly those values. Storing only the interior bins leaves them zero
+    # after the read -> the first post-restart step advects against a zero
+    # anchor (~1e-8 seed in A, amplified by the ocean's convective flips).
+    h_   = M.halo
+    gh_g = gather_unpadded_mpi(M, M.A[:, -h_:, sl, sl], ny, nx)
     has_cur = int(hasattr(M, 'ocean_U'))
     if has_cur:
         oU  = gather_unpadded_mpi(M, M.ocean_U[sl, sl, sl],   ny, nx)
@@ -143,9 +151,11 @@ def wave_restart_write(M, fname, ny, nx, n_cpl, pre, tau, taum1, taum2, tA, tB, 
         nd_, nf_ = A_g.shape[0], A_g.shape[1]
         tmp = fname + '.tmp'
         f = _nc_create(tmp, [('three', 3), ('d', nd_), ('f', nf_),
-                             ('y', ny), ('x', nx)])
+                             ('y', ny), ('x', nx),
+                             ('dpad', gh_g.shape[0]), ('fh', gh_g.shape[1])])
         f.createVariable('A',  'f8', ('d', 'f', 'y', 'x'))[:]           = A_g
         f.createVariable('dA', 'f8', ('three', 'd', 'f', 'y', 'x'))[:]  = dA_g
+        f.createVariable('A_fghost', 'f8', ('dpad', 'fh', 'y', 'x'))[:] = gh_g
         if has_cur:
             f.createVariable('ocean_U',   'f8', ('f', 'y', 'x'))[:] = oU
             f.createVariable('ocean_V',   'f8', ('f', 'y', 'x'))[:] = oV
@@ -170,11 +180,13 @@ def wave_restart_read(M, fname, ny, nx, comm):
                ('n_cpl', 'pre', 'tau', 'taum1', 'taum2', 'tA', 'tB', 'tC',
                 'has_cur')}
         A_g  = np.array(f['A'][:]);  dA_g = np.array(f['dA'][:])
+        gh_g = np.array(f['A_fghost'][:]) if 'A_fghost' in f.variables else None
+        att['_has_ghost'] = gh_g is not None
         cur  = [np.array(f[v][:]) for v in
                 ('ocean_U', 'ocean_V', 'ocean_Udf', 'ocean_Vdf')]                if att['has_cur'] else None
         f.close()
     else:
-        att, A_g, dA_g, cur = None, None, None, None
+        att, A_g, dA_g, gh_g, cur = None, None, None, None, None
     att = comm.bcast(att, root=0)
     sl = slice(M.halo, -M.halo)
     nd_ = M.A.shape[0] - 2 * M.halo
@@ -184,6 +196,15 @@ def wave_restart_read(M, fname, ny, nx, comm):
     M.A = M.apply_bc(M.A)
     blk = scatter_array_mpi(M, dA_g, (3, nd_, nf_))
     M.dA = OM.modify_array(M.dA, (slice(None), sl, sl, sl, sl), blk)
+    if att.get('_has_ghost', False):
+        # AFTER apply_bc, which zero-fills the frequency halo by design
+        h_  = M.halo
+        blk = scatter_array_mpi(M, gh_g, (M.A.shape[0], h_))
+        M.A = OM.modify_array(M.A, (slice(None), slice(-h_, None), sl, sl), blk)
+    elif M.my_pe == 0:
+        print('wave restart has no A_fghost: the f^-5 tail anchor starts at '
+              'zero and is rebuilt by the first imphftail call (one-step '
+              'transient in the tail fluxes)', flush=True)
     if att['has_cur']:
         for name, full in zip(('ocean_U', 'ocean_V', 'ocean_Udf', 'ocean_Vdf'),
                               cur if M.my_pe == 0 else [None]*4):
@@ -216,6 +237,10 @@ def ocean_restart_write(M, fname, ny, nx, use_stress_work, n_cpl, tau, taum1, ta
     if has_uSo:
         uSo_g, vSo_g = g3(M.u_S_old), g3(M.v_S_old)
     tke_g = g3(M.tke) if hasattr(M, 'tke') else None
+    # K_diss_v (shear production of the LAST step) is STATE: the next step's
+    # set_tke_diffusivities runs first and builds the Richardson number, hence
+    # kappaH, from it; without it the first post-restart step has Pr = 10.
+    kdv_g = g3(M.K_diss_v) if hasattr(M, 'K_diss_v') else None
     if use_stress_work:
         sx_g, sy_g = g3(M.tau_work_x), g3(M.tau_work_y)
     else:
@@ -236,6 +261,7 @@ def ocean_restart_write(M, fname, ny, nx, use_stress_work, n_cpl, tau, taum1, ta
                 *((('u_S_old', uSo_g, ('z','y','x')),
                    ('v_S_old', vSo_g, ('z','y','x'))) if has_uSo else ()),
                 *((('tke', tke_g, ('z','y','x')),) if tke_g is not None else ()),
+                *((('K_diss_v', kdv_g, ('z','y','x')),) if kdv_g is not None else ()),
                 ('stress_x', sx_g, ('z','y','x') if use_stress_work else ('y','x')),
                 ('stress_y', sy_g, ('z','y','x') if use_stress_work else ('y','x')),
                 ('phi_oc', phi_g, ('y','x'))):
@@ -263,6 +289,7 @@ def ocean_restart_read(M, fname, ny, nx, use_stress_work, comm):
                  'u_S', 'v_S', 'stress_x', 'stress_y']
         if 'phi_oc' in f.variables: names.append('phi_oc')
         if 'tke' in f.variables: names.append('tke')
+        if 'K_diss_v' in f.variables: names.append('K_diss_v')
         if 'u_S_old' in f.variables: names += ['u_S_old', 'v_S_old']
         dat = {v: np.array(f[v][:]) for v in names}
         if 'phi_oc' not in dat: dat['phi_oc'] = None
@@ -271,13 +298,14 @@ def ocean_restart_read(M, fname, ny, nx, use_stress_work, comm):
         # skip the scatter root participates in -> MPI_ERR_TRUNCATE when
         # root's tke blocks land in the next exchange's smaller buffers)
         att['_has_tke'] = 'tke' in dat
+        att['_has_kdv'] = 'K_diss_v' in dat
         att['_has_uSo'] = 'u_S_old' in dat     # same collectivity argument
         f.close()
     else:
         att, dat = None, {v: None for v in
                ('u', 'v', 'temp', 'du', 'dv', 'dtemp', 'p_s',
                 'u_S', 'v_S', 'u_S_old', 'v_S_old',
-                'stress_x', 'stress_y', 'phi_oc', 'tke')}
+                'stress_x', 'stress_y', 'phi_oc', 'tke', 'K_diss_v')}
     att = comm.bcast(att, root=0)
     h = M.halo
     sl = slice(h, -h)
@@ -316,6 +344,11 @@ def ocean_restart_read(M, fname, ny, nx, use_stress_work, comm):
         M.tke = r3('tke', M.tke)     # backward-compat: absent in old restarts
                                      # -> keep the init_tke seed (respins in
                                      # hours; loud in no log, benign)
+    if att.get('_has_kdv', False) and hasattr(M, 'K_diss_v'):
+        M.K_diss_v = r3('K_diss_v', M.K_diss_v)
+    elif M.my_pe == 0 and hasattr(M, 'K_diss_v'):
+        print('ocean restart has no K_diss_v: first step uses Pr = 10 in the '
+              'TKE diffusivities (one-step transient)', flush=True)
     if use_stress_work:
         M.tau_work_x = r3('stress_x', M.tau_work_x)
         M.tau_work_y = r3('stress_y', M.tau_work_y)
@@ -330,6 +363,12 @@ def ocean_restart_read(M, fname, ny, nx, use_stress_work, comm):
     if has_phi and hasattr(M, 'phi_oc'):
         blk = scatter_array_mpi(M, dat['phi_oc'], ())
         M.phi_oc = M.apply_bc(OM.modify_array(M.phi_oc, (sl, sl), blk))
+    # rho and w are exact functions of the restored state and are READ at the
+    # start of the next step (N^2 for the diffusivities, p_h, tracer
+    # advection) -- without this they keep their initial values for one step.
+    from pyOM3.density import get_rho
+    M.rho = get_rho(M.salt, M.temp, M.p0, M.eq_of_state)
+    M.w   = M.vertical_velocity(M.u, M.v, M.w, M.maskW)
     if M.my_pe == 0:
         print('read ocean restart %s: resuming at coupling step %d'
               % (fname, att['n_cpl']), flush=True)
