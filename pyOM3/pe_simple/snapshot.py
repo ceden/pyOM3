@@ -160,10 +160,13 @@ class snap_raw(model):
              for var in ('u','v','w','temp','salt','p_h','p_s'):                                   
                     data = getattr(self,var)
                     if var == 'p_s' and not self.explicit_free_surface: data = self.p_s[tau,:,:] 
-                    if hasattr(data,'addressable_shards'):   
+                    # JAX: the global interior from ONE process (all its devices,
+                    # decomposition [1,1] below); several processes (multihost)
+                    # write their own shard each, as the MPI ranks do
+                    if hasattr(data,'addressable_shards') and OM.jax.process_count() > 1:
                           OM.np.save(d+'%s.npy'%var,   self.unpad(data).addressable_shards[0].data) 
                     else:    
-                          OM.np.save(d+'%s.npy'%var, self.unpad(data))
+                          OM.np.save(d+'%s.npy'%var, np__.asarray(self.unpad(data)))
 
 
  
@@ -223,8 +226,11 @@ def _snap_raw_prepare(self, snap_file_name, show_each_time_step):
     if self.my_pe == 0:             
        if os.path.isdir(snap_file_name):  shutil.rmtree(snap_file_name, ignore_errors=False)
        os.mkdir(snap_file_name)              
-       for pe in range(self.n_pes_x*self.n_pes_y): os.mkdir(snap_file_name+'/pe=%i'%pe)  
+       # JAX in one process: one block, the global interior (see diagnose);
+       # several processes (multihost) or MPI: one block per process/rank
+       single = OM.jax and OM.jax.process_count() == 1
+       for pe in range(1 if single else self.n_pes_x*self.n_pes_y): os.mkdir(snap_file_name+'/pe=%i'%pe)  
        for name, c in zip(('xt','yt','zt','xu','yu','zu'), self._snap_coords(nx,ny,nz)):
            OM.np.save(snap_file_name+'/%s.npy'%name, OM.np.asarray(c))
-       OM.np.save(snap_file_name+'/decomposition.npy',  OM.np.array([self.n_pes_x,self.n_pes_y]) )   
+       OM.np.save(snap_file_name+'/decomposition.npy',  OM.np.array([1,1] if single else [self.n_pes_x,self.n_pes_y]) )   
     return
