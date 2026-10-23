@@ -18,6 +18,53 @@ import os
 import numpy as np
 import pyOM3 as OM
 from coupler_mpi import gather_unpadded_mpi, scatter_array_mpi
+from block_io import interior, pad_block, jax_multi, shard_blocks, from_shard_blocks
+
+
+# ---------------------------------------------------------------------------
+# THE JAX LAYOUT (block_io). One process holds the whole grid, the sharded
+# arrays carry the shard halos inline, and there is no communicator: the
+# gathered restart is then a matter of unpad (write) and pad (read), with
+# nothing exchanged. The two helpers below are the gather/scatter of the
+# gathered ocean restart on that layout; the raw form writes the padded
+# layout as it is and needs no change (it is layout-bound either way).
+# ---------------------------------------------------------------------------
+def _gather(M, a, ny, nx, lead=False):
+    """padded model field -> global interior on rank 0 (numpy); lead=True
+    for a field with a leading time-level axis (du, p_s): every level on
+    its own, the halo of the trailing axes removed"""
+    if OM.jax:
+        if lead:
+            return np.stack([interior(M, a[k]) for k in range(a.shape[0])])
+        return interior(M, a)
+    h = M.halo; sl = slice(h, -h)
+    if lead:
+        return gather_unpadded_mpi(M, a[:, sl, sl, sl] if a.ndim == 4 else a[:, sl, sl], ny, nx)
+    return gather_unpadded_mpi(M, a[sl, sl, sl] if a.ndim == 3 else a[sl, sl], ny, nx)
+
+
+def _scatter(M, full, tgt, lead=False):
+    """global interior (numpy, rank 0) -> padded model field with the halo
+    exchanged, in the shape of tgt"""
+    if OM.jax:
+        if lead:
+            return OM.np.stack([pad_block(M, full[k]) for k in range(full.shape[0])])
+        return pad_block(M, full)
+    h = M.halo; sl = slice(h, -h)
+    nz_ = M.Nz - 2*h
+    if lead:                                  # `full` is None off rank 0: sizes from tgt
+        nd = np.ndim(tgt) - 1; nl = tgt.shape[0]
+        blk = scatter_array_mpi(M, full, (nl, nz_) if nd == 3 else (nl,))
+        if nd == 3:
+            return OM.modify_array(tgt, (slice(None), sl, sl, sl), blk)
+        out = tgt
+        for k in range(nl):
+            out = OM.modify_array(out, (k, sl, sl), blk[k])
+            out = OM.modify_array(out, (k, slice(None), slice(None)), M.apply_bc(out[k]))
+        return out
+    if np.ndim(tgt) == 3:
+        return M.apply_bc(OM.modify_array(tgt, (sl, sl, sl), scatter_array_mpi(M, full, (nz_,))))
+    return M.apply_bc(OM.modify_array(tgt, (sl, sl), scatter_array_mpi(M, full, ())))
 
 # ---------------------------------------------------------------------------
 # RAW (per-rank) OCEAN RESTART, EXP_RESTART_RAW=1. Default off, so every
@@ -41,6 +88,16 @@ from coupler_mpi import gather_unpadded_mpi, scatter_array_mpi
 # switch controls writing only: a run that writes raw restarts can branch
 # from a gathered EXP_INIT_OCEAN written on another layout, and a run that
 # writes gathered ones can resume a raw restart of its own layout.
+#
+# ON THE JAX BACKEND the raw form is PER SHARD, not per process: every
+# process writes the shards its devices hold (one npz per shard, numbered
+# sy*n_pes_x + sx, the padded block with its inline halo), so a restart
+# written by one process with four devices is read by four processes with
+# one device each and vice versa -- the shard layout n_pes_x x n_pes_y is
+# what must match, as the rank layout must under MPI. The gathered form on
+# jax allgathers every field to every process's host, which is fine at 1/3
+# degree and impossible at 1/10 (8.5 GB per field); the raw form moves
+# nothing between processes.
 # ---------------------------------------------------------------------------
 RESTART_RAW = os.environ.get('EXP_RESTART_RAW', '0') not in ('0', '', 'no')
 
@@ -421,6 +478,34 @@ def wave_restart_read(M, fname, ny, nx, comm):
 # -------------------------------------------------------------------- ocean
 _OCEAN_3D = ('u', 'v', 'temp', 'salt')
 _OCEAN_4D = ('du', 'dv', 'dtemp', 'dsalt')
+# THE SPLIT-EXPLICIT FREE SURFACE (explicit_free_surface) carries more state
+# than the implicit one: p_s is ONE level (2-D), and the sub cycle starts
+# from the barotropic transports U_bt, V_bt and the Coriolis tendencies
+# du_cor, dv_cor (three levels) of the previous step. All four go into the
+# restart, gathered and raw; a restart of the other method is refused.
+_EXPL_2D = ('U_bt', 'V_bt')
+_EXPL_4D = ('du_cor', 'dv_cor')
+
+
+def _explicit(M):
+    return bool(getattr(M, 'explicit_free_surface', False))
+
+
+def _explicit_state(M):
+    """the barotropic state exists after the first step; before it, the
+    package derives it from the 3-D field (init_barotropic_state), so a
+    restart written at step 0 does the same"""
+    if not hasattr(M, 'U_bt'):
+        M.U_bt, M.V_bt = M.init_barotropic_state(M.u, M.v, M.maskU, M.maskV)
+
+
+def _check_method(M, file_explicit, fname):
+    if bool(file_explicit) != _explicit(M):
+        raise RuntimeError('ocean restart %s was written with the %s free surface, this '
+                           'run has the %s one: the state of the two methods differs '
+                           '(p_s levels, the barotropic transports). Start the run cold.'
+                           % (fname, 'explicit' if file_explicit else 'implicit',
+                              'explicit' if _explicit(M) else 'implicit'))
 
 
 def _vadv_switch(M, att):
@@ -440,20 +525,25 @@ def _vadv_switch(M, att):
     return
 
 
-def _ocean_fields_raw(M, use_stress_work):
+def _ocean_fields_raw(M, use_stress_work, conv=np.asarray):
     """name -> padded local array of everything the ocean restart carries.
-    Same content as the gathered form, block by block instead of assembled."""
-    out = {n: np.asarray(getattr(M, n)) for n in _OCEAN_3D + _OCEAN_4D}
-    out['p_s'] = np.asarray(M.p_s)
-    out['u_S'], out['v_S'] = np.asarray(M.u_S), np.asarray(M.v_S)
+    Same content as the gathered form, block by block instead of assembled.
+    conv: np.asarray for the MPI blocks, the identity for the jax arrays."""
+    out = {n: conv(getattr(M, n)) for n in _OCEAN_3D + _OCEAN_4D}
+    out['p_s'] = conv(M.p_s)
+    if _explicit(M):
+        _explicit_state(M)
+        for n in _EXPL_2D + _EXPL_4D:
+            out[n] = conv(getattr(M, n))
+    out['u_S'], out['v_S'] = conv(M.u_S), conv(M.v_S)
     for n in ('u_S_old', 'v_S_old', 'tke', 'K_diss_v', 'phi_oc',
               'tau_in_x', 'tau_in_y', 'hs'):
         if hasattr(M, n):
-            out[n] = np.asarray(getattr(M, n))
+            out[n] = conv(getattr(M, n))
     if use_stress_work:
-        out['stress_x'], out['stress_y'] = np.asarray(M.tau_work_x), np.asarray(M.tau_work_y)
+        out['stress_x'], out['stress_y'] = conv(M.tau_work_x), conv(M.tau_work_y)
     else:
-        out['stress_x'], out['stress_y'] = np.asarray(M.taux), np.asarray(M.tauy)
+        out['stress_x'], out['stress_y'] = conv(M.taux), conv(M.tauy)
     return out
 
 
@@ -488,6 +578,7 @@ def _ocean_restart_write_raw(M, fname, use_stress_work, n_cpl,
                          tA=tA, tB=tB, tC=tC,
                          use_stress_work=int(use_stress_work),
                          vadv=int(getattr(M, 'vadv_sub_cycling', 0)),
+                         explicit=int(_explicit(M)),
                          raw=1, n_pes=M.n_pes,
                          n_pes_x=M.n_pes_x, n_pes_y=M.n_pes_y))
         if avg is not None:
@@ -505,6 +596,8 @@ def _ocean_restart_read_raw(M, fname, use_stress_work, comm, restore_average=Tru
                ('n_cpl', 'tau', 'taum1', 'taum2', 'tA', 'tB', 'tC')}
         att['raw'] = int(getattr(f, 'raw', 0))
         att['vadv'] = int(getattr(f, 'vadv', 0))
+        att['explicit'] = int(getattr(f, 'explicit', 0))
+        att['jax_shards'] = int(getattr(f, 'jax_shards', 0))
         att['layout'] = (int(getattr(f, 'n_pes', -1)), int(getattr(f, 'n_pes_x', -1)),
                          int(getattr(f, 'n_pes_y', -1)))
         att['avg_n'] = int(getattr(f, 'avg_n', 0))
@@ -513,6 +606,9 @@ def _ocean_restart_read_raw(M, fname, use_stress_work, comm, restore_average=Tru
     else:
         att = None
     att = comm.bcast(att, root=0)
+    if OM.jax:
+        _check_method(M, att['explicit'], fname)
+        return _ocean_restart_read_raw_jax(M, fname, use_stress_work, comm, att, restore_average)
     if att['layout'] != (M.n_pes, M.n_pes_x, M.n_pes_y):
         raise RuntimeError(
             'raw ocean restart %s was written on %d ranks (%d x %d), this run '
@@ -520,10 +616,14 @@ def _ocean_restart_read_raw(M, fname, use_stress_work, comm, restore_average=Tru
             'the same ocean layout, or write the restart gathered '
             '(EXP_RESTART_RAW=0).'
             % ((fname,) + att['layout'] + (M.n_pes, M.n_pes_x, M.n_pes_y)))
+    _check_method(M, att['explicit'], fname)
     R = np.load(os.path.join(_raw_dir(fname), '%05d.npz' % M.my_pe))
     have = set(R.files)
     for n in _OCEAN_3D + _OCEAN_4D + ('p_s', 'u_S', 'v_S'):
         setattr(M, n, OM.np.asarray(R[n]))
+    if _explicit(M):
+        for n in _EXPL_2D + _EXPL_4D:
+            setattr(M, n, OM.np.asarray(R[n]))
     for n in ('u_S_old', 'v_S_old', 'tke', 'K_diss_v', 'phi_oc',
               'tau_in_x', 'tau_in_y', 'hs'):
         if n in have and (n in ('u_S_old', 'v_S_old') or hasattr(M, n)):
@@ -551,21 +651,127 @@ def _ocean_restart_read_raw(M, fname, use_stress_work, comm, restore_average=Tru
     return att
 
 
+def _ocean_restart_write_raw_jax(M, fname, use_stress_work, n_cpl,
+                                 tau, taum1, taum2, tA, tB, tC):
+    """the raw restart of the jax backend: one npz per SHARD (see the note
+    at RESTART_RAW), written by the process that holds it; process 0 writes
+    the header last"""
+    d = _raw_dir(fname)
+    if M.my_pe == 0:
+        os.makedirs(d, exist_ok=True)
+    from block_io import jax_barrier
+    jax_barrier('raw restart dir')
+    fields = _ocean_fields_raw(M, use_stress_work, conv=lambda a: a)   # the device arrays
+    avg = M.average_state_device() if hasattr(M, 'average_state_device') else None
+    if avg is not None:
+        for nme, a in avg[0]:
+            fields['avg_' + nme] = a
+    # the blocks of every field for every shard this process holds
+    per_shard = {}
+    for nme, a in fields.items():
+        for k, blk in shard_blocks(M, a).items():
+            per_shard.setdefault(k, {})[nme] = blk
+    for k, dat in per_shard.items():
+        tmp = os.path.join(d, '%05d.tmp.npz' % k)
+        np.savez(tmp, **dat)
+        os.replace(tmp, os.path.join(d, '%05d.npz' % k))
+    jax_barrier('raw restart blocks')
+    if M.my_pe == 0:
+        t = fname + '.tmp'
+        f = _nc_create(t, [('one', 1)])
+        f.setncatts(dict(n_cpl=n_cpl, tau=tau, taum1=taum1, taum2=taum2,
+                         tA=tA, tB=tB, tC=tC,
+                         use_stress_work=int(use_stress_work),
+                         vadv=int(getattr(M, 'vadv_sub_cycling', 0)),
+                         explicit=int(_explicit(M)),
+                         raw=1, n_pes=M.n_pes_x*M.n_pes_y,
+                         n_pes_x=M.n_pes_x, n_pes_y=M.n_pes_y, jax_shards=1))
+        if avg is not None:
+            f.setncatts(dict(avg_n=avg[1], avg_t0=avg[2]))
+        f.close()
+        _replace(fname, t, 'ocean (raw, %d shard blocks in %s)' % (M.n_pes_x*M.n_pes_y, d), n_cpl)
+    return
+
+
+def _ocean_restart_read_raw_jax(M, fname, use_stress_work, comm, att, restore_average=True):
+    from block_io import jax_barrier
+    if att['layout'] != (M.n_pes_x*M.n_pes_y, M.n_pes_x, M.n_pes_y) or not att.get('jax_shards', 0):
+        raise RuntimeError(
+            'raw ocean restart %s was written %s, this run has %d jax shards (%d x %d). A raw '
+            'restart belongs to its shard layout: run the same EXP_NPX_OCEAN x EXP_NPY_OCEAN, '
+            'or write the restart gathered (EXP_RESTART_RAW=0).'
+            % (fname, ('on %d jax shards (%d x %d)' if att.get('jax_shards', 0) else
+                       'by %d MPI ranks (%d x %d)') % att['layout'],
+               M.n_pes_x*M.n_pes_y, M.n_pes_x, M.n_pes_y))
+    # the shards this process holds, and their files
+    mine = sorted(shard_blocks(M, M.u).keys())
+    R = {k: np.load(os.path.join(_raw_dir(fname), '%05d.npz' % k)) for k in mine}
+    have = set(R[mine[0]].files)
+    def build(name, like):
+        blocks = {k: R[k][name] for k in mine}
+        return from_shard_blocks(M, blocks, like.shape)
+    for n in _OCEAN_3D + _OCEAN_4D + ('p_s', 'u_S', 'v_S'):
+        setattr(M, n, build(n, getattr(M, n)))
+    if _explicit(M):
+        _explicit_state(M)
+        for n in _EXPL_2D + _EXPL_4D:
+            setattr(M, n, build(n, getattr(M, n)))
+    for n in ('u_S_old', 'v_S_old', 'tke', 'K_diss_v', 'phi_oc', 'tau_in_x', 'tau_in_y', 'hs'):
+        if n in have and (n in ('u_S_old', 'v_S_old') or hasattr(M, n)):
+            setattr(M, n, build(n, getattr(M, n, M.u_S)))
+    if use_stress_work:
+        M.tau_work_x, M.tau_work_y = build('stress_x', M.tau_work_x), build('stress_y', M.tau_work_y)
+    else:
+        M.taux, M.tauy = build('stress_x', M.taux), build('stress_y', M.tauy)
+    if 'K_diss_v' not in have and M.my_pe == 0 and hasattr(M, 'K_diss_v'):
+        print('ocean restart has no K_diss_v: first step uses Pr = 10 in the '
+              'TKE diffusivities (one-step transient)', flush=True)
+    names = [n[4:] for n in have if n.startswith('avg_')]
+    if names and restore_average and hasattr(M, 'average_restore'):
+        # the sums as padded device arrays, built from the blocks like the fields
+        # (the shapes: the padded global of the field they sum)
+        sums = {}
+        for nme in names:
+            blk = R[mine[0]]['avg_' + nme]
+            nd = blk.ndim
+            shape = (M.Nz, M.Ny, M.Nx) if nd == 3 else (M.Ny, M.Nx)
+            sums[nme] = from_shard_blocks(M, {k: R[k]['avg_' + nme] for k in mine}, shape)
+        M.average_restore(sums, att['avg_n'], att['avg_t0'])
+    _vadv_switch(M, att)
+    from pyOM3.density import get_rho
+    M.rho = get_rho(M.salt, M.temp, M.p0, M.eq_of_state)
+    M.w   = M.vertical_velocity(M.u, M.v, M.w, M.maskW)
+    jax_barrier('raw restart read')
+    if M.my_pe == 0:
+        print('read raw ocean restart %s (%d shard blocks): resuming at coupling '
+              'step %d' % (fname, att['layout'][0], att['n_cpl']), flush=True)
+    return att
+
+
 def ocean_restart_write(M, fname, ny, nx, use_stress_work, n_cpl,
                         tau, taum1, taum2, tA, tB, tC):
+    if RESTART_RAW and OM.jax:
+        return _ocean_restart_write_raw_jax(M, fname, use_stress_work, n_cpl,
+                                            tau, taum1, taum2, tA, tB, tC)
     if RESTART_RAW:
         return _ocean_restart_write_raw(M, fname, use_stress_work, n_cpl,
                                         tau, taum1, taum2, tA, tB, tC)
-    h  = M.halo
-    sl = slice(h, -h)
-    g3 = lambda a: gather_unpadded_mpi(M, a[sl, sl, sl], ny, nx)
-    g4 = lambda a: gather_unpadded_mpi(M, a[:, sl, sl, sl], ny, nx)
-    g2 = lambda a: gather_unpadded_mpi(M, a[sl, sl], ny, nx)
+    g3 = lambda a: _gather(M, a, ny, nx)
+    g4 = lambda a: _gather(M, a, ny, nx, lead=True)
+    g2 = g3
     dat = {n: g3(getattr(M, n)) for n in _OCEAN_3D}
     dat.update({n: g4(getattr(M, n)) for n in _OCEAN_4D})
     # p_s carries THREE time levels (3,Ny,Nx), like pyOM2's psi(:,:,tau..):
-    # gather with the time axis as a leading dim, not as y.
-    ps_g = gather_unpadded_mpi(M, M.p_s[:, sl, sl], ny, nx)
+    # gather with the time axis as a leading dim, not as y. The explicit
+    # free surface has ONE level and the barotropic state beside it.
+    expl = _explicit(M)
+    if expl:
+        _explicit_state(M)
+        ps_g = g2(M.p_s)
+        dat['U_bt'], dat['V_bt'] = g2(M.U_bt), g2(M.V_bt)
+        dat['du_cor'], dat['dv_cor'] = g4(M.du_cor), g4(M.dv_cor)
+    else:
+        ps_g = _gather(M, M.p_s, ny, nx, lead=True)
     dat['u_S'], dat['v_S'] = g3(M.u_S), g3(M.v_S)
     # d(u_S)/dt forcing state: the PREVIOUS coupling's Stokes drift. Without
     # it the first post-restart step applies no d(u_S)/dt increment (a
@@ -598,7 +804,7 @@ def ocean_restart_write(M, fname, ny, nx, use_stress_work, n_cpl,
     avg = M.average_state() if hasattr(M, 'average_state') else None
     if avg is not None:
         for nme, a in avg[0]:
-            dat['avg_' + nme] = gather_unpadded_mpi(M, a, ny, nx)
+            dat['avg_' + nme] = np.asarray(a) if OM.jax else gather_unpadded_mpi(M, a, ny, nx)
     if M.my_pe == 0:
         nz_ = dat['u'].shape[0]
         tmp = fname + '.tmp'
@@ -606,7 +812,8 @@ def ocean_restart_write(M, fname, ny, nx, use_stress_work, n_cpl,
         d3, d4, d2 = ('z', 'y', 'x'), ('three', 'z', 'y', 'x'), ('y', 'x')
         dims = {}
         for n in _OCEAN_3D: dims[n] = d3
-        for n in _OCEAN_4D: dims[n] = d4
+        for n in _OCEAN_4D + _EXPL_4D: dims[n] = d4
+        for n in _EXPL_2D: dims[n] = d2
         for n in ('u_S', 'v_S', 'u_S_old', 'v_S_old', 'tke', 'K_diss_v'):
             dims[n] = d3
         for n in ('phi_oc', 'tau_in_x', 'tau_in_y'): dims[n] = d2
@@ -617,11 +824,12 @@ def ocean_restart_write(M, fname, ny, nx, use_stress_work, n_cpl,
                 dims[nme] = d3 if dat[nme].ndim == 3 else d2
         for nme, arr in dat.items():
             f.createVariable(nme, 'f8', dims[nme])[:] = arr
-        f.createVariable('p_s', 'f8', ('three', 'y', 'x'))[:] = ps_g
+        f.createVariable('p_s', 'f8', d2 if expl else ('three', 'y', 'x'))[:] = ps_g
         f.setncatts(dict(n_cpl=n_cpl, tau=tau, taum1=taum1, taum2=taum2,
                          tA=tA, tB=tB, tC=tC,
                          use_stress_work=int(use_stress_work),
-                         vadv=int(getattr(M, 'vadv_sub_cycling', 0))))
+                         vadv=int(getattr(M, 'vadv_sub_cycling', 0)),
+                         explicit=int(expl)))
         if avg is not None:
             f.setncatts(dict(avg_n=avg[1], avg_t0=avg[2]))
         f.close()
@@ -637,13 +845,21 @@ def ocean_restart_read(M, fname, ny, nx, use_stress_work, comm,
     names = list(_OCEAN_3D) + list(_OCEAN_4D) + \
             ['p_s', 'u_S', 'v_S', 'stress_x', 'stress_y', 'phi_oc',
              'tau_in_x', 'tau_in_y']
+    if _explicit(M):
+        names += list(_EXPL_2D) + list(_EXPL_4D)
     optional = ['tke', 'K_diss_v', 'u_S_old', 'v_S_old', 'hs']
-    if M.my_pe == 0:
+    # several jax processes: EVERY process reads the file (pad_block builds
+    # each process's shards from the global fields), rank 0 alone under MPI
+    if M.my_pe == 0 or jax_multi():
         from netCDF4 import Dataset
         f = Dataset(fname)
         att = {k: f.getncattr(k) for k in
                ('n_cpl', 'tau', 'taum1', 'taum2', 'tA', 'tB', 'tC')}
-        dat = {v: np.array(f[v][:]) for v in names}
+        att['explicit'] = int(getattr(f, 'explicit', 0))
+        if bool(att['explicit']) != _explicit(M):      # refused after the bcast
+            dat = {v: None for v in names + optional}
+        else:
+            dat = {v: np.array(f[v][:]) for v in names}
         for v in optional:
             if v in f.variables:
                 dat[v] = np.array(f[v][:])
@@ -667,34 +883,25 @@ def ocean_restart_read(M, fname, ny, nx, use_stress_work, comm,
         att = None
         dat = {v: None for v in names + optional}
     att = comm.bcast(att, root=0)
+    _check_method(M, att['explicit'], fname)
     for v in att['_avg']:
         dat.setdefault(v, None)
     h   = M.halo
-    sl  = slice(h, -h)
     nz_ = M.u.shape[0] - 2*h
-
-    def r3(name, tgt):
-        blk = scatter_array_mpi(M, dat[name], (nz_,))
-        return M.apply_bc(OM.modify_array(tgt, (sl, sl, sl), blk))
-
-    def r4(name, tgt):
-        blk = scatter_array_mpi(M, dat[name], (3, nz_))
-        return OM.modify_array(tgt, (slice(None), sl, sl, sl), blk)
-
-    def r2(name, tgt):
-        blk = scatter_array_mpi(M, dat[name], ())
-        return M.apply_bc(OM.modify_array(tgt, (sl, sl), blk))
-
+    r3 = lambda name, tgt: _scatter(M, dat[name], tgt)
+    r4 = lambda name, tgt: _scatter(M, dat[name], tgt, lead=True)
+    r2 = r3
     for n in _OCEAN_3D:  setattr(M, n, r3(n, getattr(M, n)))
     for n in _OCEAN_4D:  setattr(M, n, r4(n, getattr(M, n)))
     # p_s: three time levels (3,Ny,Nx). Must NOT go through apply_bc as one
     # 3-axis array: apply_bc_mpi sizes its recv buffer as (Nz,Nx) for ANY
-    # 3-axis field. Exchange each time level separately as a 2-D field.
-    blk = scatter_array_mpi(M, dat['p_s'], (3,))
-    for k in range(3):
-        M.p_s = OM.modify_array(M.p_s, (k, sl, sl), blk[k])
-        M.p_s = OM.modify_array(M.p_s, (k, slice(None), slice(None)),
-                                M.apply_bc(M.p_s[k]))
+    # 3-axis field. _scatter exchanges each time level separately as a 2-D field.
+    if _explicit(M):
+        M.p_s = r2('p_s', M.p_s)
+        M.U_bt = r2('U_bt', OM.np.zeros_like(M.p_s)); M.V_bt = r2('V_bt', OM.np.zeros_like(M.p_s))
+        M.du_cor, M.dv_cor = r4('du_cor', M.du_cor), r4('dv_cor', M.dv_cor)
+    else:
+        M.p_s = _scatter(M, dat['p_s'], M.p_s, lead=True)
     M.u_S, M.v_S = r3('u_S', M.u_S), r3('v_S', M.v_S)
     if att.get('_has_uSo', False):
         M.u_S_old = r3('u_S_old', OM.np.zeros_like(M.u_S))
@@ -722,7 +929,7 @@ def ocean_restart_read(M, fname, ny, nx, use_stress_work, comm,
     if att['_avg']:
         # every PE takes part in the scatter, also when this run averages
         # nothing (average_restore then ignores the sums)
-        sums = {v[4:]: scatter_array_mpi(M, dat[v], (nz_,) if nd == 3 else ())
+        sums = {v[4:]: (np.asarray(dat[v]) if OM.jax else scatter_array_mpi(M, dat[v], (nz_,) if nd == 3 else ()))
                 for v, nd in sorted(att['_avg'].items())}
         if restore_average and hasattr(M, 'average_restore'):
             M.average_restore(sums, att['avg_n'], att['avg_t0'])

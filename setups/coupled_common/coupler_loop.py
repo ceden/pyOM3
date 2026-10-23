@@ -52,7 +52,8 @@ import os
 import time
 import numpy as np
 import pyOM3 as OM
-from coupler_mpi import gather_unpadded_mpi, scatter_array_mpi, block_exchange
+from coupler_mpi import gather_unpadded_mpi, scatter_array_mpi, block_exchange, ops as _MPI
+from block_io import local_shard
 
 # Smallest number of live (wet, non-empty) cells in a PE's block for which the
 # A2d wave alarm's median is a meaningful reference. See the alarm block in
@@ -61,7 +62,7 @@ A2D_MIN_LIVE = 50
 from coupler_io  import (atmos_restart_write, atmos_restart_read, AtmosCouplingWriter,
                          wave_restart_write, wave_restart_read,
                          ocean_restart_write, ocean_restart_read)
-from coupler_prof import Profiler, WAVE_METHODS, OCEAN_METHODS
+from coupler_prof import Profiler, WAVE_METHODS, OCEAN_METHODS, jax_sync
 
 # =============================================================================
 # THE ATMOSPHERE (energy_cycle.tex Sec. 6): a third component, the ocean is
@@ -88,8 +89,11 @@ def _ocean_hub_start(M, cfg, comm):
     ocean, which the waves must take from the ocean too)."""
     h = M.halo; hb = slice(h, -h); ks = -h-1
     if cfg.get('wind_hub'):
-        M._w_wet = np.asarray(M.area_t*M.maskT[ks])[0][hb, hb] if np.asarray(M.area_t).ndim == 3 \
-                   else np.asarray(M.area_t*M.maskT[ks])[hb, hb]
+        # the interior of the weights: the local block under MPI, the whole
+        # grid on jax (block_io.interior; once, at the start)
+        from block_io import interior
+        aw = M.area_t*M.maskT[ks]
+        M._w_wet = interior(M, aw[0] if np.ndim(aw) == 3 else aw)
     if not cfg.get('atmos'):
         return None
     bxa = block_exchange(M, comm, cfg['intercomm_ao'], cfg['cmap_a'], 'ocean', key='atmos')
@@ -162,6 +166,18 @@ def wave_dtA_work(M, A_old, dt_cpl):
     fld = np.sum(np.sum((Uk*(M.A - A_old))[sl, sl, sl, sl]*M.dd, axis=0)
                  *M.dft[sl, None, None], axis=0)/dt_cpl
     return float(np.sum(fld*M.area_t[sl, sl]))
+
+
+def ocean_time_step(M, ab, tau, taum1, taum2):
+    """One ocean step on the free-surface method of the configuration:
+    pe_realistic's split-explicit sub cycle (explicit_free_surface, Demange et
+    al. 2019, M = sub_cycling) or the implicit solve with the CG. The
+    coupling hooks of the implicit path (set_forcing_direct, the d(u_S)/dt
+    forcing) are not on the explicit one, so run.py admits it for the ocean
+    alone only."""
+    if getattr(M, 'explicit_free_surface', False):
+        return M.time_step_explicit_pressure(ab[0], ab[1], ab[2], tau, taum1, taum2)
+    return M.time_step_implicit_pressure(ab[0], ab[1], ab[2], tau, taum1, taum2)
 
 
 def ocean_ke(M, u=None, v=None):
@@ -270,16 +286,28 @@ def _canary_fields(M):
     for non-finite only: it is where the global solve deposits the damage, so
     a NaN p_s beside clean tracers says the CG is the amplifier and the origin
     is in the momentum or the density of that same step."""
-    h  = M.halo
-    hb = slice(h, -h)
-    out = [('u', np.asarray(M.u)[hb, hb, hb], -CANARY_BOUNDS['u'], CANARY_BOUNDS['u']),
-           ('v', np.asarray(M.v)[hb, hb, hb], -CANARY_BOUNDS['u'], CANARY_BOUNDS['u'])]
+    # this process's interior: the local block under MPI, the whole grid on
+    # one jax process, its device's shard on several (block_io.local_shard)
+    L = lambda a: local_shard(M, a)[0]
+    out = [('u', L(M.u), -CANARY_BOUNDS['u'], CANARY_BOUNDS['u']),
+           ('v', L(M.v), -CANARY_BOUNDS['u'], CANARY_BOUNDS['u'])]
     for nm in ('temp', 'salt'):
         lo, hi = CANARY_BOUNDS[nm]
-        out.append((nm, np.asarray(getattr(M, nm))[hb, hb, hb], lo, hi))
-    ps = np.asarray(M.p_s)
-    out.append(('p_s', ps[..., hb, hb], -np.inf, np.inf))
+        out.append((nm, L(getattr(M, nm)), lo, hi))
+    ps = M.p_s if np.ndim(M.p_s) == 2 else M.p_s[0]
+    out.append(('p_s', L(ps), -np.inf, np.inf))
     return out
+
+
+def _canary_coords(M, j0, i0):
+    """(xt, yt) of this process's interior, 1-D: the padded local axes under
+    MPI, the global axes cut at the shard's block on jax"""
+    h = M.halo; hb = slice(h, -h)
+    if OM.jax:
+        xg, yg = np.asarray(M.xt_gl), np.asarray(M.yt_gl)    # the global interior axes
+        ny_, nx_ = local_shard(M, M.maskT)[0].shape[-2:]
+        return xg[i0:i0+nx_], yg[j0:j0+ny_]
+    return np.asarray(M.xt)[hb], np.asarray(M.yt)[hb]
 
 
 def _canary_dump(M, n, why):
@@ -303,10 +331,9 @@ def _canary_dump(M, n, why):
             a = getattr(M, nm, None)
             if a is None:
                 continue
-            a = np.asarray(a)
-            if nm == 'p_s' and a.ndim == 3:            # (3, Ny, Nx), one level
+            if nm == 'p_s' and np.ndim(a) == 3:        # (3, Ny, Nx), one level
                 a = a[0]
-            np.save(os.path.join(d, '%s.npy' % nm), M.unpad(a))
+            np.save(os.path.join(d, '%s.npy' % nm), local_shard(M, a)[0])
         if M.my_pe == 0:
             print('canary: state of step %d written to %s_alarm/'
                   % (n, base), flush=True)
@@ -329,17 +356,17 @@ def _ocean_canary(M, comm, n, quiet=False):
     The check is on temp and salt as well as u, because a tracer is what goes
     first: the TEOS-10 polynomial overflows on an out-of-range T or S and the
     velocity still looks calm one step before the NaN."""
-    from mpi4py import MPI as _MPI
     h  = M.halo
     hb = slice(h, -h)
     flds = _canary_fields(M)
-    umax = float(np.abs(np.asarray(M.u)[hb, hb, hb]).max())
+    uL, j0, i0 = local_shard(M, M.u)
+    umax = float(np.abs(uL).max())
     # vertical CFL, and the flat index of the cell it sits in (EXP_CANARY_CFL)
     cmax, cwhere = 0.0, -1
     if CANARY_CFL:
-        wc = (np.abs(np.asarray(M.w)[hb, hb, hb])*M.dt
+        wc = (np.abs(local_shard(M, M.w)[0])*M.dt
               / np.asarray(M.dzt)[hb][:, None, None]
-              * np.asarray(M.maskT)[hb, hb, hb])
+              * local_shard(M, M.maskT)[0])
         cwhere = int(wc.argmax())
         cmax = float(wc.flat[cwhere])
     # local alarm: how many cells are out of bounds, in each field
@@ -362,13 +389,13 @@ def _ocean_canary(M, comm, n, quiet=False):
         else:
             rank_of = 0
         if comm.Get_rank() == rank_of and cwhere >= 0:
-            shp = np.asarray(M.maskT)[hb, hb, hb].shape
+            shp = flds[0][1].shape
             k, j, i = np.unravel_index(cwhere, shp)
             dzt_ = np.asarray(M.dzt)[hb]
             dep = float((np.cumsum(dzt_[::-1])[::-1] - 0.5*dzt_)[k])
+            xt_, yt_ = _canary_coords(M, j0, i0)
             cfl_txt = (' | max w dt/dz = %.3f at lon %.3f lat %.3f, %.1f m'
-                       % (cmax, float(np.asarray(M.xt)[hb][i]),
-                          float(np.asarray(M.yt)[hb][j]), dep))
+                       % (cmax, float(xt_[i]), float(yt_[j]), dep))
         if comm.Get_size() > 1:
             cfl_txt = comm.bcast(cfl_txt, root=rank_of)
         if CANARY_CFL_ALARM and cmax > CANARY_CFL_ALARM:
@@ -403,12 +430,11 @@ def _ocean_canary(M, comm, n, quiet=False):
                   'step. Rerun with EXP_CANARY_EVERY=1 to catch it locally.'
                   % (CANARY_EVERY, CANARY_EVERY - 1,
                      (CANARY_EVERY - 1)*M.dt/3600.0), flush=True)
-    # where this rank's block starts, and its coordinates
-    j0, i0 = M.ys_pe - 1, M.xs_pe - 1
-    xt = np.asarray(M.xt)[hb]; yt = np.asarray(M.yt)[hb]
+    # this process's coordinates (its block under MPI, its shard on jax)
+    xt, yt = _canary_coords(M, j0, i0)
     dzt = np.asarray(M.dzt)[hb]
     depth = np.cumsum(dzt[::-1])[::-1] - 0.5*dzt          # below the surface
-    mT = np.asarray(M.maskT)[hb, hb, hb]
+    mT = local_shard(M, M.maskT)[0]
     nwet = mT.sum(axis=0)
     for nm, m in bad.items():
         a = dict((f[0], f[1]) for f in flds)[nm]
@@ -827,6 +853,9 @@ def run_ocean(M, cfg, comm, intercomm, active):
     prof = Profiler(enabled=cfg.get('profile', 0) > 0)
     if cfg.get('profile', 0) > 1:
         prof.wrap(M, OCEAN_METHODS, prefix='pe.')
+        if OM.jax:
+            prof.sync = jax_sync()     # exact rows under asynchronous dispatch
+    M._prof = prof                     # exp_ocean's own sub-sections (set_forcing)
     prof_every = max(1, int(cfg.get('profile_every', 20)))
     # KE change by vertical/horizontal friction is booked by the ocean class
     # itself (global4_setup.py: vertical_friction / harmonic_momentum overrides)
@@ -865,7 +894,7 @@ def run_ocean(M, cfg, comm, intercomm, active):
         ke_prev = ocean_ke(M)
         with prof.section('ocean time step'):
             M._ab = _ab_weights((tA, tB, tC), n, cfg)   # exp_ocean's identity reads it
-            M.time_step_implicit_pressure(*M._ab, tau, taum1, taum2)
+            ocean_time_step(M, M._ab, tau, taum1, taum2)
         if (n + 1) % CANARY_EVERY == 0:
             # the check runs on its own cadence, the line stays every 100
             _ocean_canary(M, comm, n, quiet=(n + 1) % 100 != 0)
@@ -899,7 +928,8 @@ def run_ocean(M, cfg, comm, intercomm, active):
                     F = M._forcing.get(0.0)
                     txw, tyw = F['taux'], F['tauy']
                 else:                                       # the relative-wind stress of the last step
-                    txw, tyw = getattr(M, '_tau_rel_T', (np.zeros(M._w_wet.shape),)*2)
+                    txw, tyw = ((M._int(a) for a in M._tau_rel_dev) if hasattr(M, '_tau_rel_dev')
+                                else (np.zeros(M._w_wet.shape),)*2)
                 if cmap is None:
                     bx.send_blocks(txw, 9); bx.send_blocks(tyw, 10)
                 else:
@@ -1061,6 +1091,9 @@ def run_ocean_only(M, cfg, comm, active):
     prof = Profiler(enabled=cfg.get('profile', 0) > 0)
     if cfg.get('profile', 0) > 1:
         prof.wrap(M, OCEAN_METHODS, prefix='pe.')
+        if OM.jax:
+            prof.sync = jax_sync()     # exact rows under asynchronous dispatch
+    M._prof = prof                     # exp_ocean's own sub-sections (set_forcing)
     prof_every = max(1, int(cfg.get('profile_every', 20)))
 
     h  = M.halo
@@ -1076,7 +1109,7 @@ def run_ocean_only(M, cfg, comm, active):
         M._gitt = n                    # model clock of the forcing calendar
         with prof.section('ocean time step'):
             M._ab = _ab_weights((tA, tB, tC), n, cfg)   # exp_ocean's identity reads it
-            M.time_step_implicit_pressure(*M._ab, tau, taum1, taum2)
+            ocean_time_step(M, M._ab, tau, taum1, taum2)
         if (n + 1) % CANARY_EVERY == 0:
             # the check runs on its own cadence, the line stays every 100
             _ocean_canary(M, comm, n, quiet=(n + 1) % 100 != 0)

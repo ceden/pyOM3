@@ -9,7 +9,7 @@ FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden',
             'nhr': ['realistic', 'twin_nh_simple', 'restart', 'halo', 'weno'],                     # nh_realistic (4 needs mpirun; jax_sharding.py in run_slow.py)
             'wim': ['reduction', 'identities', 'restart', 'operators', 'golden',
                     'symmetry', 'sources', 'budget', 'halo'],                           # wim_simple, wim_realistic (wim_idemix: not built)
-            'coupled': ['golden', 'forcing', 'identities', 'restart', 'halo', 'wave']}   # setups/coupled_common + forcing_common (4 needs mpirun; jax_backend.py in run_slow.py)
+            'coupled': ['golden', 'forcing', 'identities', 'restart', 'halo', 'wave', 'endtoend']}   # setups/coupled_common + forcing_common (4 needs mpirun; jax_backend.py in run_slow.py)
 want = sys.argv[1:] or list(FAMILIES)
 t0 = time.time(); ok = True
 for fam in want:
@@ -18,8 +18,16 @@ for fam in want:
         print('%s: fast part not built (see README_test_suite.md)' % fam); continue
     sys.path.insert(0, os.path.join(HERE, fam))
     for name in mods:
-        mod = importlib.import_module(name)
-        t = time.time(); r = mod.run(); ok &= r
+        t = time.time()
+        try:
+            mod = importlib.import_module(name)
+            r = mod.run()
+        except ModuleNotFoundError as e:
+            # a family whose package needs something this environment lacks
+            # (nh_simple: mpi4py and the p3dfft build on a JAX/GPU node): say
+            # so and go on with the other families instead of aborting the suite
+            print('%s/%s: skipped (%s)' % (fam, name, e)); continue
+        ok &= r
         print('   [%s/%s %.0f s]' % (fam, name, time.time() - t))
     sys.path.remove(os.path.join(HERE, fam))           # exactly the family dir (a config may insert more entries in front)
     for name in mods:

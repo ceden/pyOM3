@@ -96,6 +96,13 @@ class damping(main):
           if not (getattr(self, 'enable_bottom_friction', False) or
                   getattr(self, 'enable_quadratic_bottom_friction', False)):
               return u, v
+          return self._bottom_friction_core(u, v, maskU, maskV)
+
+      # jitted: unjitted this was a dozen eager full-3-D kernels (the
+      # bottom-cell masks, the column sums, the factors, the products), 24 ms
+      # of a 220 ms step on icon033 on four GPUs; fused it is two kernels
+      @partial(OM.jaxjit, static_argnums=0)
+      def _bottom_friction_core(self, u, v, maskU, maskV):
           r_u, r_v = self.bottom_friction_rate(u, v, maskU, maskV)
           bu, bv = self._bottom_cell_mask(maskU), self._bottom_cell_mask(maskV)
           fu = 1.0 - bu*(1.0 - 1.0/(1.0 + self.dt*r_u[None]))

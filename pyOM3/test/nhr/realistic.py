@@ -61,8 +61,9 @@ def operator_symmetry():
 
 def projection_of_gradient():
     ok = True
-    m = step(small_model(), 3, AB2)
-    m.epsilon_nh = 1e-22                      # converge the two solves fully
+    m = small_model()
+    m.epsilon_nh = 1e-22                      # converge the two solves fully (set BEFORE the
+    step(m, 3, AB2)                           # first solve: jitted methods read it at trace time)
     rng = np.random.default_rng(2)
     q = m.apply_bc(OM.np.asarray(1e-3*rng.standard_normal((m.Nz, m.Ny, m.Nx))))*m.maskT
     gu = (m.rollx(q, -1) - q)/(m.cost_y*m.dxu_x)*m.maskU

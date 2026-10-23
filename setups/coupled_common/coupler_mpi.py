@@ -17,8 +17,109 @@ is right), so this is not a bug fix -- it just makes the extents explicit
 instead of accidentally correct. The wave model's own even-split
 decomposition is unaffected either way.
 """
+import os
 import numpy as np
-from mpi4py import MPI
+try:
+    from mpi4py import MPI
+except ImportError:                      # a JAX/GPU environment without MPI: the
+    MPI = None                           # pure helpers (coarse_edges, CoarseMap) stay usable
+
+
+class _Ops:
+    """the reduction ops of the run control, with or without mpi4py:
+    ops.SUM etc. are mpi4py's when it is there (the MPI runs), strings
+    otherwise, and SoloComm.allreduce understands both"""
+    def __init__(self):
+        for n in ('SUM', 'MAX', 'MIN', 'MAXLOC', 'MINLOC'):
+            setattr(self, n, getattr(MPI, n) if MPI is not None else n.lower())
+
+ops = _Ops()
+
+
+def _opname(op):
+    if op is None:
+        return 'sum'
+    if isinstance(op, str):
+        return op
+    for n in ('SUM', 'MAX', 'MIN', 'MAXLOC', 'MINLOC'):
+        if MPI is not None and op == getattr(MPI, n):
+            return n.lower()
+    raise ValueError('unknown reduction %r' % (op,))
+
+
+class SoloComm:
+    """The communicator of a run WITHOUT MPI: the JAX backend (the devices
+    are shards, not ranks), or a numpy run without mpi4py. ONE process: every
+    collective is the identity, so run.py, the loops, the profiler and the
+    restarts need no second code path; the MODEL gets comm_in=None (its own
+    jax or serial decomposition), not this object.
+
+    SEVERAL PROCESSES on jax (one per GPU under srun, jax.distributed): the
+    ranks are the processes, and the collectives of the run control -- small
+    things: flags, step counts, the restart header, the canary's sums -- go
+    through the devices (jax.experimental.multihost_utils): a bcast pickles
+    the object on the root and broadcasts the bytes, an allreduce gathers one
+    value per process and reduces on the host, the barrier is
+    sync_global_devices. The model fields never pass through here (block_io).
+    Get_size() is the process count, whatever the number of devices."""
+    is_solo = True
+
+    def __init__(self):
+        import pyOM3 as OM
+        self.n = OM.jax.process_count() if OM.jax else 1
+        self.r = OM.jax.process_index() if OM.jax else 0
+
+    def Get_rank(self):   return self.r
+    def Get_size(self):   return self.n
+
+    # --- the multi-process primitives ------------------------------------
+    def _mh(self):
+        from jax.experimental import multihost_utils
+        return multihost_utils
+
+    def _bcast_bytes(self, b, root):
+        mh = self._mh()
+        n = mh.broadcast_one_to_all(np.array([len(b) if self.r == root else 0], np.int64),
+                                    is_source=(self.r == root))
+        buf = np.frombuffer(b, np.uint8) if self.r == root else np.zeros(int(n[0]), np.uint8)
+        out = mh.broadcast_one_to_all(buf, is_source=(self.r == root))
+        return bytes(np.asarray(out))
+
+    def bcast(self, x, root=0):
+        if self.n == 1:
+            return x
+        import pickle
+        return pickle.loads(self._bcast_bytes(pickle.dumps(x) if self.r == root else b'', root))
+
+    def allgather(self, x):
+        if self.n == 1:
+            return [x]
+        return [self.bcast(x, root=r) for r in range(self.n)]
+
+    def gather(self, x, root=0):
+        return self.allgather(x)
+
+    def allreduce(self, x, op=None):
+        if self.n == 1:
+            return x
+        name = _opname(op)
+        vals = self.allgather(x)
+        if name in ('maxloc', 'minloc'):          # (value, location) pairs
+            pick = max if name == 'maxloc' else min
+            return pick(vals, key=lambda v: v[0])
+        f = {'sum': lambda a, b: a + b, 'max': np.maximum, 'min': np.minimum}[name]
+        out = vals[0]
+        for v in vals[1:]:
+            out = f(out, v)
+        return out
+
+    def Barrier(self):
+        if self.n > 1:
+            self._mh().sync_global_devices('SoloComm')
+    def barrier(self):    self.Barrier()
+    def Split(self, color, key=0): return self
+    def Abort(self, code=1):
+        os._exit(code)
 
 
 def split_world(n_pes_wave, n_pes_ocean):
@@ -30,7 +131,19 @@ def split_world(n_pes_wave, n_pes_ocean):
     per-coupling-step barriers (idle ranks must never participate in those,
     they only join the top-level setup/shutdown collectives on world).
     n_pes_wave = 0 is the ocean alone: no wave group, intercomm is None.
-    Returns (world, my_pe, color, comm, intercomm, active)."""
+    Returns (world, my_pe, color, comm, intercomm, active).
+
+    JAX backend (or no mpi4py): one process, the ocean alone, comm = world =
+    active = SoloComm, color 1. The wave model cannot share that process
+    (the two models are concurrent MPI groups), so n_pes_wave must be 0."""
+    import pyOM3 as OM
+    if OM.jax or MPI is None:
+        if n_pes_wave:
+            raise SystemExit('the JAX backend runs the ocean alone (one process, the devices '
+                             'are its shards): set EXP_WAVES=0' if OM.jax else
+                             'no mpi4py: the ocean alone, EXP_WAVES=0')
+        solo = SoloComm()
+        return solo, solo.Get_rank(), 1, solo, None, solo
     world = MPI.COMM_WORLD
     my_pe = world.Get_rank()
     n_active = n_pes_wave + n_pes_ocean
@@ -108,7 +221,7 @@ def pe_block(M):
 #
 # The data moved, and the result, are unchanged.
 # ---------------------------------------------------------------------------
-_MPI_OF = {8: MPI.DOUBLE, 4: MPI.FLOAT}
+_MPI_OF = {8: MPI.DOUBLE, 4: MPI.FLOAT} if MPI is not None else {}
 
 
 def _mpi_type(dtype):

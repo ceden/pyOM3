@@ -38,12 +38,118 @@ def add_to_array(arr, where, value, out_sharding = None):
     arr[where] += value
     return arr
 
+# ---------------------------------------------------------------------------
+# LARGE RUN CONSTANTS OF JITTED METHODS. The jitted methods of the models
+# take self as a STATIC argument and read the masks and the metric from it
+# (self.maskT, self.maskW, ...). A jax.Array read that way while tracing is
+# not an input of the compiled function: it is EMBEDDED in the executable as
+# a constant, and a sharded one is embedded WHOLE and replicated on every
+# device (the HLO holds f64[Nz,Ny,Nx] constant({...}) and dynamic-slices it
+# by partition id). On the test grids that is kilobytes; on icon033 one 3-D
+# field is 780 MB, _tke_solve alone embedded 3.1 GB and the step has ~50
+# such executables -- the GPUs ran out of memory on constants. So jaxjit
+# below, for a method with self static, passes every jax.Array attribute of
+# self of at least JIT_CONST_BYTES as an extra (non-static) argument and
+# binds it to self while the body is traced: the same attribute reads become
+# inputs of the compiled function, sharded as the arrays are. Arrays below
+# the threshold (1-D grid vectors, small grids) stay embedded as before, so
+# small runs are untouched and the timings there do not change. Results are
+# identical either way. wim_simple does the same by hand for its named
+# constants (shard_consts / bind_consts).
+# ---------------------------------------------------------------------------
+JIT_CONST_BYTES = 1 << 20          # 1 MB; PYOM3_JIT_CONST_BYTES overrides
+
+def _large_arrays(obj):
+    """{name: jax.Array} of obj's attributes of at least JIT_CONST_BYTES"""
+    try:    d = vars(obj)
+    except TypeError: return None
+    # several processes: a jitted function may not close over ANY array that
+    # spans other processes' devices, so every jax.Array attribute is passed
+    thr = 0 if jax.process_count() > 1 else JIT_CONST_BYTES
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, jax.Array):
+            try:    n = v.size*v.dtype.itemsize
+            except Exception: continue
+            if n >= thr: out[k] = v
+    return out or None
+
 def jaxjit(fun: callable, *args, **kwargs) -> callable: 
     """ 
-    use this instead of original jaxjit decorator function
+    use this instead of original jaxjit decorator function. For a method
+    with self static (0 in static_argnums) the large arrays of self are
+    passed as arguments, see above.
     """
-    if jax:   return jax.jit(fun, *args, **kwargs) 
-    return fun
+    if not jax: return fun
+    static = kwargs.get('static_argnums', ())
+    if isinstance(static, int): static = (static,)
+    if 0 not in static: return jax.jit(fun, *args, **kwargs)
+    import functools
+    # wraps: jax reads the ORIGINAL signature through __wrapped__, so the
+    # positional static_argnums still match keyword calls (pad(a, lead=1))
+    @functools.wraps(fun)
+    def body(self, *a, _consts=None, **k):
+        if not _consts: return fun(self, *a, **k)
+        saved = {n: getattr(self, n) for n in _consts}
+        for n, v in _consts.items(): setattr(self, n, v)
+        try:     return fun(self, *a, **k)
+        finally:
+            for n, v in saved.items(): setattr(self, n, v)
+    inner = jax.jit(body, *args, **kwargs)
+    static_names = kwargs.get('static_argnames', ())
+    if isinstance(static_names, str): static_names = (static_names,)
+    # WHAT EACH CALL PASSES. Passing every large array of self to every call
+    # costs ~0.2 ms per call (the collection, the flattening and checking of
+    # ~60 extra arguments), ~10 ms per step over the ~60 jitted calls of an
+    # ocean step. So the body is traced ONCE (jit's .trace, no compile) with
+    # all of them, the jaxpr says which of those inputs the function reads,
+    # and from then on only those are passed -- per instance and per set of
+    # static argument values (a branch on a static flag may read others).
+    # The name list itself is re-collected only when self gains attributes.
+    names_cache = {}          # id(self) -> (number of attributes, names)
+    usage = {}                # (id(self), static values) -> names used
+    def outer(self, *a, **k):
+        try:    d = vars(self)
+        except TypeError: return inner(self, *a, **k)
+        ent = names_cache.get(id(self))
+        if ent is None or ent[0] != len(d):
+            thr = 0 if jax.process_count() > 1 else JIT_CONST_BYTES
+            names = tuple(n for n, v in d.items() if isinstance(v, jax.Array)
+                          and v.size*v.dtype.itemsize >= thr)
+            names_cache[id(self)] = (len(d), names)
+        else:
+            names = ent[1]
+        skey = (id(self),) + tuple(a[i-1] for i in static if 0 < i <= len(a)) \
+                           + tuple(sorted((n, k[n]) for n in static_names if n in k))
+        try:    used = usage[skey]
+        except (KeyError, TypeError):
+            used = _used_consts(inner, self, a, k, names)
+            try:    usage[skey] = used
+            except TypeError: pass          # an unhashable static: no caching
+        consts = {n: d[n] for n in used if n in d} or None
+        return inner(self, *a, _consts=consts, **k)
+    outer.jitted = inner
+    return outer
+
+
+def _used_consts(inner, self, a, k, names):
+    """the names among `names` whose arrays the jitted body reads: one trace
+    with all of them, then the inputs of the jaxpr that occur in an equation
+    (an input handed to a nested jit counts as read)"""
+    if not names: return ()
+    consts = {n: getattr(self, n) for n in names}
+    try:
+        tr = inner.trace(self, *a, _consts=consts, **k)
+        tree = tr.in_tree.unflatten(list(range(tr.in_tree.num_leaves)))
+        cidx = tree[1]['_consts']                      # name -> leaf index
+        jp = tr.jaxpr.jaxpr
+        read = set()
+        for e in jp.eqns:
+            read.update(v for v in e.invars if isinstance(v, jax.core.Var))
+        read.update(v for v in jp.outvars if isinstance(v, jax.core.Var))
+        return tuple(n for n, i in cidx.items() if jp.invars[i] in read)
+    except Exception:
+        return names                                   # pass everything, as before
 
 
 def while_loop(cond_fun, body_fun, init_state):
@@ -126,7 +232,18 @@ def _import_jax(which):
            import jax             
            try:
               #raise ValueError 
-              jax.distributed.initialize() 
+              # several processes: jax finds the cluster itself under SLURM
+              # or Open MPI. PYOM3_JAX_COORDINATOR=host:port names the
+              # coordinator explicitly (process count and index from the
+              # launcher's variables) where that detection fails or hangs --
+              # an mpirun on a workstation, say, or a proxied environment.
+              _coord = _os.environ.get('PYOM3_JAX_COORDINATOR', '')
+              if _coord:
+                  _n = int(_os.environ.get('SLURM_NTASKS') or _os.environ.get('OMPI_COMM_WORLD_SIZE') or _os.environ.get('PMI_SIZE') or 1)
+                  _r = int(_os.environ.get('SLURM_PROCID') or _os.environ.get('OMPI_COMM_WORLD_RANK') or _os.environ.get('PMI_RANK') or 0)
+                  jax.distributed.initialize(coordinator_address=_coord, num_processes=_n, process_id=_r)
+              else:
+                  jax.distributed.initialize() 
               if jax.process_index() == 0: print('found Jax and initialised multihost Jax environment')    
            except ValueError:              print('found Jax but could not initialise multihost Jax environment') 
                
@@ -173,6 +290,7 @@ import os as _os
 # PYOM3_BACKEND=numpy : numpy although jax is installed; =jax : jax although mpi4py is
 # installed (single process). Unset: mpi4py present -> numpy, else jax if importable.
 _backend = _os.environ.get('PYOM3_BACKEND', '').lower()
+JIT_CONST_BYTES = int(_os.environ.get('PYOM3_JIT_CONST_BYTES', JIT_CONST_BYTES))
 if (mpi and _backend != 'jax') or _backend == 'numpy':
    jax, np, shard_map, out_sharding_present_in_set = _import_jax('numpy') 
 else:     

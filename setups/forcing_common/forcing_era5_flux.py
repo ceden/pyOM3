@@ -32,7 +32,8 @@ The offsets are properties of the forcing data over the model's wet cells
 (measure_era5_offsets.py), which is why they live here and not in the model.
 """
 import numpy as np
-from forcing_base import Forcing, MonthlyClim, clean_forcing
+import pyOM3 as OM
+from forcing_base import get_periodic_interval, Forcing, MonthlyClim, clean_forcing
 
 _HEAT = ('sshf', 'slhf', 'ssr', 'str')
 # interface field -> ERA5 variables it needs
@@ -122,8 +123,11 @@ class Era5FluxForcing(Forcing):
                                                nwet, name))
         return b
 
-    def get(self, t):
-        F = self._rd.get(t)
+    def _assemble(self, F, clim):
+        """The interface fields from the raw ERA5 fields F and the two
+        climatology values clim = {'dqdt': ..., 'sss_star': ...} (those
+        present). Plain arithmetic: numpy on numpy, and on jax it is jitted
+        as ONE kernel (_assemble_dev), the dicts being pytrees."""
         out = {}
         for f in self.want:
             if f in ('taux', 'tauy', 'u10', 'v10'):
@@ -135,16 +139,40 @@ class Era5FluxForcing(Forcing):
             elif f == 'sst_star':
                 out[f] = F['sst']
             elif f == 'emp':
-                G = F if self._fw is None else self._fw.get(t)
                 # ERA5 e is NEGATIVE where water evaporates, tp is positive
-                out[f] = G['e'] + G['tp'] - self.eoff
+                out[f] = F['e'] + F['tp'] - self.eoff
+        out.update(clim)
+        return out
+
+    def get(self, t):
+        F = self._rd.get(t)
+        if self._fw is not None and 'emp' in self.want:
+            G = self._fw.get(t)
+            F = dict(F); F['e'], F['tp'] = G['e'], G['tp']
+        clim = {}
         if self._dqdt is not None or self._sss is not None:
             ty = self.climatology_time(t)
-            if self._dqdt is not None:
-                out['dqdt'] = self._dqdt.at(ty)
-            if self._sss is not None:
-                out['sss_star'] = self._sss.at(ty)
-        return out
+            if OM.jax:
+                # the record pair and weights on the host (tiny), the blend in
+                # the kernel: rec[n1], rec[n2] would be two dispatches each
+                yr = 365.0*86400.0
+                n1, n2, f1, f2 = get_periodic_interval(ty, yr, yr/12.0, 12)
+                if self._dqdt is not None: clim['dqdt'] = (self._dqdt.rec, n1, n2, f1, f2)
+                if self._sss is not None:  clim['sss_star'] = (self._sss.rec, n1, n2, f1, f2)
+            else:
+                if self._dqdt is not None: clim['dqdt'] = self._dqdt.at(ty)
+                if self._sss is not None:  clim['sss_star'] = self._sss.at(ty)
+        if not OM.jax:
+            return self._assemble(F, clim)
+        if not hasattr(self, '_assemble_dev'):
+            def assemble(F, clim, n1, n2):
+                c = {k: f1*rec[n1] + f2*rec[n2] for k, (rec, _, _, f1, f2) in clim.items()}
+                return self._assemble(F, c)
+            self._assemble_dev = OM.jax.jit(assemble, static_argnames=('n1', 'n2'))
+        n1 = n2 = 0
+        if clim:
+            n1, n2 = next(iter(clim.values()))[1:3]
+        return self._assemble_dev(F, clim, n1=int(n1), n2=int(n2))
 
     def describe(self):
         s = self.settings

@@ -71,6 +71,10 @@ DZT = 10.0 + 240.0*0.5*(1.0 - np.cos(np.linspace(0.0, np.pi, NZ)))[::-1]   # bot
 FIELDS = ('u', 'v', 'w', 'temp', 'salt', 'p_s', 'tke', 'K_diss_v',
           'taux', 'tauy', 'forc_temp_surface', 'forc_salt_surface', 'forc_tke_surface')
 COUPLED_FIELDS = ('u_S', 'v_S', 'phi_oc', 'tau_in_x', 'tau_in_y', 'hs')
+# the tolerance of a check that is exact on numpy: on the jax backend XLA's
+# fused kernels round differently from the op-by-op reference formed in the
+# test (GPU: 1e-21 .. 1e-19 absolute in the forcing checks)
+EXACT = 1e-15 if OM.jax else 0.0
 DAY = 86400.0
 
 # the work directory of the suite: snapshots, energy files, restarts

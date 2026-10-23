@@ -47,20 +47,33 @@ def run(N=6):
     step(m, N)
     m.dtemp = m.tracer_advection(5.0*m.maskT, m.dtemp, m.u, m.v, m.w, m.maskU, m.maskV, m.maskW, m.maskT, tau)
     dW = np.asarray(m.dtemp[tau])[sl, sl, sl]*m.dt
-    m.weno_advection = False                   # the same with the centred flux: T times the divergence
-    m.dtemp = m.tracer_advection(5.0*m.maskT, m.dtemp, m.u, m.v, m.w, m.maskU, m.maskV, m.maskW, m.maskT, tau)
-    d2 = np.asarray(m.dtemp[tau])[sl, sl, sl]*m.dt
-    m.weno_advection = True
+    # the same with the centred flux: T times the divergence. On a SEPARATE
+    # model with the option off, evaluated on m's fields: tracer_advection is
+    # jitted with the model as a static argument, so toggling the attribute
+    # on m after the first call would not reach the compiled function (jax)
+    m2 = small_model(halo=3, tracer_flux=True, eps_nh=1e-16)
+    d2 = np.asarray(m2.tracer_advection(5.0*m.maskT, m.dtemp, m.u, m.v, m.w, m.maskU, m.maskV, m.maskW, m.maskT, tau)[tau])[sl, sl, sl]*m.dt
     ok &= line('17a nh_realistic: uniform tracer, |dT| per step, %d steps' % N, float(np.max(np.abs(dW))), 1e-12)
     ok &= line('17a ... equal to the centred flux (T x divergence)', float(np.max(np.abs(dW - d2))), 1e-14)
-    m.free_surface_tracer_flux = False         # closed surface face for the budget
-    m.dtemp = m.tracer_advection(m.temp, m.dtemp, m.u, m.v, m.w, m.maskU, m.maskV, m.maskW, m.maskT, tau)
-    dT = np.asarray(m.dtemp[tau])[sl, sl, sl]*np.asarray(m.area_t*m.dzt_z)[sl, sl, sl]
+    # closed surface face for the budget: again a separate model (same reason)
+    m3 = weno(small_model(halo=3, tracer_flux=False, eps_nh=1e-16))
+    dT = np.asarray(m3.tracer_advection(m.temp, m.dtemp, m.u, m.v, m.w, m.maskU, m.maskV, m.maskW, m.maskT, tau)[tau])[sl, sl, sl] \
+         *np.asarray(m.area_t*m.dzt_z)[sl, sl, sl]
     ok &= line('17b nh_realistic: sum of volume x tendency / sum |...|',
                abs(float(np.sum(dT)))/float(np.sum(np.abs(dT))), 1e-13)
-    ref = state(step(weno(small_model(halo=3)), N))
-    d = max(reldiff(state(step(weno(small_model(halo=4)), N)), ref).values())
-    ok &= line('17c nh_realistic: halo 4 = halo 3, WENO5, %d steps' % N, d, 0.0)
+    # exact on numpy. On the jax backend XLA compiles each halo width on its
+    # own and the round-off differs; the 3-D pressure solve then stops at a
+    # different iteration, and with the default eps_nh that is 1e-7 in u and
+    # 6e-4 in the weakly determined p_nh. So on jax the solve is run to 1e-16
+    # as in jax_sharding.py and its tolerances apply (1e-9, p_nh 1e-5)
+    eps = dict(eps_nh=1e-16) if OM.jax else {}
+    ref = state(step(weno(small_model(halo=3, **eps)), N))
+    d = reldiff(state(step(weno(small_model(halo=4, **eps)), N)), ref)
+    if OM.jax:
+        ok &= line('17c nh_realistic: halo 4 = halo 3, WENO5, %d steps (jax, eps_nh 1e-16)' % N, max(v for k, v in d.items() if k != 'p_nh'), 1e-9)
+        ok &= line('17c ... p_nh (weakly determined, see decomposition.py)', d.get('p_nh', 0.0), 1e-5)
+    else:
+        ok &= line('17c nh_realistic: halo 4 = halo 3, WENO5, %d steps' % N, max(d.values()), 0.0)
     m = weno(small_model(halo=3, tracer_flux=True)); jg, ig = global_index(m)
     m.salt = m.apply_bc(OM.np.asarray(35.0 + 1.0*(ig >= 7)[None]*np.ones((m.Nz, 1, 1))))*m.maskT
     step(m, 60)

@@ -29,7 +29,84 @@ from netCDF4 import Dataset
 # whole grid under JAX, a padded field is made with pad (not with a zero
 # array and a slice), and an interior is taken with unpad (not with a
 # slice, which would keep the inline halos).
+#
+# SEVERAL PROCESSES ON JAX (one process per GPU under srun, jax.distributed):
+# the sharded arrays span the processes, each process ADDRESSES its own
+# device's shard only. The shared code keeps the single-process convention
+# -- a block is the whole grid, the forcing and the inputs are global on
+# every process -- and the three helpers do the work: pad_block builds each
+# addressable shard from the global interior (make_array_from_callback),
+# interior gathers the shards of all processes (process_allgather), and
+# local_shard gives this process's own piece for what is written or checked
+# per process (raw means, the canary). jax_barrier is the process barrier.
 # ---------------------------------------------------------------------------
+def jax_multi():
+    """True when the jax run spans several processes"""
+    return bool(OM.jax) and OM.jax.process_count() > 1
+
+
+def jax_barrier(name='pyOM3'):
+    """a barrier over the processes of a multi-process jax run; a no-op
+    otherwise (the MPI runs use the model's own mpi_barrier)"""
+    if jax_multi():
+        from jax.experimental import multihost_utils
+        multihost_utils.sync_global_devices(name)
+
+
+def _shard_block(M, idx):
+    """(j0, i0, nyl, nxl, sy, sx) of the shard whose slices in the padded
+    global array are idx (the last two are y and x): its interior block in
+    the global interior and its position in the shard grid"""
+    h = M.halo
+    nyl = M.Ny//M.n_pes_y - 2*h; nxl = M.Nx//M.n_pes_x - 2*h
+    sy = (idx[-2].start or 0)//(nyl + 2*h); sx = (idx[-1].start or 0)//(nxl + 2*h)
+    return sy*nyl, sx*nxl, nyl, nxl, sy, sx
+
+
+def shard_id(M, idx):
+    """the number of the shard whose slices in the padded global array are
+    idx: row major in the shard grid, sy*n_pes_x + sx -- the block index of
+    the raw restart and of the raw snapshots"""
+    _, _, _, _, sy, sx = _shard_block(M, idx)
+    return sy*M.n_pes_x + sx
+
+
+def shard_blocks(M, a):
+    """{shard number: padded block (numpy, inline halo included)} of the
+    shards of `a` this process addresses: all of them on one process, its
+    device's on several. The raw restart of the jax backend is these blocks,
+    one file per shard, so it is independent of the process count."""
+    # a field that is not laid out on the mesh (a plain zeros on one device,
+    # say: u_S of the ocean alone) is put there first, else its one shard
+    # would be taken for shard 0
+    sharding = {2: M.sharding_2D, 3: M.sharding_3D, 4: M.sharding_4D}[a.ndim]
+    if a.sharding != sharding:
+        a = OM.jax.device_put(a, sharding)
+    return {shard_id(M, sh.index): np.asarray(sh.data) for sh in a.addressable_shards}
+
+
+def from_shard_blocks(M, blocks, shape):
+    """the sharded array of the padded global `shape` from its blocks
+    (shard_blocks); `blocks` needs the shards this process addresses"""
+    sharding = {2: M.sharding_2D, 3: M.sharding_3D, 4: M.sharding_4D}[len(shape)]
+    return OM.jax.make_array_from_callback(tuple(shape), sharding,
+                                           lambda idx: blocks[shard_id(M, idx)])
+
+
+def local_shard(M, a):
+    """(interior block of THIS process as numpy, j0, i0): the shard of its
+    device on a multi-process jax run (one device per process), the whole
+    interior on a single process, the local block under MPI"""
+    if jax_multi():
+        sh = a.addressable_shards[0]
+        j0, i0, nyl, nxl, _, _ = _shard_block(M, sh.index)
+        blk = np.asarray(sh.data)
+        h = M.halo; s = slice(h, -h)
+        return blk[(s,)*blk.ndim], j0, i0
+    j0, i0, _, _ = local_block(M)
+    return interior(M, a), j0, i0
+
+
 def local_block(M):
     """(j0, i0, ny_loc, nx_loc) of THIS PE's interior block, 0-based global
     start indices. MPI: derived from Ny/Nx and ys_pe/xs_pe only (pe_realistic
@@ -47,10 +124,25 @@ def pad_block(M, a, exchange=True):
     numpy) as a padded model field with the halo exchanged (apply_bc), i.e.
     what `b = zeros(Ny, Nx); b[h:-h, h:-h] = a; apply_bc(b)` did under MPI.
     exchange=False leaves the halo at zero (an interior mask, say)."""
-    a = np.asarray(a, np.float64)
     if OM.jax:
-        b = M.pad(OM.np.asarray(a))
+        if jax_multi() and not isinstance(a, OM.jax.Array):
+            # every process holds the global interior `a`; each builds the
+            # padded block of its own shard (zero halo, exchanged below)
+            a = np.asarray(a); h = M.halo                 # the dtype is converted per block
+            shape = ((M.Nz,) if a.ndim == 3 else ()) + (M.Ny, M.Nx)
+            sharding = M.sharding_3D if a.ndim == 3 else M.sharding_2D
+            def shard(idx):
+                j0, i0, nyl, nxl, _, _ = _shard_block(M, idx)
+                blk = np.asarray(a[..., j0:j0+nyl, i0:i0+nxl], np.float64)
+                return np.pad(blk, [(h, h)]*blk.ndim)
+            b = OM.jax.make_array_from_callback(shape, sharding, shard)
+            return M.apply_bc(b) if exchange else b
+        # a field already on the device (the forcing on the jax backend)
+        # stays there; a host array goes up once
+        a = a if isinstance(a, OM.jax.Array) else OM.np.asarray(np.asarray(a, np.float64))
+        b = M.pad(a)
     else:
+        a = np.asarray(a, np.float64)
         h = M.halo
         shape = (M.Nz, M.Ny, M.Nx) if a.ndim == 3 else (M.Ny, M.Nx)
         b = np.zeros(shape); b[(slice(h, -h),)*a.ndim] = a
@@ -67,9 +159,13 @@ def interior(M, a, lead=0):
     a = OM.np.asarray(a) if OM.jax else np.asarray(a)
     if OM.jax:
         try:
-            return np.asarray(M.unpad(a, lead) if lead else M.unpad(a))
+            u = M.unpad(a, lead) if lead else M.unpad(a)
         except TypeError:                 # pe's unpad has no lead argument
-            return np.asarray(M.unpad(a))
+            u = M.unpad(a)
+        if jax_multi():                   # the shards of every process, as one array
+            from jax.experimental import multihost_utils
+            return np.asarray(multihost_utils.process_allgather(u, tiled=True))
+        return np.asarray(u)
     h = M.halo; s = slice(h, -h)
     n = a.ndim
     sl = (s,)*lead + (slice(None),)*(n - lead - 2) + (s, s) if lead else (s,)*n
@@ -99,10 +195,10 @@ class BlockScatter:
 
     def scatter(self, full):
         """full: (ny, nx) on rank 0, ignored elsewhere -> this rank's block."""
-        from mpi4py import MPI
         if self.comm is None or self.comm.Get_size() == 1:
             j0, i0, nyl, nxl = self.ext[0]
             return np.asarray(full, np.float64)[j0:j0+nyl, i0:i0+nxl].copy()
+        from mpi4py import MPI                     # only here: one process needs no MPI
         if self.comm.Get_rank() == 0:
             full = np.asarray(full, np.float64)
             send = np.concatenate([full[j0:j0+nyl, i0:i0+nxl].ravel()

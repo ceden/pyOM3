@@ -35,7 +35,9 @@ if subprocess.run([sys.executable, '-c', 'import jax'], capture_output=True).ret
     jobs += [('J jax layouts, %s (jax_sharding.py, halo 1 and 2)' % fam, os.path.join(HERE, fam), ['jax_sharding.py'])
              for fam in ('pe', 'nhr', 'wim')]
     jobs += [('J jax backend, coupled (jax_backend.py: the shared coupling/forcing code, 1x1 and 2x2 shards)',
-              os.path.join(HERE, 'coupled'), ['jax_backend.py'])]
+              os.path.join(HERE, 'coupled'), ['jax_backend.py']),
+             ('22d run.py on the jax backend, ocean alone, two segments on 1x1 and 2x2 shards (endtoend.py --jax)',
+              os.path.join(HERE, 'coupled'), ['endtoend.py', '--jax'])]
 else:
     print('J jax layouts skipped: jax not installed')
 ok = True

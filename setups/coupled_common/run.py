@@ -218,13 +218,37 @@ def _abort_on_exception(exc_type, exc_value, exc_tb):
         os._exit(1)
 sys.excepthook = _abort_on_exception
 
-if world.Get_size() < n_pes_wave + n_pes_ocean + n_pes_atmos:
+# JAX backend: the ocean alone; EXP_NPX_OCEAN x EXP_NPY_OCEAN is the SHARD
+# layout and must match the devices jax sees -- those of this process, or
+# of ALL processes of a multi-process run (one process per GPU under srun,
+# jax.distributed initialised in pyOM3/__init__; the model's mesh spans the
+# processes, the run control's collectives go through SoloComm, the fields
+# through block_io). EXP_RESTART_RAW=1 writes the restart per SHARD (one
+# block per device, independent of the process count), the form for the
+# large grids; the gathered form allgathers every field to every process.
+solo = getattr(world, 'is_solo', False)
+if solo and OM.jax:
+    if OM.jax.device_count() != n_pes_ocean:
+        raise SystemExit('EXP_NPX_OCEAN x EXP_NPY_OCEAN = %d shards, but jax sees %d device(s): %s'
+                         % (n_pes_ocean, OM.jax.device_count(), OM.jax.devices()))
+    if OM.jax.process_count() > 1 and OM.jax.local_device_count() != 1:
+        raise SystemExit('%d jax processes with %d devices each: a multi-process run needs ONE '
+                         'device per process (srun --ntasks-per-node = GPUs per node, '
+                         '--gpu-bind=single:1 or CUDA_VISIBLE_DEVICES per task)'
+                         % (OM.jax.process_count(), OM.jax.local_device_count()))
+    import coupler_io
+    if my_pe == 0:
+        print('CONFIG backend: JAX, ocean alone on %d device(s) in %d process(es) (%d x %d shards); '
+              'restart %s' % (n_pes_ocean, OM.jax.process_count(), n_pes_x_ocean, n_pes_y_ocean,
+                              'raw, one block per shard (EXP_RESTART_RAW=1)' if coupler_io.RESTART_RAW
+                              else 'gathered (EXP_RESTART_RAW=0)'), flush=True)
+if not solo and world.Get_size() < n_pes_wave + n_pes_ocean + n_pes_atmos:
     if my_pe == 0:
         print('ERROR: need at least %d ranks (%d wave + %d ocean + %d atmosphere), got %d'
               % (n_pes_wave + n_pes_ocean + n_pes_atmos, n_pes_wave, n_pes_ocean, n_pes_atmos,
                  world.Get_size()))
     sys.exit(1)
-n_idle = world.Get_size() - (n_pes_wave + n_pes_ocean + n_pes_atmos)
+n_idle = 0 if solo else world.Get_size() - (n_pes_wave + n_pes_ocean + n_pes_atmos)
 if my_pe == 0:
     print('CONFIG ocean time stepping: Adams-Bashforth weights (%.4f, %.4f, %.4f)%s'
           % (ocean_ab + ((' = AB3, a cold start is ramped' if ocean_ab[2] else
@@ -318,10 +342,32 @@ if color == 0:                                   # ---- wave ----
 
 elif color == 1:                                 # ---- ocean ----
     M = ocean(get_ocean_parameter(),
-              n_pes_x=n_pes_x_ocean, n_pes_y=n_pes_y_ocean, comm_in=comm,
+              n_pes_x=n_pes_x_ocean, n_pes_y=n_pes_y_ocean, comm_in=None if solo else comm,
               halo_points=halo)
     M.use_stress_work = use_stress_work
     M.coupled = waves
+    # THE FREE-SURFACE METHOD is the configuration's (get_ocean_parameter:
+    # implicit_free_surface with the CG, or explicit_free_surface, the
+    # split-explicit sub cycle of pe_realistic/free_surface.py). The explicit
+    # one is admitted for the OCEAN ALONE: the coupling hooks of the implicit
+    # step (set_forcing_direct, the d(u_S)/dt forcing) are not on its path,
+    # and the KE budget is written for the implicit p_s.
+    if getattr(M, 'explicit_free_surface', False):
+        if waves or n_pes_atmos > 0:
+            raise SystemExit('explicit_free_surface: the split-explicit ocean runs alone '
+                             '(EXP_WAVES=0, no atmosphere); the coupled model uses the '
+                             'implicit free surface')
+        if int(getattr(setup, 'KE_BUDGET', 0)):
+            raise SystemExit('explicit_free_surface: the KE budget is written for the '
+                             'implicit p_s; set EXP_KE_BUDGET=0')
+        if my_pe == 0:
+            print('CONFIG ocean free surface: split-explicit, %d sub steps per step, '
+                  'forward-backward theta %.2f (sub-step CFL of the external wave: '
+                  'see the setup module)' % (int(getattr(M, 'sub_cycling', 0)),
+                                             float(getattr(M, 'fb_theta', 0.14))), flush=True)
+    elif my_pe == 0:
+        print('CONFIG ocean free surface: implicit, CG epsilon %g' % float(getattr(M, 'epsilon', 0.0)),
+              flush=True)
     M.hs_factor = getattr(setup, 'HS_FACTOR', 1.6)
     M.energy_file = '%s_energy%s.txt' % (exp_name, segment)
     M.set_coriolis()

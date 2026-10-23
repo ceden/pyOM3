@@ -33,6 +33,36 @@ from collections import OrderedDict
 from contextlib import contextmanager
 
 
+def jax_sync():
+    """Wait until every kernel queued on every device has run. JAX
+    dispatches asynchronously: a timed section returns as soon as its
+    kernels are QUEUED, and the time is paid in whichever later section
+    first needs a result on the host (the CG's iteration count, say). The
+    exclusive times of a jax run are therefore only meaningful if each
+    section ends with a device sync, which this provides: one trivial
+    jitted op per device, blocked on -- XLA runs one compute stream per
+    device in order, so it completes after everything queued before it.
+    About 0.1 ms per device and section; profile level 2 on jax pays
+    ~5 ms per step for exact rows."""
+    import pyOM3 as OM
+    if not OM.jax:
+        return None
+    jax = OM.jax
+    ops = []
+    for d in jax.devices():
+        if d.process_index != jax.process_index():
+            continue
+        x = jax.device_put(OM.np.zeros(()), d)
+        ops.append((jax.jit(lambda a: a + 1.0), x))
+    def sync():
+        for f, x in ops:
+            y = f(x)
+            if not hasattr(y, 'block_until_ready'):
+                return                      # inside a jit trace: nothing to wait for
+            y.block_until_ready()
+    return sync
+
+
 class Profiler:
     """Named accumulators with correct nesting. One instance per component."""
 
@@ -43,12 +73,17 @@ class Profiler:
         self.cnt  = OrderedDict()
         self._child = []               # per-level accumulated child time
         self.steps = 0
+        self.sync = None               # device sync before each timing (jax_sync)
 
     # ------------------------------------------------------------------
     def _enter(self):
+        if self.sync is not None:
+            self.sync()
         self._child.append(0.0)
 
     def _exit(self, name, t0):
+        if self.sync is not None:
+            self.sync()
         dt = time.perf_counter() - t0
         child = self._child.pop()
         self.excl[name] = self.excl.get(name, 0.0) + (dt - child)
@@ -160,6 +195,9 @@ WAVE_METHODS = (
 
 OCEAN_METHODS = (
     'tracer_advection', 'vadv_tracer', 'momentum_tendency_impl', 'solve_for_pressure',
+    # the split-explicit path (explicit_free_surface): the tendencies and the
+    # barotropic sub cycle, the counterparts of the two rows above
+    'momentum_tendency_expl', 'solve_expl_surface', 'bottom_friction',
     'vertical_friction', 'vertical_mixing', 'integrate_tke',
     'set_tke_diffusivities', 'set_forcing', 'set_forcing_direct',
     'vertical_velocity', 'update_thermodynamics_AB3', 'update_momentum_AB3',

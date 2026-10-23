@@ -16,6 +16,14 @@ per time step, and the same records serve all 16.7 time steps of that hour
 (dt = 216 s), so the cost is negligible. Nothing is read per rank, so the
 1536-rank strided-read problem of the initial conditions does not arise.
 
+ON THE JAX BACKEND the records go to the DEVICE as soon as they are read
+(one float32 buffer per group and hour) and everything after that -- the
+bilinear interpolation, the time interpolation, the sums the flux source
+forms -- runs there. On the host this arithmetic was 60 ms per step on
+icon033 (nine fields of 744k points, three numpy passes each) plus 20 ms per
+step for the hourly interpolation, a quarter of a 0.31 s GPU step; on the
+device it is a few jitted kernels. The MPI/numpy path is unchanged.
+
 The land points of the ERA5 files carry their nearest ocean value
 (prep_era5_native.py), so a stencil that straddles a coast never picks up a land
 value; the model's own land mask decides what is used.
@@ -30,6 +38,7 @@ import calendar
 import datetime
 import numpy as np
 from netCDF4 import Dataset
+import pyOM3 as OM
 
 MEAN_FIELDS  = ('taux', 'tauy', 'sshf', 'slhf', 'ssr', 'str', 'e', 'tp')
 INST_FIELDS  = ('sst',)
@@ -82,6 +91,16 @@ class Era5NativeForcing:
         self._wind = tuple(n for n in self.names if n in WIND_FIELDS)
         self._rec = {}          # (group, year, month, record) -> {name: block}
         self._ds = {}           # tag -> (the month's open file, (year, month)), rank 0
+        # READ-AHEAD. Every file read runs on ONE worker thread (netCDF/HDF5
+        # is not thread safe, so the main thread never touches the files
+        # after setup): a record that is needed now is read through it and
+        # waited for, and as soon as record k of a group is in, record k+1
+        # is submitted, so it is read while the model steps through the hour
+        # -- 9 fields of 3.3 MB from Lustre took ~150 ms per hour on the GPU
+        # run, 10-15 ms per step amortised, all of it on the critical path.
+        import concurrent.futures
+        self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._pre = {}          # (group, year, month, record, tag) -> future of the buffer
         self._last_t, self._last = None, None
         self._weights()
 
@@ -114,6 +133,33 @@ class Era5NativeForcing:
         j0 = np.clip(np.searchsorted(self.lat, yq) - 1, 0, self.ne_y - 2)
         self.j0, self.j1 = j0, j0 + 1
         self.wy = ((yq - self.lat[j0])/(self.lat[j0+1] - self.lat[j0]))[:, None]
+        if OM.jax:
+            # the same stencil as a jitted gather on the device; the index
+            # vectors and weights are small 1-D constants
+            j0d, j1d, i0d, i1d = (OM.np.asarray(v) for v in (self.j0, self.j1, self.i0, self.i1))
+            wxd, wyd, flip = OM.np.asarray(self.wx), OM.np.asarray(self.wy), self.flip
+            def gather(a):
+                a = OM.np.asarray(a, np.float64)
+                if flip:
+                    a = a[::-1]
+                f00 = a[j0d[:, None], i0d[None, :]]; f01 = a[j0d[:, None], i1d[None, :]]
+                f10 = a[j1d[:, None], i0d[None, :]]; f11 = a[j1d[:, None], i1d[None, :]]
+                return ((1.0 - wyd)*((1.0 - wxd)*f00 + wxd*f01)
+                        + wyd*((1.0 - wxd)*f10 + wxd*f11))
+            self._gather_dev = OM.jax.jit(OM.jax.vmap(gather))       # (n, ne_y, ne_x) -> (n, ny, nx)
+            # the time interpolation of EVERY group and the split into the
+            # named fields as ONE kernel per step (a dict out of a jit is a
+            # pytree; the group names are static). Every dispatch costs
+            # 0.1-0.3 ms of host time whatever the array size, so the
+            # per-step path is fused as far as it goes.
+            def blend(groups, stacks_a, stacks_b, ws):
+                out = {}
+                for g, a, b, w in zip(groups, stacks_a, stacks_b, ws):
+                    bl = (1.0 - w)*a + w*b
+                    for i, n in enumerate(g):
+                        out[n] = bl[i]
+                return out
+            self._blend_dev = OM.jax.jit(blend, static_argnums=0)
 
     def _interp(self, a):
         """ERA5 field (ne_y, ne_x) -> this rank's block (ny_loc, nx_loc)."""
@@ -179,6 +225,15 @@ class Era5NativeForcing:
         self._ds[tag] = (f, (y, m))
         return f
 
+    def _read_buf(self, group, y, m, r, tag):
+        """the group's records of hour r of (y, m) as one float32 buffer;
+        runs on the worker thread"""
+        f = self._file(y, m, tag)
+        buf = np.empty((len(group), self.ne_y, self.ne_x), np.float32)
+        for i, n in enumerate(group):
+            buf[i] = f.variables[n][r]
+        return buf
+
     def _fetch(self, group, k, tag=None):
         """{name: interpolated block} of the fields in `group` at absolute
         record k, read once and cached.
@@ -197,15 +252,30 @@ class Era5NativeForcing:
         key = (group, y, m, r)
         if key in self._rec:
             return self._rec[key]
-        buf = np.empty((len(group), self.ne_y, self.ne_x), np.float32)
-        if self.comm is None or self.comm.Get_rank() == 0:
-            f = self._file(y, m, tag)
-            for i, n in enumerate(group):
-                buf[i] = f.variables[n][r]
+        reader = self.comm is None or self.comm.Get_rank() == 0
+        if reader:
+            fut = self._pre.pop((group, y, m, r, tag), None)
+            if fut is None:
+                fut = self._pool.submit(self._read_buf, group, y, m, r, tag)
+            buf = fut.result()
+        else:
+            buf = np.empty((len(group), self.ne_y, self.ne_x), np.float32)
         if self.comm is not None:
             self.comm.Bcast(buf, root=0)
-        out = {n: self._interp(np.asarray(buf[i], np.float64))
-               for i, n in enumerate(group)}
+        if reader:                        # the next record of this group, ahead of time
+            y2, m2, r2 = self._hour(k + 1)
+            k2 = (group, y2, m2, r2, tag)
+            if (group, y2, m2, r2) not in self._rec and k2 not in self._pre:
+                self._pre[k2] = self._pool.submit(self._read_buf, group, y2, m2, r2, tag)
+        if OM.jax:
+            # the whole group to the device as one float32 buffer, interpolated
+            # there; the stack is what the time interpolation blends
+            stack = self._gather_dev(OM.np.asarray(buf))
+            out = {n: stack[i] for i, n in enumerate(group)}
+            out['_stack'] = stack
+        else:
+            out = {n: self._interp(np.asarray(buf[i], np.float64))
+                   for i, n in enumerate(group)}
         if len(self._rec) > 6:            # two records of each of the three groups
             self._rec.clear()
         self._rec[key] = out
@@ -218,6 +288,7 @@ class Era5NativeForcing:
             return self._last
         h = float(t)/3600.0
         out = {}
+        groups, sa, sb, ws = [], [], [], []
         # the hourly means sit at the middle of their hour, the analysed sst
         # at its stamp, so the two groups straddle different record pairs and
         # are fetched separately -- two broadcasts each per model hour
@@ -229,12 +300,18 @@ class Era5NativeForcing:
             k1 = int(np.floor(p))
             w = p - k1
             a, b = self._fetch(group, k1, tag), self._fetch(group, k1 + 1, tag)
+            if OM.jax:
+                groups.append(group); sa.append(a['_stack']); sb.append(b['_stack']); ws.append(float(w))
+                continue
             for n in group:
                 out[n] = (1.0 - w)*a[n] + w*b[n]
+        if OM.jax:                        # one kernel for all groups, on the device
+            out = self._blend_dev(tuple(groups), sa, sb, ws)
         self._last_t, self._last = float(t), out
         return out
 
     def close(self):
+        self._pool.shutdown(wait=True)
         for ds, ym in self._ds.values():
             ds.close()
         self._ds = {}

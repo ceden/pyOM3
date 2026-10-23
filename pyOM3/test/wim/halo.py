@@ -18,6 +18,7 @@ grid.u_centered_grid_halo)."""
 import numpy as np
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import small_model, step, state, line, reldiff
+import pyOM3 as OM
 
 CASES = (('realistic', dict(kind='realistic')),
          ('simple', dict(kind='simple')),
@@ -40,7 +41,9 @@ def run(N=6, halos=(2, 3)):
         ref = _split(state(step(small_model(**kw), N)), 1)
         for h in halos:
             d = max(reldiff(_split(state(step(small_model(halo=h, **kw), N)), h), ref).values())
-            ok &= line('16 halo %d = halo 1, %s' % (h, name), d, 0.0)
+            # exact on numpy; on the jax backend XLA compiles each array shape
+            # on its own and the fused kernels round differently (GPU: 3e-16)
+            ok &= line('16 halo %d = halo 1, %s' % (h, name), d, 1e-15 if OM.jax else 0.0)
     return ok
 
 

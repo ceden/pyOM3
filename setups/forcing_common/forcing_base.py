@@ -47,6 +47,7 @@ piston velocity, the virtual salt flux S*emp.
 import datetime
 import importlib
 import numpy as np
+import pyOM3 as OM
 
 # source name -> (module in this directory, class)
 SOURCES = {'era5': ('forcing_era5_flux', 'Era5FluxForcing'),
@@ -153,14 +154,14 @@ class MonthlyClim:
         path, vname = spec
         j0, i0, nyl, nxl = (int(v) for v in geom['block'])
         comm = geom.get('comm')
-        rank = 0 if comm is None else comm.Get_rank()
+        rank = (OM.jax.process_index() if OM.jax else 0) if comm is None else comm.Get_rank()
         if scatter:
             sc = BlockScatter(comm, geom['block'])
             rec = np.empty((12, nyl, nxl))
             for n in range(12):
                 rec[n], nbad = clean_forcing(sc.read(path, vname, (n,)), vname,
                                              limit=limit)
-                if nbad:
+                if nbad and (rank == 0 or not OM.jax):   # every jax process reads the whole field; one reports
                     print('%s forcing pe %d %s record %d: %d non-finite/fill '
                           'entries zeroed' % (who, rank, vname, n, nbad), flush=True)
         else:
@@ -175,7 +176,9 @@ class MonthlyClim:
             if nbad and rank == 0:
                 print('%s forcing %s: %d non-finite/fill entries zeroed'
                       % (who, vname, nbad), flush=True)
-        self.rec = rec
+        # on the jax backend the 12 records live on the device, so at() is a
+        # device kernel and the result needs no host-to-device copy per step
+        self.rec = OM.np.asarray(rec) if OM.jax else rec
 
     def at(self, t_year):
         yr = 365.0*86400.0

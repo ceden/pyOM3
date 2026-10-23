@@ -8,7 +8,7 @@ shortwave profile, the coupler's interior fill of the wave fields, the
 diagnostics' interior sums)."""
 import numpy as np
 import os, sys; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import small_ocean, step, state, line, reldiff
+from config import small_ocean, step, state, line, reldiff, OM
 
 CASES = (('forced', dict(coupled=False)),
          ('forced relwind ice sw_bottom', dict(coupled=False, relwind=True, ice=0.3, sw_bottom=True, average='6h')),
@@ -23,7 +23,9 @@ def run(N=6, halos=(2, 3)):
         ref = state(step(small_ocean(tag='h1', **kw), N))
         for h in halos:
             d = max(reldiff(state(step(small_ocean(halo=h, tag='h%d' % h, **kw), N)), ref).values())
-            ok &= line('16 halo %d = halo 1, %s' % (h, name), d, 0.0)
+            # exact on numpy; on the jax backend each halo width is compiled on
+            # its own and the closure amplifies the round-off to 1e-12 (CPU jax)
+            ok &= line('16 halo %d = halo 1, %s' % (h, name), d, 1e-10 if OM.jax else 0.0)
     return ok
 
 

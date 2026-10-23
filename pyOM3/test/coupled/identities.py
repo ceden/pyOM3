@@ -31,7 +31,7 @@ All on the coupled model after 6 steps (19g-19i also on the forced one).
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
-from config import small_ocean, step, line, RHO_0, DZT
+from config import small_ocean, step, line, RHO_0, DZT, EXACT
 import pyOM3 as OM
 
 
@@ -129,7 +129,7 @@ def run(N=6):
             ty = 0.5*(np.asarray(m.tauy) + np.roll(np.asarray(m.tauy), 1, axis=0))
             ref = m.alpha_CB*np.hypot(tx, ty)**1.5*mT
             ok &= line('19k %s: surface TKE flux = alpha_CB |tau_T|^1.5' % name,
-                       float(np.max(np.abs(np.asarray(m.forc_tke_surface) - ref)[sl, sl])), 0.0)
+                       float(np.max(np.abs(np.asarray(m.forc_tke_surface) - ref)[sl, sl])), EXACT)
     return ok
 
 

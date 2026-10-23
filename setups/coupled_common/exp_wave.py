@@ -18,7 +18,10 @@ theta = 0 -> north, theta = pi/2 -> east, so udir = atan2(tau_east, tau_north).
 """
 import numpy as np
 import pyOM3 as OM
-from mpi4py import MPI
+try:
+    from mpi4py import MPI
+except ImportError:                      # a JAX/GPU environment without MPI (one process, no reductions)
+    MPI = None
 from pyOM3.wim_realistic.grid import u_centered_grid
 from block_io import local_block, pad_block, interior
 from forcing_base import make as make_forcing

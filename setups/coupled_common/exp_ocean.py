@@ -29,11 +29,21 @@ from functools import partial
 import numpy as np
 import pyOM3 as OM
 from netCDF4 import Dataset
-from mpi4py  import MPI
+try:
+    from mpi4py import MPI
+except ImportError:                      # a JAX/GPU environment without MPI (one process, no reductions)
+    MPI = None
 from pyOM3.density import get_rho
-from block_io import local_block, pad_block, interior
+from block_io import local_block, pad_block, interior, local_shard, jax_multi, jax_barrier
 from forcing_base import make as make_forcing
 from ni_diag import ni_common
+
+
+from contextlib import contextmanager as _cm
+
+@_cm
+def _nosection(name):
+    yield
 
 
 class ocean_common(ni_common):
@@ -101,6 +111,10 @@ class ocean_common(ni_common):
 
     def prepare_for_run(self, *a, **k):
         out = super().prepare_for_run(*a, **k)
+        # several jax processes: the parent made the snapshot directories on
+        # process 0 and the others mkdir inside them at the first diagnose
+        # (the configuration's mpi_barrier is a no-op without MPI)
+        jax_barrier('prepare_for_run')
         # the near-inertial diagnostic (ni_diag.py, cfg.NI_DIAG) registers its
         # products as online means, so it is set up before average_setup
         self.ni_setup()
@@ -120,7 +134,10 @@ class ocean_common(ni_common):
             d = self.snap_file_name + '/pe=%i/n=%i/' % (self.my_pe, n)
             for v in self._extra_snap:
                 if hasattr(self, v):
-                    OM.np.save(d + '%s.npy' % v, self.unpad(getattr(self, v)))
+                    # as the parent writes its fields: the local block under
+                    # MPI, the global interior on one jax process, this
+                    # process's shard on several (block_io.local_shard)
+                    np.save(d + '%s.npy' % v, local_shard(self, getattr(self, v))[0])
             return
         # netCDF snapshots: the variables are created by the experiment's
         # prepare_for_run, the record is the one the parent has just written
@@ -356,32 +373,34 @@ class ocean_common(ni_common):
         h  = self.halo
         sl = slice(h, -h)
         # on the full horizontal layout (halo columns included, they are
-        # masked or ignored by the caller), interior levels only
-        rho = np.asarray(get_rho(self.salt, self.temp, self.p0*0.0,
-                                 self.eq_of_state))[sl][::-1]             # surface first
-        wet = np.asarray(self.maskT)[sl][::-1] > 0
+        # masked or ignored by the caller), interior levels only. The 3-D
+        # arithmetic in the backend's array module: on jax it stays on the
+        # device (sharded, across processes), the 1-D column vectors are host
+        xp  = OM.np if OM.jax else np
+        rho = get_rho(self.salt, self.temp, self.p0*0.0, self.eq_of_state)[sl][::-1]   # surface first
+        wet = self.maskT[sl][::-1] > 0
         d   = np.asarray(self.zw[-h-1] - self.zt)[sl][::-1]              # T-point depths
         dzw = np.asarray(self.dzt)[sl][::-1]
         nk  = len(d)
         # density at zref
         k1 = max(0, min(int(np.searchsorted(d, zref)) - 1, nk - 2))
         w  = min(max((zref - d[k1])/(d[k1+1] - d[k1]), 0.0), 1.0)
-        r10 = np.where(wet[k1+1], (1.0 - w)*rho[k1] + w*rho[k1+1], rho[k1])
+        r10 = xp.where(wet[k1+1], (1.0 - w)*rho[k1] + w*rho[k1+1], rho[k1])
         thr = r10 + dsig
         below = d > zref
-        cross = (rho > thr[None]) & wet & below[:, None, None]
+        cross = (rho > thr[None]) & wet & xp.asarray(below)[:, None, None]
         has = cross.any(axis=0)
-        kc  = np.argmax(cross, axis=0)                                     # first crossing
+        kc  = xp.argmax(cross, axis=0)                                     # first crossing
         # upper point of the interpolation: the level above, or (zref, r10)
-        ku  = np.maximum(kc - 1, 0)
-        up_is_ref = ~below[ku]
-        d_up = np.where(up_is_ref, zref, d[ku])
-        r_up = np.where(up_is_ref, r10, np.take_along_axis(rho, ku[None], 0)[0])
-        r_c  = np.take_along_axis(rho, kc[None], 0)[0]
-        frac = np.clip((thr - r_up)/np.maximum(r_c - r_up, 1e-12), 0.0, 1.0)
-        mld  = d_up + frac*(d[kc] - d_up)
-        col  = np.sum(wet*dzw[:, None, None], axis=0)                      # column depth
-        return np.where(has, mld, col)*wet[0]
+        ku  = xp.maximum(kc - 1, 0)
+        up_is_ref = ~xp.asarray(below)[ku]
+        d_up = xp.where(up_is_ref, zref, xp.asarray(d)[ku])
+        r_up = xp.where(up_is_ref, r10, xp.take_along_axis(rho, ku[None], 0)[0])
+        r_c  = xp.take_along_axis(rho, kc[None], 0)[0]
+        frac = xp.clip((thr - r_up)/xp.maximum(r_c - r_up, 1e-12), 0.0, 1.0)
+        mld  = d_up + frac*(xp.asarray(d)[kc] - d_up)
+        col  = xp.sum(wet*xp.asarray(dzw)[:, None, None], axis=0)          # column depth
+        return xp.where(has, mld, col)*wet[0]
 
     def average_setup(self, file_name, mode):
         """Create the mean file and zero the sums. mode from parse_average;
@@ -460,6 +479,12 @@ class ocean_common(ni_common):
         self._avg_dir = d
         nx_, ny_ = self.get_full_domain_extent()          # COLLECTIVE
         nz_ = self.Nz - 2*self.halo
+        # the block layout is the snapshots' (pe snap_raw): one block per MPI
+        # rank; on jax ONE block, the global interior, from a single process
+        # (decomposition [1, 1]) and one block per process -- its device's
+        # shard -- on several
+        single = bool(OM.jax) and not jax_multi()
+        nblk = 1 if single else (OM.jax.process_count() if OM.jax else self.n_pes)
         if self.my_pe == 0:
             if os.path.isdir(d):
                 shutil.rmtree(d)
@@ -468,12 +493,13 @@ class ocean_common(ni_common):
                                 self._snap_coords(nx_, ny_, nz_)):
                 np.save(os.path.join(d, nme + '.npy'), np.asarray(val))
             np.save(os.path.join(d, 'decomposition.npy'),
-                    np.array([self.n_pes_x, self.n_pes_y]))
-            for pe in range(self.n_pes):
+                    np.array([1, 1] if single else [self.n_pes_x, self.n_pes_y]))
+            for pe in range(nblk):
                 os.mkdir(os.path.join(d, 'pe=%d' % pe))
             label = 'calendar month' if mode[0] == 'month' else '%g h' % (mode[1]/3600.0)
             print('ocean means: %s -> %s/ (raw, %d fields, %d blocks)'
-                  % (label, d, len(self._avg_spec), self.n_pes), flush=True)
+                  % (label, d, len(self._avg_spec), nblk), flush=True)
+        jax_barrier('average_setup')
         # rank 0 creates every PE's directory, the others mkdir inside them at
         # the first write: the barrier must stay
         self.mpi_barrier()
@@ -487,7 +513,12 @@ class ocean_common(ni_common):
         d = os.path.join(self._avg_dir, 'pe=%d' % self.my_pe, 'n=%d' % step)
         os.makedirs(d, exist_ok=True)
         for nme, *_ in self._avg_spec:
-            np.save(os.path.join(d, nme + '.npy'), self._avg_sum[nme]/nsteps)
+            a = self._avg_sum[nme]
+            if jax_multi() and isinstance(a, OM.jax.Array):
+                a = local_shard(self, a)[0]            # this process's shard
+            else:
+                a = self._avg_interior(nme)
+            np.save(os.path.join(d, nme + '.npy'), a/nsteps)
         if self.my_pe == 0:
             d0, d1 = self._forcing.date(t0), self._forcing.date(t_end)
             # what the netCDF form kept as time / time_bnds / nsteps / dates
@@ -510,12 +541,50 @@ class ocean_common(ni_common):
         self._avg_n, self._avg_t0 = 0, -1.0
         return
 
+    # THE SUMS STAY ON THE DEVICE on the jax backend. average() used to add
+    # self._int(field) to a numpy sum, which is one device-to-host transfer
+    # of every averaged field at every step -- 21 fields of 760 MB on icon033,
+    # 6 s per step, 96 % of the step on the GPU (log_gpu_28343460). So on jax
+    # a sum is the PADDED device field, accumulated by one jitted add, and the
+    # interior is taken only when a window is written or the restart stores
+    # it (_avg_interior). A sum restored from a restart (interior numpy) is
+    # moved to the device at the first add. On numpy nothing changes.
+    def _avg_interior(self, nme):
+        """the sum of `nme` as the interior numpy array"""
+        a = self._avg_sum[nme]
+        if OM.jax and isinstance(a, OM.jax.Array):
+            return self._int(a)
+        return a
+
+    def _avg_add(self, nme, v):
+        a = self._avg_sum[nme]
+        if OM.jax and isinstance(v, OM.jax.Array):
+            if not isinstance(a, OM.jax.Array):       # first add, or a restored interior sum
+                a = pad_block(self, a, exchange=False) if np.any(a) else OM.np.zeros_like(v)
+            self._avg_sum[nme] = a + v
+        else:
+            self._avg_sum[nme] = a + self._int(v)
+        return
+
     def average_state(self):
         """(list of (name, local sum), n, t0) for the restart, None when off."""
         if getattr(self, '_avg', None) is None:
             return None
-        return ([(nme, self._avg_sum[nme]) for nme, *_ in self._avg_spec],
+        return ([(nme, self._avg_interior(nme)) for nme, *_ in self._avg_spec],
                 self._avg_n, self._avg_t0)
+
+    def average_state_device(self):
+        """the sums as PADDED device arrays (jax), for the per-shard raw
+        restart; a sum nothing was added to yet is padded from its zeros"""
+        if getattr(self, '_avg', None) is None:
+            return None
+        out = []
+        for nme, *_ in self._avg_spec:
+            a = self._avg_sum[nme]
+            if not isinstance(a, OM.jax.Array):
+                a = pad_block(self, a, exchange=False)
+            out.append((nme, a))
+        return out, self._avg_n, self._avg_t0
 
     def average_restore(self, sums, n, t0):
         """Partial sums from the restart. A different field list (the run
@@ -529,7 +598,10 @@ class ocean_common(ni_common):
                       'the partial window is dropped', flush=True)
             return
         for nme in sums:
-            self._avg_sum[nme] = np.array(sums[nme], np.float64)
+            v = sums[nme]
+            # interior numpy (the gathered restart) or a padded device array
+            # (the per-shard raw restart of the jax backend)
+            self._avg_sum[nme] = v if (OM.jax and isinstance(v, OM.jax.Array)) else np.array(v, np.float64)
         self._avg_n, self._avg_t0 = int(n), float(t0)
         return
 
@@ -545,7 +617,7 @@ class ocean_common(ni_common):
         if getattr(self, '_avg', None) is None:
             return
         for nme, dims, _, _, get in self._avg_spec:
-            self._avg_sum[nme] += self._int(get(tau))
+            self._avg_add(nme, get(tau))
         if self._avg_n == 0:
             self._avg_t0 = n*self.dt
         self._avg_n += 1
@@ -580,7 +652,7 @@ class ocean_common(ni_common):
                 for nme, dims, *_ in self._avg_spec:
                     sl = (m,) + ((slice(None),) if len(dims) == 4 else ()) + \
                          (slice(j0, j0+ny_loc), slice(i0, i0+nx_loc))
-                    f.variables[nme][sl] = self._avg_sum[nme]/nsteps
+                    f.variables[nme][sl] = self._avg_interior(nme)/nsteps
                 f.close()
         if self.my_pe == 0:
             print('ocean means: %s .. %s (%d steps) -> %s'
@@ -665,12 +737,15 @@ class ocean_common(ni_common):
             # BOTTOM face of cell k, so pen at the deepest wet cell of a
             # column is exactly what that column loses. Give it to that cell.
             pp = np.zeros(self.Nz); pp[sl] = pen[:self.cfg.nz]
-            mT = np.asarray(self.maskT)
-            below = np.concatenate([np.zeros((1,) + mT.shape[1:]), mT[:-1]], axis=0)
+            # on the device, from the mask as it is laid out there (sharded,
+            # and across processes): a host copy of the 3-D mask is neither
+            # possible on several processes nor wanted on one
+            mT = self.maskT
+            below = OM.np.concatenate([OM.np.zeros_like(mT[:1]), mT[:-1]], axis=0)
             deepest = (mT > 0.0) & (below == 0.0)      # one cell per wet column
-            dztp = np.asarray(self.dzt)
-            add = deepest*(pp/np.maximum(dztp, 1e-30))[:, None, None]
-            self._divpen = OM.np.asarray(np.asarray(self._divpen) + add)
+            dztp = OM.np.asarray(np.asarray(self.dzt))
+            add = deepest*(OM.np.asarray(pp)/OM.np.maximum(dztp, 1e-30))[:, None, None]
+            self._divpen = self._divpen + add
             if self.my_pe == 0:
                 print('CONFIG forcing: the solar radiation reaching the sea floor is '
                       'absorbed in the deepest wet cell (SW_BOTTOM)', flush=True)
@@ -1271,17 +1346,42 @@ class ocean_common(ni_common):
         h  = self.halo
         sl = slice(h, -h)
         ks = -h-1
-        F  = self._forcing.get(t)
+        prof = getattr(self, '_prof', None)
+        sec = prof.section if prof is not None and prof.enabled else _nosection
+        with sec('pe.set_forcing: source'):
+            F = self._forcing.get(t)
 
         pad = lambda a: pad_block(self, a)
-        tx, ty = pad(F['taux']), pad(F['tauy'])
         mT  = self.maskT[ks]
         if getattr(self, '_relwind', False):
+            # the relative-wind stress keeps host-side bookings for the waves
+            # and the diagnostics, so this path pads field by field
+            tx, ty = pad(F['taux']), pad(F['tauy'])
             tx, ty = self._relative_wind_stress(tx, ty, pad(F['u10']), pad(F['v10']), mT)
-        tax, tay = self._tau_uv(tx, ty)
-        g = lambda k: pad(F[k])*mT if k in F else None
-        return (tax, tay, g('qnet'), g('qsol'), g('sst_star'), g('emp'),
-                g('dqdt'), g('sss_star'))
+            tax, tay = self._tau_uv(tx, ty)
+            g = lambda k: pad(F[k])*mT if k in F else None
+            return (tax, tay, g('qnet'), g('qsol'), g('sst_star'), g('emp'),
+                    g('dqdt'), g('sss_star'))
+        # ONE kernel on jax (pad, halo exchange, mask, U/V average of the
+        # stress): ~25 dispatches of 0.1-0.3 ms each otherwise. On numpy
+        # OM.jaxjit is the identity and this is the same arithmetic.
+        keys = tuple(k for k in ('qnet', 'qsol', 'sst_star', 'emp', 'dqdt', 'sss_star') if k in F)
+        if OM.jax:
+            F = {k: (v if isinstance(v, OM.jax.Array) else OM.np.asarray(np.asarray(v, np.float64)))
+                 for k, v in F.items()}
+        out = self._prep_forcing_core(F['taux'], F['tauy'], tuple(F[k] for k in keys), keys=keys)
+        tax, tay, rest = out[0], out[1], dict(zip(keys, out[2]))
+        return (tax, tay, rest.get('qnet'), rest.get('qsol'), rest.get('sst_star'), rest.get('emp'),
+                rest.get('dqdt'), rest.get('sss_star'))
+
+    @partial(OM.jaxjit, static_argnums=0, static_argnames=('keys',))
+    def _prep_forcing_core(self, tx, ty, fields, keys=()):
+        """interior forcing blocks -> padded, masked model fields; the stress
+        to U/V points, kinematic"""
+        ks = -self.halo-1
+        mT = self.maskT[ks]
+        tax, tay = self._tau_uv(pad_block(self, tx), pad_block(self, ty))
+        return tax, tay, tuple(pad_block(self, a)*mT for a in fields)
 
     @partial(OM.jaxjit, static_argnums=0)
     def _tau_uv(self, tx, ty):
@@ -1323,7 +1423,11 @@ class ocean_common(ni_common):
         self._d_int = d_int                                   # interface sink [W/m2], >= 0
         self._cd_rho = cdr
         self._u10, self._v10 = u10*mT, v10*mT
-        self._tau_rel_T = (self._int(trx), self._int(try_))                    # for the waves
+        # for the waves (the coupled hub): kept on the device, the interior
+        # is taken where it is sent -- an interior per step would be a
+        # device-to-host copy (and across processes an allgather) for nothing
+        # in the ocean alone
+        self._tau_rel_dev = (trx, try_)
         return trx, try_
 
     @partial(OM.jaxjit, static_argnums=0, static_argnames=('mode', 'has_uS'))
@@ -1370,8 +1474,13 @@ class ocean_common(ni_common):
         _forcing_core and stores what the diagnostics, the TKE closure and
         the restart need. The physics is documented in _forcing_core."""
         t = self._gitt*self.dt                       # model time of this step
-        (tax, tay, qqnet, qsol, tstar, fw,
-         qqnec, sstar) = self.surface_forcing_fields(t)
+        # sub-sections of the profiler (EXP_PROFILE=2): the forcing source
+        # (file reads, interpolation), the padding to model fields, the core
+        prof = getattr(self, '_prof', None)
+        sec = prof.section if prof is not None and prof.enabled else _nosection
+        with sec('pe.set_forcing: pad'):
+            (tax, tay, qqnet, qsol, tstar, fw,
+             qqnec, sstar) = self.surface_forcing_fields(t)
         z2 = OM.np.zeros_like(tax)
         z3 = OM.np.zeros_like(self.u)
         ice_tau = float(self.cfg.ICE_TAU_FRAC)
@@ -1384,16 +1493,17 @@ class ocean_common(ni_common):
                      direct=direct, vortex=vortex, shear=shear,
                      restoring=(qqnec is not None and tstar is not None),
                      has_sstar=sstar is not None, has_fw=fw is not None, has_qsol=qsol is not None)
-        out = self._forcing_core(
-            tax, tay,
-            qqnet, qsol if qsol is not None else z2, tstar if tstar is not None else z2,
-            fw if fw is not None else z2, qqnec if qqnec is not None else z2,
-            sstar if sstar is not None else z2,
-            self.u, self.v, self.w, self.temp, self.salt,
-            self.du, self.dv, self.dtemp, self.dsalt,
-            self.tau_work_x if sw else self.taux, self.tau_work_y if sw else self.tauy,
-            self.tau_in_x if direct else z2, self.tau_in_y if direct else z2,
-            self.u_S if vortex else z3, self.v_S if vortex else z3, **flags)
+        with sec('pe.set_forcing: core'):
+          out = self._forcing_core(
+              tax, tay,
+              qqnet, qsol if qsol is not None else z2, tstar if tstar is not None else z2,
+              fw if fw is not None else z2, qqnec if qqnec is not None else z2,
+              sstar if sstar is not None else z2,
+              self.u, self.v, self.w, self.temp, self.salt,
+              self.du, self.dv, self.dtemp, self.dsalt,
+              self.tau_work_x if sw else self.taux, self.tau_work_y if sw else self.tauy,
+              self.tau_in_x if direct else z2, self.tau_in_y if direct else z2,
+              self.u_S if vortex else z3, self.v_S if vortex else z3, **flags)
         (self.du, self.dv, self.dtemp, self.dsalt, stx, sty,
          self.forc_temp_surface, self.forc_salt_surface, self._sw_col,
          vortex_step, ss_step, w_p, tdx, tdy, ice_mask, p_SS) = out

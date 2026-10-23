@@ -35,7 +35,7 @@ import os, sys, datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
 import config as C
-from config import small_ocean, line, SyntheticForcing, _global_coords, HERE, WORK, RHO_0, RHO_AIR
+from config import small_ocean, line, SyntheticForcing, _global_coords, HERE, WORK, RHO_0, RHO_AIR, EXACT
 import forcing_base as fb
 import pyOM3 as OM
 
@@ -177,7 +177,7 @@ def t_relwind():
     mT = np.asarray(m.maskT)[ks]
     # at rest: tau_rel = tau_E where the floor and the cap are inactive
     m.surface_forcing_fields(t)
-    trx, try_ = m._tau_rel_T
+    trx, try_ = (m._int(a) for a in m._tau_rel_dev)       # the interior of the device fields
     s10 = np.hypot(F['u10'], F['v10']); tE = np.hypot(F['taux'], F['tauy'])
     free = (s10 >= float(m.cfg.STRESS_U10_MIN)) & (tE/np.maximum(s10, 1e-30)**2 < float(m.cfg.STRESS_CD_MAX)*RHO_AIR) & (mT[sl, sl] > 0)
     # the bulk formula keeps ERA5's MAGNITUDE and takes the direction of the
@@ -199,7 +199,7 @@ def t_relwind():
     u10 = np.zeros((m.Ny, m.Nx)); u10[sl, sl] = F['u10']; v10 = np.zeros((m.Ny, m.Nx)); v10[sl, sl] = F['v10']
     du, dv = (u10 - uo)*mT, (v10 - vo)*mT
     cdr = np.asarray(m._cd_rho); sd = np.hypot(du, dv)
-    trx, try_ = m._tau_rel_T
+    trx, try_ = (m._int(a) for a in m._tau_rel_dev)       # the interior of the device fields
     d = max(float(np.max(np.abs((cdr*sd*du)[sl, sl] - trx))), float(np.max(np.abs((cdr*sd*dv)[sl, sl] - try_))))/float(np.max(np.abs(trx)))
     ok &= line('18g tau = C_D rho_a |u10 - u_o| (u10 - u_o), u_o Eulerian top cell', d, 1e-15)
     m3 = _forced(relwind=True); m3.cfg._m.STRESS_UO = 'lagrangian'
@@ -240,7 +240,7 @@ def t_ice():
     ok &= line('18h heat and salt flux zero where frozen and cooling (%d cells)' % int(cool.sum()),
                float(np.max(np.abs(ft[cool]))) + float(np.max(np.abs(fs[cool]))) if cool.any() else 0.0, 0.0)
     ok &= line('18h momentum increment du = taux/dz at the surface level', float(np.max(np.abs(
-        np.asarray(m.du)[tau, ks][sl, sl] - (np.asarray(m.taux)/m._dz_surf*mU)[sl, sl]))), 0.0)
+        np.asarray(m.du)[tau, ks][sl, sl] - (np.asarray(m.taux)/m._dz_surf*mU)[sl, sl]))), EXACT)
     return ok
 
 

@@ -364,13 +364,38 @@ so a change to one branch shows in one line.
                     grids: mask, u*, udir, p_in, wind_work, E after one
                     step). About 3 min.
 
+    22  end to end  coupled/endtoend.py: run.py itself, the ocean alone, on
+                    run_setup.py (a configuration module in the form of
+                    icon15_setup.py on the test box, synthetic source, no
+                    input files), each run a process in _work/run_<name>:
+                    22a one segment of 0.5 d against two chained through
+                    the gathered restart, the final restart file bit for
+                    bit; 22b the same through the raw restart; 22c two MPI
+                    ranks (1x2) against the serial run, 1e-10; 22d (run_slow,
+                    `--jax`) PYOM3_BACKEND=jax, 1x1 and 2x2 shards, two
+                    segments, against the serial numpy run, 1e-10; 22e the
+                    SPLIT-EXPLICIT free surface (EXP_FREE_SURFACE=explicit):
+                    two segments = one through the gathered and the raw
+                    restart, bit for bit -- the restart carries the method's
+                    own state (2-D p_s, U_bt, V_bt, du_cor, dv_cor) -- and
+                    the restart of the other method is refused; 22f (`--jax`)
+                    the explicit run on jax against the numpy one, 1e-10;
+                    22h (`--jax`) jax 2x2 with the per-SHARD raw restart
+                    (EXP_RESTART_RAW=1, one block per device), two segments,
+                    against the serial numpy run, 1e-10;
+                    22g (`--jax`, needs mpirun) the same on TWO jax
+                    processes (one CPU device each, 2x1 shards,
+                    PYOM3_JAX_COORDINATOR): the multi-process layout of
+                    block_io and SoloComm, two segments through the
+                    gathered restart, against the one-process 2x1 run, 1e-10
+
 Not covered: the ERA5 readers (forcing_era5*.py: file sets of the prep
 scripts), the MPI block exchange between the components
 (coupler_mpi.BlockExchange, bx_coarse_test.py covers the coarsened one),
-coupler_loop's loops themselves (the test's `step` repeats their sequence),
-the atmosphere (exp_atmos.py), the near-inertial diagnostic (ni_diag.py),
-the mixed layer depth against a brute-force search, the KE budget's text
-file.
+the coupled loops run_wave/run_ocean (the test's `step` repeats their
+sequence; run_ocean_only is run by test 22), the atmosphere (exp_atmos.py),
+the near-inertial diagnostic (ni_diag.py), the mixed layer depth against a
+brute-force search, the KE budget's text file.
 
 THE JAX LAYOUT (Oct 20 2026, second delivery). Under MPI a process holds
 its block with one halo ring; under JAX one process holds the whole grid
@@ -420,6 +445,22 @@ the remainder being the forcing object (numpy) and the device transfer of
 its eight fields. Still op by op: the once-per-coupling-step diagnostics
 (stress_work_diag, stress_work_eul_diag, ocean_ke) and ke_budget (numpy
 by design).
+
+THE OCEAN ALONE ON JAX, END TO END (Oct 21 2026, fourth delivery). run.py
+runs on the jax backend without MPI: coupler_mpi.split_world returns a
+SoloComm (one process; every collective of the run control is the
+identity on it) with colour 1, run.py gives the model comm_in=None (its
+own jax decomposition), checks that EXP_NPX_OCEAN x EXP_NPY_OCEAN equals
+the devices jax sees, refuses EXP_WAVES=1 (the wave model cannot share the
+process) and writes the restart gathered (EXP_RESTART_RAW is ignored).
+The gathered ocean restart gathers with unpad and scatters with pad on
+that layout (coupler_io._gather/_scatter; the MPI path is unchanged and
+test 22c/20 cover it), so a jax run can start from or hand over to an MPI
+run's gathered restart. The raw per-rank restart works on jax as it is
+(it stores the padded layout, layout-bound as before). Known: the raw
+SNAPSHOT of the package (pe_simple/snapshot.py, `addressable_shards[0]`)
+writes only shard 0 of a multi-device single-process run, while the
+closure fields and the means in the same directory are global.
 
 Writing it found (Oct 20 2026; 1, 2 and 3 FIXED the same day in
 exp_ocean.py, the rest as stated):
@@ -1026,8 +1067,9 @@ preconditioner (1000-3500 without it in this box).
                              budget, halo; benchmarks (slow); the sphere and ecwam slow
                              tests stay in wim_realistic/development/
         coupled/             golden (+ golden.json), forcing, identities, restart,
-                             halo, wave, decomposition (+ run_decomposition),
-                             jax_backend (slow); _work/ holds the run files
+                             halo, wave, endtoend (+ run_setup), decomposition
+                             (+ run_decomposition), jax_backend (slow); _work/
+                             holds the run files
 
 The harnesses of tests 1, 5 and 8 exist already in
 `pyOM3/pe_realistic/development/` and in the mixing-length work; tests 2, 3,
