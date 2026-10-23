@@ -13,6 +13,12 @@ Persian Gulf removed. `grid_topo.nc` is read as it stands.
     dxt = 1/3 deg, dyt variable 0.067 to 0.118 deg (cells stay near square)
     dzt 2.05 m at the surface to 197 m at 6100 m
     461,088 wet surface cells
+    cells 37 km at the equator, 7.4 km at the southern edge
+
+Compared by the triangle height, the R2B7 source is about 26 km
+(`../README.md`, "Resolution against the Icon source grids"). This grid is
+coarser than its source only equatorward of about 45 deg. Poleward of that it
+resolves the flow more finely than the Icon bathymetry it carries.
 
 ## Physics
 
@@ -20,13 +26,30 @@ Taken from `setup1.f90` where the resolution decides, from the calibrated
 global4 set where the closure does.
 
     dt = 216 s, AB2 with eps 0.1, superbee advection
+    tracer advection outside the AB step, 2 vertical sub-steps
+        (EXP_VADV_SUB_CYCLING 2, set in both batch scripts)
     biharmonic friction A_hbi = 2e11, cosPower 1.5 per Laplacian pass
     NO harmonic friction, NO isoneutral diffusion, NO GM (eddy permitting)
     TEOS-10 (eq_of_state 5)
-    implicit free surface, CG epsilon 1e-9 (90 to 100 iterations per step)
+    free surface: implicit, CG epsilon 1e-9 (90 to 100 iterations per step),
+        or split-explicit, 24 sub steps, forward-backward theta 0.5
+        (EXP_FREE_SURFACE)
     free_surface_tracer_flux = True          <- see FINDINGS
     TKE: alpha_CB 100, mxl_choice 2 (NEMO), mxl_beta 2e4, alpha_tke 2
-    kappaH_min 1e-5, r_bot 1e-5
+    kappaH_min 1e-5, r_bot 1e-5, quadratic bottom friction r_quad_bot 2.5e-3
+        <- see FINDINGS
+    surface stress: relative wind with ERA5's drag coefficient
+        (EXP_STRESS_MODE relwind, EXP_STRESS_UO lagrangian)
+
+The vertical advective CFL w dt/dz in the 2.05 m top cell is 0.53 at
+w = 5 mm/s. That is what the split tracer advection is for.
+
+The split-explicit free surface replaces the CG by sub steps of the 2-D
+external mode, with no global reduction. The external wave has
+c = sqrt(g H) = 245 m/s at 6100 m, so c dt/dx = 7.1 on the 7.4 km cell. 24
+sub steps give a sub-step CFL of 0.30. It runs for the ocean alone, and the
+KE budget must be off with it. A restart of one method cannot be read by a
+run with the other.
 
 IDEMIX is on in `setup1.f90` and pe_realistic has no internal-wave module, so
 the interior mixing is the TKE closure above the `kappaH_min` floor and
@@ -43,9 +66,13 @@ block while the run goes on: a 1/3 degree copy of a 0.28 degree field is more
 storage and no more information. All nine fields are in one set, the six flux
 fields, sst, and e and tp for the freshwater flux.
 
-The ERA5 turbulent surface stress is the one tau_a of the experiment: the
-wave u*, the ocean direct branch and, without waves, the ocean surface stress
-all derive from it. Heat flux Q = sshf + slhf + ssr + str + dQ/dT (SST_ERA5 -
+The 10 m wind is a second set, `era5_icon033w_YYYY-MM.nc`, beside the first
+(`prep_era5_native.py --fields u10,v10 --tag icon033w`). The surface stress
+is the relative-wind bulk formula (`EXP_STRESS_MODE relwind`). It keeps
+ERA5's drag coefficient C_D rho_a = |tau_ERA5|/|u10|^2 and forms the stress
+from the wind relative to the surface velocity u_L
+(`EXP_STRESS_UO lagrangian`). In a coupled run the waves take this stress
+from the ocean. `EXP_STRESS_MODE era5` takes the ERA5 stress as it is. Heat flux Q = sshf + slhf + ssr + str + dQ/dT (SST_ERA5 -
 SST), with ssr penetrating; dQ/dT from `ecmwf_surface_forcing.nc` and the SSS
 restoring target from `woa_surface_forcing.nc`, both monthly climatologies of
 the pyOM2 setup.
@@ -97,6 +124,11 @@ under-forced against its ocean-alone twin.
     wave dt 36 s, sub_cycle 6, CFL 0.107 against the certified 0.125
     the narrowest cell is 7.4 km; only divisors of 216 s are available
 
+`EXP_WAVE_COARSEN = C` puts the waves on the ocean grid coarsened by C. At
+C = 2 the wave grid is 540 x 345, the wave step 72 s and the sub-cycle 3.
+That is the setting of the coupled runs. The coupled mode keeps the implicit
+free surface (`run.py` stops otherwise).
+
 The exchange is BLOCK TO BLOCK over the intercommunicator
 (`coupler_mpi.BlockExchange`): each rank sends its own block straight to the
 ranks that own those cells. Nothing is assembled on rank 0 except the
@@ -134,28 +166,45 @@ else (`run.py` puts the run directory LAST on the path, so a stale copy of a
 shared file there cannot shadow the shared one — delete any `run.py`,
 `coupler_*.py`, `forcing_*.py`, `block_io.py` left from the old layout):
 
-    icon033_spinup    10 y repeat year, 1990-05-01, EXP_FORCING_CYCLE_DAYS 365
+    icon033_spinup    repeat year, 1990-05-01, EXP_FORCING_CYCLE_DAYS 365
                       run.sh: python3 -u ../coupled_common/run.py on 72 x 13
     icon033_gpu       the same ocean alone on the JAX backend, run_gpu.sh
     icon033_ocean     1991-05-01 to 2000-04-30, from the spinup restart
     icon033_coupled   the same period and the same ocean start, with waves
+
+The spinup chain stops at the checkpoints 5, 6, 7, 8, 10, 15 and 20 years
+(`CHECKPOINTS` in the script). There it copies the restart and its `_pe`
+directory to `icon033_restart_ocean_y<N>` and resubmits toward the next one.
+
+`run.sh` and `run_gpu.sh` run the same experiment: the same forcing, time
+step, split, free surface and stress. `set FS` at the top of `run.sh`
+chooses the free surface, `explicit` as on the GPU. A restart of one method
+is refused by a run with the other. So a chain written with the implicit
+free surface, which the CPU runs so far are, continues only with
+`FS = implicit`, and a coupled branch cannot start from an explicit spinup.
 
 `TEST=1` (`--export=ALL,TEST=1`) runs 0.2 model days in two segments to
 check an installation; it is the default of `run_gpu.sh`.
 
 ### On the GPU (`run_gpu.sh`)
 
-One process on the four GPUs of one Levante GPU node, `PYOM3_BACKEND=jax`.
+The ocean alone on the JAX backend, one process per GPU over N Levante GPU
+nodes, `PYOM3_BACKEND=jax`, with the split-explicit free surface.
 `EXP_NPX_OCEAN x EXP_NPY_OCEAN` is the shard layout and must equal the
-device count; a shard is an exact division of the grid, and 689 = 13 x 53
-does not divide by 2 or 4, so four GPUs are **4 x 1** (13 x 1 would be the
-next exact layout). The restart is always the GATHERED form there (`run.py`
-forces it): the raw 72 x 13 restart of the spinup cannot be read on the GPU,
-so a GPU continuation starts from a gathered restart through
-`EXP_INIT_OCEAN`. The wave model is not available on this backend. Memory
-is not the issue (762 MB per 3-D field, 190 MB per shard); the first step
-compiles and the s/step the profiler reports afterwards sizes
-`EXP_SEGMENT_DAYS`. Not measured yet.
+number of GPUs. A shard is an exact division of the grid, and 689 = 13 x 53
+does not divide by 2 or 4, so N nodes are **4N x 1** shards, and N must
+divide 1080/4 = 270: N = 1, 2, 3, 5, 6, 9, 10 (not 4, 7, 8). The script
+takes the layout from the node count.
+
+The restart is raw PER SHARD (`EXP_RESTART_RAW 1`), one block per GPU. It
+can be read on any process count with the same shard layout. An MPI restart
+of the CPU runs cannot be continued on the GPU: its layout is per rank, and
+its free surface is implicit. The wave model is not available on this
+backend. Memory is not the issue (762 MB per 3-D field, 190 MB per shard).
+
+Measured: **0.12 s per step on 2 nodes (8 GPUs)**, 0.8 min per model day,
+4.8 h per model year, 5 model years per day. That is four times the CPU run
+on 8 nodes.
 
 Decomposition, ocean: **72 x 13 = 936 ranks**, blocks of exactly 15 x 53
 (1080 = 2^3 3^3 5, 689 = 13 x 53). Ragged blocks cost a factor: 64 x 16 on
@@ -170,7 +219,11 @@ Measured: ocean alone **0.47 s per step** on 936 ranks (3.2 min per model day,
 (64 x 64) + 936 ocean on 40 nodes: 5.7 min per model day, 34 h per model
 year. The ocean idles 26 % waiting for the waves; the wave leaders are
 `Sinput` (182 ms, two Janssen passes per sub-step) and `apply_bc` (181 ms
-over 15 halo exchanges per sub-step).
+over 15 halo exchanges per sub-step). With the wave grid coarsened by 2,
+**0.64 s per coupling step** with 1024 wave + 936 ocean ranks, 4.2 min per
+model day, 26 h per model year. The ocean step is then the limit, not the
+waves. These CPU numbers are with the implicit free surface. The
+split-explicit one has not been timed on the CPU.
 
 ## Findings
 
@@ -205,6 +258,14 @@ Worth keeping, in the order they bit.
    deadlock.
 6. The A2d wave alarm compares a cell with its own PE's median, so it loses
    meaning as the blocks shrink; below `A2D_MIN_LIVE` cells it is disarmed.
+7. **The coupled branch crashed at model day 527** with a wave CFL alarm in
+   the Skagerrak (7.33E/56.61N, a 35 m column). The cause was a barotropic
+   coastal jet along the North Sea coast into the Skagerrak, 4.9 m/s, with
+   1.6 m SSH set-down in the Kattegat. The ocean-alone spinup has the same
+   jet and survives it. The vertical CFL was not the cause (at most 0.26).
+   Only the linear r_bot = 1e-5 opposed the surge, a nine-day damping on a
+   35 m shelf. Quadratic bottom friction, r_quad_bot = 2.5e-3, was added. The
+   restarted branch ran past it.
 
 ## Open
 
@@ -216,7 +277,6 @@ Worth keeping, in the order they bit.
   the Fortran kernels and its limit is unmeasured.
 * the wave snapshot's `t.npy` is offset by `EXP_SPINUP_DAYS` (the spinup
   advances the wave step counter at t = 0).
-* next configuration: 0.1 degree ocean coupled to a COARSER wave grid. The
-  exchange is index-based and assumes one shared grid; a conservative,
-  mask-aware remapping is needed, and it is exact and trivial only if the
-  wave grid is an integer coarsening of the ocean grid (0.3, not 1/3).
+* the coarser wave grid is done (`EXP_WAVE_COARSEN`, an integer coarsening
+  of the ocean grid, see `../coupled_common/README.md`). It is what
+  `../icon_0.1deg` uses at C = 3.

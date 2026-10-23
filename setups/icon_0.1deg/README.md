@@ -16,6 +16,11 @@ it stands.
     cells 11.1 km at the equator, 2.22 km at the southern edge, in BOTH
     directions
 
+The grid is finer than its Icon source at all latitudes. Compared by the
+triangle height, R2B8 is about 13 km (`../README.md`, "Resolution against
+the Icon source grids"). So the grid resolves the flow more finely than the
+Icon bathymetry it carries, everywhere.
+
 It is icon033 on a finer grid. The machinery is the shared one
 (`../coupled_common`, `../forcing_common`), the setup module is
 `icon033_setup.py` with four numbers changed, and everything written in
@@ -27,14 +32,26 @@ here. This file says what is different and what the size costs.
 Taken from `setup1.f90` where the resolution decides, from the calibrated
 global4 set where the closure does.
 
-    dt = 36 s, AB2 with eps 0.1, superbee advection
+    dt = 144 s (run scripts; the module default is setup1.f90's 36 s)
+    tracer advection outside the AB step, 2 vertical sub-steps
+        (EXP_VADV_SUB_CYCLING 2), AB3 (EXP_OCEAN_AB 3), superbee advection
     biharmonic friction A_hbi = 2.7e10, cosPower 1.5 per Laplacian pass
     NO harmonic friction, NO isoneutral diffusion, NO GM (eddy resolving)
     TEOS-10 (eq_of_state 5)
-    implicit free surface, CG epsilon 1e-9
+    free surface: implicit, CG epsilon 1e-9, or split-explicit,
+        48 sub steps, forward-backward theta 0.5 (EXP_FREE_SURFACE)
     free_surface_tracer_flux = True
     TKE: alpha_CB 100, mxl_choice 2 (NEMO), mxl_beta 2e4, alpha_tke 2
-    kappaH_min 1e-5, r_bot 1e-5
+    kappaH_min 1e-5, r_bot 1e-5, quadratic bottom friction r_quad_bot 2.5e-3
+    surface stress: relative wind with ERA5's drag coefficient
+        (EXP_STRESS_MODE relwind, EXP_STRESS_UO lagrangian)
+
+The split-explicit free surface replaces the CG by sub steps of the 2-D
+external mode, with no global reduction. The external wave has
+c = sqrt(g H) = 245 m/s at 6100 m, so c dt/dx = 15.9 on the 2.22 km cell
+at 144 s. 48 sub steps keep the sub-step CFL near 0.3. It runs for the
+ocean alone, and the KE budget must be off with it. A restart of one method
+cannot be read by a run with the other.
 
 IDEMIX is on in `setup1.f90` and pe_realistic has no internal-wave module, so
 the interior mixing is the TKE closure above the `kappaH_min` floor and
@@ -45,16 +62,18 @@ the two Laplacian passes included,
 
     S = A cos^3 dt (4/dx^2 + 4/dy^2)^2 / 2  <=  1 ,
 
-peaks at S = 0.010 at the southern edge, where the cells are 2.2 km and cos^3
-is 8e-3. icon033 runs at 0.004. The friction is not what limits the step.
+peaks at S = 0.010 at 36 s and 0.04 at 144 s, at the southern edge, where
+the cells are 2.2 km and cos^3 is 8e-3. icon033 runs at 0.004. The friction
+is not what limits the step.
 
-## THE TIME STEP, and why it is the first thing to test
+## THE TIME STEP
 
-36 s is `setup1.f90`'s `dt_mom = 144.0/4`, and it decides the cost of the
-whole experiment: 2400 ocean steps per model day.
+36 s is `setup1.f90`'s `dt_mom = 144.0/4`. It would be 2400 ocean steps per
+model day. The runs use 144 s, 600 steps per model day.
 
-It is not set by anything horizontal. POP runs the same 1/10 degree spacing
-(3600 x 2163, narrowest cell 2234 m against 2220 m here) at **216 s**.
+The step is not set by anything horizontal. POP runs the same 1/10 degree
+spacing (3600 x 2163, narrowest cell 2234 m against 2220 m here) at
+**216 s**.
 
 | | POP | icon01 |
 |---|---|---|
@@ -71,38 +90,61 @@ and 0.09 at 36 s, and everything that divides a surface flux by the top cell
 thickness. The fortran line reads `144.0/4`, i.e. the value was walked down
 rather than computed.
 
-So 36 s may be conservative by a factor of two or three. **Run the TEST three
-times with `EXP_OCEAN_DT` 36, 72 and 108** and compare the canary and the
-identity line before committing an allocation. Every factor on the step is
-the same factor on the cost. Coupled, the wave step follows the ocean step:
-at 108 s with c = 3 the default wave step is 36 s and the sub-cycle 3, so only
-the ocean gets cheaper.
+What happened, in order:
+
+1. **144 s crashed after six model days**, then again after four from a
+   cold start. The signature was a two-cell vertical sawtooth in salinity on
+   the Amundsen shelf (-150.2E/-76.25S), from 15 m down, with temperature
+   smooth. w reached 2 cm/s where the cells are 4.6 m, so w dt/dz = 0.64.
+   That w is w = u.grad(H) on the 2.2 km staircase slope. It scales with
+   1/dx, so the vertical CFL scales with dt/dx although the vertical grid is
+   icon033's.
+2. **72 s ran stably.** The domain maximum of w dt/dz was 0.20 after ten
+   days.
+3. **144 s runs with the tracer advection split off the AB step**
+   (`EXP_VADV_SUB_CYCLING 2`) and AB3 (`EXP_OCEAN_AB 3`), from a cold start.
+   The tracer limit is then w dt/dz below M = 2. The cold-start adjustment
+   reached w dt/dz = 1.14 on days 3 to 5 and fell below 0.5 by day 8. The run
+   went through its first austral winter, with w dt/dz up to 1.54 in the
+   Amundsen column again.
+
+The momentum is not split. Its AB3 limit is 0.72, and above it the momentum
+is held by friction, not by the scheme. Keep `EXP_CANARY_CFL 1` on. If a
+later winter goes toward w dt/dz = 2, M = 3 is cheap insurance. The clean
+answer for the momentum is an adaptive-implicit vertical advection
+(Shchepetkin 2015), not built.
+
+Coupled, the wave step follows the ocean step. At 144 s the default wave
+step is 36 s at C = 3, so the wave model sub-cycles 4 times.
 
 ## Cost
 
-By the icon033 scaling (0.47 s per step at 101,760 cells per rank) the ocean
-alone is about 0.6 s per step on the 7650 ranks below:
+Measured, ocean alone on 7650 ranks with the implicit free surface:
 
-    26 minutes per model DAY
-    6 days of wall clock per model YEAR
-    an 8 hour job advances about 18 model days
+| dt | per step | per model day | per model year | 8 h job |
+|---|---|---|---|---|
+| 72 s | 0.84 s | 17 min | 4.2 d | 28 model days |
+| 144 s, split, AB3 | 1.04 s | 10.4 min | 2.6 d | 46 model days |
 
-On 10200 ranks (80 nodes) roughly 19 minutes per model day. A ten-year spinup
-is not a thing this configuration does. Plan in model months, start from an
-interpolated icon033 state rather than from rest if you can, and measure one
-segment before committing anything.
+The split costs 9 % per step against the unsplit model at the same dt.
+The split-explicit free surface has not been timed on the CPU, and the GPU
+version (`run_gpu.sh`) has not been timed yet.
 
 ## Forcing
 
-Hourly ERA5, its own set `era5_icon01_YYYY-MM.nc` in `../era5_icon01`, built
-by `prep_era5_native.py`. The files stay ON THE ERA5 GRID and the model
-interpolates each record to a rank's block while the run goes on
-(`forcing_common/forcing_era5_native.py`): 22 GB per month there, against ten
-times that on the model grid. All nine fields are in one set.
+Hourly ERA5, icon033's set `era5_icon033_YYYY-MM.nc` in
+`/work/uo0780/u241155/pyOM3_real/era5_icon033`, and the 10 m wind as the set
+`era5_icon033w_YYYY-MM.nc` beside it. The files stay ON THE ERA5 GRID and the
+model interpolates each record to a rank's block while the run goes on
+(`forcing_common/forcing_era5_native.py`). They carry nothing about the model
+grid, so icon033's set serves this grid unchanged: 22 GB per month there,
+against ten times that on the model grid.
 
-The ERA5 turbulent surface stress is the one tau_a of the experiment: the wave
-u*, the ocean direct branch and, without waves, the ocean surface stress all
-derive from it. Heat flux Q = sshf + slhf + ssr + str + dQ/dT (SST_ERA5 -
+The surface stress is the relative-wind bulk formula
+(`EXP_STRESS_MODE relwind`). It keeps ERA5's drag coefficient
+C_D rho_a = |tau_ERA5|/|u10|^2 and forms the stress from the wind relative to
+the surface velocity u_L (`EXP_STRESS_UO lagrangian`). In the coupled mode the
+waves take this stress from the ocean. Heat flux Q = sshf + slhf + ssr + str + dQ/dT (SST_ERA5 -
 SST), with ssr penetrating; dQ/dT from `ecmwf_surface_forcing.nc` and the SSS
 restoring target from `woa_surface_forcing.nc`, both monthly climatologies of
 the pyOM2 setup.
@@ -119,8 +161,8 @@ Measure both over the period the run uses and set them. **The values in the
 run script are icon033's and are NOT this grid's.**
 
     python3 ../forcing_common/measure_era5_offsets.py 1990-05 1991-04 \
-            --grid grid_topo.nc --dir ../era5_icon01 --tag icon01 \
-            --stride 7 --workers 16
+            --grid grid_topo.nc --dir /work/uo0780/u241155/pyOM3_real/era5_icon033 \
+            --tag icon033 --stride 7 --workers 16
 
 ## Input files
 
@@ -158,21 +200,33 @@ means a fill crossed a sill).
 (`coupler_mpi.py`): a wave cell is C x C ocean cells, its faces are ocean cell
 faces, and nothing is interpolated between the two grids.
 
+At the ocean step of 144 s:
+
 | C | wave grid | cells | narrowest | wave dt | sub-cycle | wave PEs |
 |---|---|---|---|---|---|---|
-| 1 | 3600 x 2295 | 5.15 M wet | 2.2 km | 12 s | 3 | not affordable |
-| 2 | 1800 x 1147 | 1.29 M wet | 4.4 km | 18 s | 2 | not affordable |
-| 3 | 1200 x 765 | 578 k wet | 6.7 km | 36 s | 1 | 30 x 45 |
-| 4 | 900 x 573 | 326 k wet | 8.9 km | 36 s | 1 | 24 x 32 |
+| 1 | 3600 x 2295 | 5.15 M wet | 2.2 km | 12 s | 12 | not affordable |
+| 2 | 1800 x 1147 | 1.29 M wet | 4.4 km | 24 s | 6 | not affordable |
+| 3 | 1200 x 765 | 578 k wet | 6.7 km | 36 s | 4 | 30 x 45 |
+| 4 | 900 x 573 | 326 k wet | 8.9 km | 48 s | 3 | 24 x 32 |
+
+The default wave step is the largest divisor of the ocean step not above
+12 C seconds.
 
 **C = 3 is the setting.** 3600 and 2295 both divide by 3, so no wave row or
-column is ragged; the wave cells are 6.7 km, finer than the 14.8 km the
-icon033 coupled test ran with; and from C = 3 the wave model steps ONCE per
-ocean step, so there is no sub-cycling left to save.
+column is ragged, and the wave cells are 6.7 km, finer than the 14.8 km the
+icon033 coupled test ran with.
 
 The wave PE counts are estimates scaled from the icon033 C = 2 measurement
-(1024 wave ranks, 0.64 s per coupling step). Read the two idle percentages in
-the log (`load wave`, `load ocean`) and move ranks between the groups.
+(1024 wave ranks, 0.64 s per coupling step). They were made for an ocean
+step of 36 s, when the wave model stepped once per ocean step. At 144 s the
+ocean step is four times cheaper per model day and the wave work is the
+same, so the wave group needs more ranks against the ocean group. Read the
+two idle percentages in the log (`load wave`, `load ocean`) and move ranks
+between the groups.
+
+The coupled mode keeps the implicit free surface (`run.py` stops
+otherwise). The relative-wind stress together with `EXP_DIRECT_BRANCH 1` has
+not been run at this resolution. Run `TEST=1` first.
 
 The ocean's prognostic velocity becomes the Lagrangian mean u_L, its surface
 stress becomes tau_o from the wave field, and the TKE surface flux and
@@ -182,15 +236,29 @@ coupled ocean is under-forced against its ocean-alone twin.
 
 ## Running
 
-Three directories, each with `icon01_setup.py`, `run_icon01.sh` and the input
+Three directories, each with `icon01_setup.py`, `run.sh` and the input
 files. The mode is the last part of the directory name:
 
-    icon01_spinup     ocean alone, repeat year from 1990-05-01
+    icon01_spinup     ocean alone, 10 y repeat year from 1990-05-01
     icon01_ocean      ocean alone, 1991-05-01 on, from the spinup restart
     icon01_coupled    the same period and the same ocean start, with waves
 
-`TEST = 1` (the default) is 0.2 model days in two 0.1 day segments, about five
-minutes, and it exercises the restart. `TEST = 0` is production.
+`run.sh` and `run_gpu.sh` run the same experiment: the same forcing, time
+step, split, AB3, canary and stress. `TEST = 1` is 0.2 model days in two 0.1
+day segments, and it exercises the restart. `TEST = 0` (the default of
+`run.sh`) is production.
+
+The chain stops at every whole model year. There it copies
+`icon01_restart_ocean.nc` and its `_pe` directory to `_y<N>` and resubmits
+toward the next year.
+
+**The free surface.** `set FS` at the top of `run.sh` chooses it for the two
+ocean-alone modes, `explicit` as on the GPU. The coupled mode is always
+implicit. A restart of one method is refused by a run with the other. So a
+chain written with the implicit free surface continues only with
+`FS = implicit`, and the coupled branch cannot start from an explicit
+spinup. With the `ocean` branch explicit and the `coupled` branch implicit,
+the two branches also differ in the free surface, not only in the waves.
 
 Ocean decomposition: **90 x 85 = 7650 ranks**, blocks of exactly 40 x 27
 (3600 = 2^4 3^2 5^2, 2295 = 3^3 5 17). Ragged blocks cost a factor, so stay on
@@ -204,7 +272,7 @@ divisors. Other exact ones:
 The header asks for the 60 nodes the default layout holds. The coupled mode
 needs its own count:
 
-    sbatch --nodes=71 --ntasks=9088 --export=ALL,TEST=0,C=3 run_icon01.sh
+    sbatch --nodes=71 --ntasks=9088 --export=ALL,TEST=0,C=3 run.sh
 
 With `EXP_RESTART_RAW = 1` the restart is a set of per-rank blocks and can
 only be read on the layout that wrote it, so a branch must keep the spinup's.
@@ -216,6 +284,26 @@ Set
     OMP_NUM_THREADS 1, MKL_NUM_THREADS 1, OPENBLAS_NUM_THREADS 1
     srun --cpu_bind=cores --distribution=block:cyclic
     OMPI_MCA_opal_common_ucx_opal_mem_hooks 1
+
+### On the GPU (`run_gpu.sh`)
+
+The ocean alone on the JAX backend, one process per GPU over several
+Levante GPU nodes (`PYOM3_BACKEND=jax`), with the split-explicit free
+surface. `EXP_NPX_OCEAN x EXP_NPY_OCEAN` is the shard layout and must equal
+the number of GPUs. A shard is an exact division of the grid, so the script
+takes the layout from the node count: 6 nodes are 8 x 3, and the table in
+the script lists the others. A node count without an exact layout stops the
+script.
+
+The restart is raw PER SHARD (`EXP_RESTART_RAW 1`), one block per GPU. It
+can be read on any process count with the same shard layout. The gathered
+form would collect 8.5 GB per field on every process and is impossible
+here. An MPI restart of the CPU runs cannot be continued on the GPU: its
+layout is per rank, and its free surface is implicit.
+
+`TEST = 1` (the default of `run_gpu.sh`) runs 0.2 model days from a cold
+start, about 10 minutes on 6 nodes with the compilation. Not timed in
+production yet.
 
 ## Output, and how much of it there is
 
@@ -258,7 +346,8 @@ space only where you mean to use it.
 
 ## Open
 
-* the time step, see above. This is the one that matters.
+* the momentum's vertical advection at 144 s, see above. It runs above its
+  AB3 limit in the Antarctic shelf columns in winter, held by friction.
 * the coupling-file record is the last rank-0 gather in the coupler
   (`gather_unpadded_mpi` on `u_S` in `run_wave`). On this grid at C = 3 that
   is a 1.9 GB assembly on wave rank 0 per written record (17 GB at C = 1). It works at the
