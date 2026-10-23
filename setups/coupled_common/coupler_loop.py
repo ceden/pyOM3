@@ -1029,9 +1029,8 @@ def run_ocean(M, cfg, comm, intercomm, active):
                   % (dke, wvfr, -kdv, wvnum,
                      abs(wvfr + kdv + wvnum)/max(abs(kdv), 1e-30), whf), flush=True)
         if (n + 1) % 100 == 0 and getattr(M, 'enable_tke', False):
-            ftke = float(np.sum(M.forc_tke_surface[hb, hb]*M.area_t[0][hb, hb]))
+            ftke = float(np.sum(local_shard(M, M.forc_tke_surface*M.area_t[0])[0]))
             if comm.Get_size() > 1:
-                from mpi4py import MPI as _MPI
                 ftke = comm.allreduce(ftke, op=_MPI.SUM)
             if comm.Get_rank() == 0:
                 print('tke closure: domain-int surface TKE forcing %.4e m^5/s^3 '
@@ -1117,9 +1116,9 @@ def run_ocean_only(M, cfg, comm, active):
             M.diagnose(n, tau)
         tau, taum1, taum2 = np.mod(tau+1, 3), np.mod(taum1+1, 3), np.mod(taum2+1, 3)
         if (n + 1) % 100 == 0 and getattr(M, 'enable_tke', False):
-            ftke = float(np.sum(M.forc_tke_surface[hb, hb]*M.area_t[0][hb, hb]))
+            # this process's block only (a shard on jax), summed over the processes
+            ftke = float(np.sum(local_shard(M, M.forc_tke_surface*M.area_t[0])[0]))
             if comm.Get_size() > 1:
-                from mpi4py import MPI as _MPI
                 ftke = comm.allreduce(ftke, op=_MPI.SUM)
             if comm.Get_rank() == 0:
                 print('tke closure: domain-int surface TKE forcing %.4e m^5/s^3'

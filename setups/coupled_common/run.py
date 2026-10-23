@@ -407,25 +407,33 @@ elif color == 1:                                 # ---- ocean ----
                  # parsed it, from whatever environment name it reads
                  average_mode if average_mode else 'off'), flush=True)
     # coupling fields on the local (haloed) grid. Ocean alone they stay zero
-    # (taux/tauy then hold tau_a), so the restart has the same content
-    M.u_S = OM.np.zeros((M.Nz, M.Ny, M.Nx), np.float64)
-    M.v_S = OM.np.zeros((M.Nz, M.Ny, M.Nx), np.float64)
+    # (taux/tauy then hold tau_a), so the restart has the same content.
+    # On jax they are laid out on the model's mesh like its own fields: a
+    # plain zeros would be one WHOLE field on every device (8 GB at 1/10
+    # degree, the OOM of the first icon01 job)
+    def _zeros(*shape):
+        if OM.jax:
+            sharding = M.sharding_3D if len(shape) == 3 else M.sharding_2D
+            return OM.np.zeros(shape, np.float64, device=sharding)
+        return np.zeros(shape, np.float64)
+    M.u_S = _zeros(M.Nz, M.Ny, M.Nx)
+    M.v_S = _zeros(M.Nz, M.Ny, M.Nx)
     if use_stress_work:
-        M.tau_work_x = OM.np.zeros((M.Nz, M.Ny, M.Nx), np.float64)
-        M.tau_work_y = OM.np.zeros((M.Nz, M.Ny, M.Nx), np.float64)
+        M.tau_work_x = _zeros(M.Nz, M.Ny, M.Nx)
+        M.tau_work_y = _zeros(M.Nz, M.Ny, M.Nx)
     else:
-        M.taux = OM.np.zeros((M.Ny, M.Nx), np.float64)
-        M.tauy = OM.np.zeros((M.Ny, M.Nx), np.float64)
+        M.taux = _zeros(M.Ny, M.Nx)
+        M.tauy = _zeros(M.Ny, M.Nx)
     # wave->ocean dissipation energy flux (surface TKE flux for the closure)
-    M.phi_oc = OM.np.zeros((M.Ny, M.Nx), np.float64)
+    M.phi_oc = _zeros(M.Ny, M.Nx)
     # wind->wave input stress (diagnostic; consumed by the optional direct
     # branch in set_forcing)
-    M.tau_in_x = OM.np.zeros((M.Ny, M.Nx), np.float64)
-    M.tau_in_y = OM.np.zeros((M.Ny, M.Nx), np.float64)
+    M.tau_in_x = _zeros(M.Ny, M.Nx)
+    M.tau_in_y = _zeros(M.Ny, M.Nx)
     # significant wave height from the wave model; with EXP_HS_FACTOR > 0
     # and mxl_choice = 2 it sets the surface mixing length (NEMO ln_mxhsw)
     if waves:
-        M.hs = OM.np.zeros((M.Ny, M.Nx), np.float64)
+        M.hs = _zeros(M.Ny, M.Nx)
 
 elif color == 2 and atmos:                       # ---- ATMOSPHERE ---- (colour 2 is IDLE without one)
     M = setup.atmosphere(setup.get_atmos_parameter(), n_pes_x=n_pes_x_atmos,
