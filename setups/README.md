@@ -1,10 +1,10 @@
-# pyOM3 simple experiments
+# simple experiments
 
 in `setups/simple` in number of simple idealised configuration are stored either
 as jupyter notebook or python script.
 
 
-# pyOM3 idealised experiments
+# idealised experiments
 
 a few more complex idealised experiments are found in:
 
@@ -21,25 +21,21 @@ a few more complex idealised experiments are found in:
 `setups/hs_coupled`  Held/Suarez idealised atmosphere coupled to surface wave and ocean model
 
 
-# pyOM3 realistic coupled experiments
+# realistic coupled experiments
 
 Wave-ocean coupled configurations of pyOM3: a spectral wave model
 (`wim_realistic`) on the same horizontal grid as a primitive-equation ocean
 (`pe_realistic`), or on an integer coarsening of it, with the ocean carrying
 the Lagrangian mean velocity.
 
-    pyOM3/
-      pyOM3/              the package
-      setups/             THIS directory
-        README.md         this file
-        coupled_common/   driver, coupler, the shared model classes
-        forcing_common/   the forcing plug-ins and the input readers
-        global4_era5/     one directory per configuration
-        icon_1.5deg/
-        icon_0.33deg/
-        icon_0.1deg/
-        pop/
-        acc/  column/  langmuir/  hs_atmos/  hs_coupled/  coupled_acc/
+`setups/coupled_common/`  driver, coupler, the shared model classes
+
+`setups/forcing_common/`  the forcing plug-ins and the input readers
+
+`setups/icon_0.33deg/`   eddy-permitting surface-wave/ocean model
+
+`setups/icon_0.1deg/`    eddy-resolving surface-wave/ocean model
+
 
 On Levante the same thing is flatter: one directory per RUN beside
 `coupled_common` and `forcing_common` (`icon033_spinup`, `icon033_ocean`,
