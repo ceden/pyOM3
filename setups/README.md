@@ -51,6 +51,29 @@ not use the machinery described below: `acc/` and `coupled_acc/` (the
 idealised ACC channel), `column/`, `langmuir/`, `hs_atmos/` and `hs_coupled/`
 (the Held-Suarez atmosphere and its coupled version).
 
+**Resolution against the Icon source grids.** icon033 and icon01 are
+interpolated from the Icon-O R2B7 and R2B8 grids onto Mercator grids, so
+their cells are square and shrink with cos(latitude). The Icon triangles
+are nearly uniform, about 20 km (R2B7) and 10 km (R2B8) by Icon's nominal
+measure. That measure is too fine for a comparison with a quadrilateral
+grid. Danilov (2022, JAMES) shows that the triangle height
+h = 1.32 sqrt(cell area) is the length that compares with a quadrilateral
+cell side. This gives the Icon columns of the table.
+
+| latitude | R2B7, h | icon033 | R2B8, h | icon01 |
+|---|---|---|---|---|
+| equator | 26 km | 37 km | 13 km | 11.1 km |
+| 60 deg | 26 km | 18.6 km | 13 km | 5.6 km |
+| 70 deg | 26 km | 12.7 km | 13 km | 3.8 km |
+| 78.5 deg S, southern edge | 26 km | 7.4 km | 13 km | 2.2 km |
+
+The dynamical effective resolution of the Icon-O triangular C-grid is
+coarser still than h, because its spurious modes share the short scales
+with the physical modes and have to be damped (Korn and Danilov 2017, JCP).
+So icon033 is coarser than R2B7 only equatorward of about 45 deg. icon01 is
+finer than R2B8 at all latitudes. Poleward of those latitudes both grids
+resolve the flow more finely than the Icon bathymetry they carry.
+
 Each has a `spinup` (ocean alone, repeat-year ERA5), an `ocean` branch
 (interannual, ocean alone) and a `coupled` branch (the same period and the
 same ocean start, with waves), so the last two differ in the wave model and
@@ -162,11 +185,18 @@ frequency: the initial conditions (a fill crossing a sill), the time step
 | icon033 ocean alone | 936 | 0.47 s | 3.1 min | 19 h |
 | icon033 coupled, c = 2 | 1024 + 936 | 0.64 s | 4.2 min | 26 h |
 | icon01 ocean alone, dt = 72 | 7650 | 0.84 s | 17 min | 4.2 d |
+| icon033 ocean alone, GPU | 8 GPUs | 0.12 s | 0.8 min | 4.8 h |
 
 Coupling costs about 30 % at 1/3 degree with the wave grid coarsened by 2,
 and the waves then cost nothing in wall time: both components sit at 0 % idle
 and the wave model fits its work inside the ocean's step. On the same grid it
 was 0.85 s, so the coarsening is what made the coupling affordable.
+
+The GPU row is the JAX backend (`run_gpu.sh`) on 2 Levante GPU nodes, one
+process per GPU, with the split-explicit free surface. The CPU rows use the
+implicit free surface. That is 5 model years per day, four times the CPU run
+on 8 nodes. The wave model does not run on the GPU yet, and icon01 has not
+been measured there.
 
 ## Output
 
