@@ -22,5 +22,8 @@ for n, args in zip(NP, RUNS):
         print('   mpirun %d %s failed (exit %d):' % (n, ' '.join(args), r.returncode))
         print('\n'.join('      ' + l for l in (r.stderr or r.stdout).splitlines()[-12:]))
     ok &= not any(l.endswith('FAIL') for l in lines)
+import glob
+for f in glob.glob(os.path.join(HERE, 'decomp_ref_*.npz')):    # the references are run products
+    os.remove(f)
 print('decomposition: %s' % ('ALL PASS' if ok else 'FAILURES'))
 sys.exit(0 if ok else 1)

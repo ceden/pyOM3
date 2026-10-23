@@ -68,6 +68,9 @@ def run_all():
                 print('   %s %s %s failed (exit %d):' % (backend, kind, ' '.join(args), r.returncode))
                 print('\n'.join('      ' + l for l in (r.stderr or r.stdout).splitlines()[-12:]))
             ok &= not any(l.endswith('FAIL') for l in lines)
+    import glob
+    for f in glob.glob(os.path.join(HERE, 'jax_ref_*.npz')):     # the references are run products
+        os.remove(f)
     print('jax sharding: %s' % ('ALL PASS' if ok else 'FAILURES'))
     return ok
 

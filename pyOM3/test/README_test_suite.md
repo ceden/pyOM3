@@ -508,9 +508,9 @@ exp_ocean.py, the rest as stated):
 
 Running it: `python3 run_fast.py coupled` (test 4 needs mpirun on the path
 or MPIRUN), `python3 coupled/jax_backend.py` for J. Work files go to
-`coupled/_work/` (snapshots, energy files, restarts, mean files), the
-references next to the tests (golden.json, decomp_ref_*.npz,
-jax_ref_*.npz).
+`coupled/_work/` (snapshots, energy files, restarts, mean files),
+golden.json next to the tests. decomp_ref_*.npz and jax_ref_*.npz are
+written next to the tests during a run and removed at its end.
 
 
 ## Deliberately not in the suite
