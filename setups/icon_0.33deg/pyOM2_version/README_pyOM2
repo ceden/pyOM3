@@ -1,0 +1,17 @@
+
+based on the grid and topography found at 
+/pool/data/ICON/oes/input/r0005/OceanOnly_icon_grid_0023_R02B07_G_modified_srtm30_1min/R2B7_ocean-grid.nc
+but interpolated on a 1/3 deg Mercator grid
+
+topography treatment in ./topo
+
+edited Gibraltar to k=27 sill depths
+deleted isolated bays of Arctic and Hudson Bay
+deleted Baltic, Black, Red Sea, Persian Gulf
+
+ECMWF surface forcing in ./surface_forcing
+Woce initial conditions in ./initial_conditions
+source data are from ../pop_data
+
+
+
