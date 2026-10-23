@@ -36,12 +36,6 @@ memory, there is no output file. The time loop is written out in the notebook
 | `eady1` | eady0.f90, eady0.py, eady1.py, channel1.py | Eady instability with the analytical mode, growth rate check, option `restoring` |
 | `salt_fountain1` | salt_fountain1.f90 | salt fountain, heat conducting wall inside the water column (nh_realistic) |
 | `overflow1` | overflow1.f90 | dense water flowing over a ridge and down the slope (nh_realistic) |
-| `wim1` | | single column, growth of wind waves from a white isotropic seed under a constant wind (wim_simple) |
-
-`wim1` is built differently. It uses `model.loop`, and the plots are made in
-the method `diagnose` of the model class. The figure is created in the model
-class, so the build and the time loop must stay in one cell. Jupyter closes a
-figure at the end of the cell that created it.
 
 `lin_stab.py` solves the viscous Taylor-Goldstein problem for U(z), B(z) on the
 model levels and returns the fastest growing mode (growth rate, phase speed,
@@ -57,13 +51,13 @@ in its first cell.
 
 | script | pyOM2 origin | what |
 |---|---|---|
-| `acc1.py` | acc1.f90, acc1.py | Southern Ocean channel, Cartesian, TKE. Option `eddies` |
-| `acc2.py` | acc2.f90, acc2.py | global sector with Atlantic basin, spherical, isoneutral + GM, TKE |
-| `acc3.py` | acc3.f90, acc_hi1.f90 | spherical channel with a wall. `eddies=False` is acc3, `eddies=True` is acc_hi1 |
-| `jets1.py` | jets1.f90, jets1.py | zonal jets in a beta plane channel, sponge layers |
-| `eady_jet1.py` | eady_jet1.f90, eady_opv1.f90 | baroclinic jet. Option `balanced` (optimal balance of eady_opv1) |
-| `roullet1.py` | roullet1.f90 | Roullet et al. jet, stretched vertical grid, zonal mean restoring |
-| `ml_front1.py` | ml_front.f90 | mixed layer front (3-D version without the mixed layer parameterisation) |
+| `acc1_coarse.py` | acc1.f90, acc1.py | Southern Ocean channel, coarse, harmonic friction, isoneutral + GM, TKE (pe_realistic) |
+| `acc1_hires.py` | acc1.f90 | Southern Ocean channel, eddy resolving, biharmonic friction, TKE, buoyancy (pe_simple) |
+| `acc3_hires.py` | acc_hi1.f90 | channel with a wall on a beta plane, eddy resolving, TKE, buoyancy (pe_simple) |
+| `jets1.py` | jets1.f90, jets1.py | zonal jets in a beta plane channel, sponge layers (pe_simple) |
+| `eady_jet1.py` | eady_jet1.f90, eady_opv1.f90 | baroclinic jet. Option `balanced` (optimal balance of eady_opv1) (pe_simple) |
+| `roullet1.py` | roullet1.f90 | Roullet et al. jet, stretched vertical grid, zonal mean restoring (pe_realistic) |
+| `ml_front1.py` | ml_front.f90 | mixed layer front (3-D version without the mixed layer parameterisation) (pe_simple) |
 | `tide_eddy1.py` | ps3D tide_eddy1.f90 | internal tide beam through a balanced eddy (nh_simple, rigid lids) |
 | `tide_vortical_spec1.py` | ps3D tide_vortical_spec1.f90 | internal tide beam through a spectrum of balanced eddies (nh_simple, rigid lids) |
 | `lee_wave1.py` | ps3D lee_wave1.f90 | wave beam in a background current with a critical layer (nh_simple, periodic, scaled equations) |
@@ -78,7 +72,14 @@ balance of a state to third order in the Rossby number after Warn et al.
 
 ## Conventions
 
-The hydrostatic configurations use `pe_realistic`. It takes a scalar `dxt`
+The eddy resolving hydrostatic configurations use `pe_simple`. It has a uniform Cartesian grid `dx, dy, dz` and no isoneutral mixing.
+It does not provide coordinates. Each script sets the local coordinates
+`self.xt, self.yt` of its processor in `set_grid`, the first T point is at
+`dx/2` from the wall. The global coordinates `xt_gl, yt_gl, zt_gl` for the
+initial conditions are set at the top of the script. `kbot`, `eq_of_state`,
+the forcing and the TKE closure are as in `pe_realistic` below.
+
+The other hydrostatic configurations use `pe_realistic`. It takes a scalar `dxt`
 for a uniform grid and a vector for a variable grid, `coord_degree=True` for
 the sphere, and it provides the coordinates:
 
@@ -109,17 +110,11 @@ Cartesian grid only. Land cells inside the water column (the wall of
 `salt_fountain1`) cannot be described by `kbot`. They are set in `maskT` in
 `make_topo_masks`, followed by the other masks.
 
-`wim_simple` is the spectral wave model. Arrays are `(Nd, Nf, Ny, Nx)` for
-direction, frequency, y and x, with one halo point on each side. The friction
-velocity `ustar` and the wind direction `udir` are fields of shape `(Ny, Nx)`.
-The direction `theta` is the direction the waves travel to, with `theta = 0`
-towards +y and `theta` increasing clockwise. `snonlin_backend='fortran'` needs
-the f2py module `pyOM3/wim_simple/Snonlin`. `'numpy'` gives the same result.
-
 ## Not converted
 
 | pyOM2 | reason |
 |---|---|
+| acc2.f90, acc3.f90 | acc on the sphere is not needed, acc3_hires.py is acc_hi1.f90 on a beta plane |
 | acc_small.f90, energy1.f90, energy2.f90 | small variants of acc1 and acc3 for the energy diagnostics of pyOM2 |
 | eady1_unscaled.f90, eady_periodic1.f90, eady2.py | variants of eady1 that need the 3-D lin_stab module or the QG filter of pyOM2 |
 | isopyc1.f90, test_adv1.f90 | need `enable_momentum_equation = False` |

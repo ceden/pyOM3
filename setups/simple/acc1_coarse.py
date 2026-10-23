@@ -1,11 +1,12 @@
 """
-acc1: idealised Southern Ocean channel after Viebahn and Eden (2010)
+acc1_coarse: idealised Southern Ocean channel after Viebahn and Eden (2010), coarse resolution
 pyOM2: for_config/acc1.f90, py_config/acc1.py
 
 Zonally periodic channel with a meridional wall in the northern half,
-wind stress and surface temperature restoring, TKE vertical mixing.
+wind stress and surface temperature restoring, TKE vertical mixing,
+harmonic friction, isoneutral mixing and GM. The eddying version is acc1_hires.py.
 
-run:    python acc1.py             (mpirun -np N python acc1.py with n_pes_x*n_pes_y = N)
+run:    python acc1_coarse.py      (mpirun -np N python acc1_coarse.py with n_pes_x*n_pes_y = N)
 """
 import os, sys
 sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
@@ -17,7 +18,6 @@ from pyOM3.density import linear_eq_of_state_drhodT
 
 hres   = 0.5           # horizontal resolution factor, 1 = 20 km
 vres   = 1.0           # vertical resolution factor, 1 = 50 m
-eddies = False         # True: biharmonic friction only, False: harmonic friction + GM
 
 nx, ny, nz = int(128*hres), int(128*hres), int(18*vres)
 dx, dz, dt = 20e3/hres, 50./vres, 1200./hres
@@ -36,15 +36,12 @@ par = dict(nx=nx, ny=ny, nz=nz, dxt=dx, dyt=dx, dzt=dz, dt=dt,
            epsilon=1e-6, max_iterations=5000, superbee_advection=True,
            vmix_scheme='implicit', enable_tke=True, alpha_tke=30., mxl_min=1e-8,
            enable_bottom_friction=True, r_bot=1e-5*vres,
+           Ah=5e4, enable_neutral_diffusion=True, enable_skew_diffusion=True,
+           K_iso_0=1000., K_gm_0=1000., iso_dslope=0.005, iso_slopec=0.01,
            snapint=snapint)
-if eddies:
-    par.update(Ahbi=2e9/hres**4)
-else:
-    par.update(Ah=5e4, enable_neutral_diffusion=True, enable_skew_diffusion=True,
-               K_iso_0=1000., K_gm_0=1000., iso_dslope=0.005, iso_slopec=0.01)
 
 
-class acc1(tke, snap_nc4):
+class acc1_coarse(tke, snap_nc4):
 
     def set_coriolis(self):
         f = 2*omega*np.sin(phi0) + 2*omega*np.cos(phi0)/radius*self.yt
@@ -76,10 +73,10 @@ class acc1(tke, snap_nc4):
         self.dtemp = OM.add_to_array(self.dtemp, (tau, ks), self.forc_temp_surface/self.dzt[ks])
 
 
-M = acc1(par, n_pes_x=n_pes_x, n_pes_y=n_pes_y)
+M = acc1_coarse(par, n_pes_x=n_pes_x, n_pes_y=n_pes_y)
 M.set_coriolis()
 M.set_topography()
-M.prepare_for_run(snap_file_name='acc1.cdf', show_each_time_step=False)
+M.prepare_for_run(snap_file_name='acc1_coarse.cdf', show_each_time_step=False)
 M.set_initial_conditions()
 M.init_tke()
 M.loop(int(runlen/dt))
