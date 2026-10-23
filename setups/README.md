@@ -62,7 +62,7 @@ sit one level above `setups/`.
 | `global4_era5/` | `global4_setup.py` | 90 x 40, 4 deg | 3600 s | 45 | the test bed; isoneutral + GM |
 | `icon_1.5deg/` | `icon15_setup.py` | 240 x 153, 1.5 deg | 1800 s | 40 | Icon R2B4 derived |
 | `icon_0.33deg/` | `icon033_setup.py` | 1080 x 689, 1/3 deg | 216 s | 128 | eddy permitting |
-| `icon_0.1deg/` | `icon01_setup.py` | 3600 x 2295, 1/10 deg | 72 s | 128 | eddy resolving |
+| `icon_0.1deg/` | `icon01_setup.py` | 3600 x 2295, 1/10 deg | 144 s | 128 | eddy resolving; needs `EXP_VADV_SUB_CYCLING 2`, `EXP_OCEAN_AB 3` |
 | `pop/` | `pop_era5.py` | 3600 x 2163, 1/10 deg | 216 s | 42 | ocean alone, its own driver |
 
 The others in this directory are not ERA5-forced global configurations and do
@@ -166,6 +166,14 @@ CFL scales with dt/dx even though nothing in the vertical changed.** icon033
 and icon01 have the SAME vertical grid; icon01's horizontal grid is 3.3 times
 finer; icon033 runs at 216 s; 216/3.3 = 65 s. icon01 runs stably at 72.
 
+icon01 now runs at 144 s with the tracer advection taken out of the AB
+step and done in M vertical sub-steps (`EXP_VADV_SUB_CYCLING 2`), together
+with AB3 (`EXP_OCEAN_AB 3`). The tracer limit is then w dt/dz below M. It
+ran from a cold start and through its first austral winter, with w dt/dz
+up to 1.5 on the Amundsen shelf. The momentum is not split. Above the AB3
+limit of 0.72 it is held by friction, not by the scheme. Keep
+`EXP_CANARY_CFL` on.
+
 Two consequences:
 
 * the time step of a configuration follows its HORIZONTAL resolution even
@@ -204,6 +212,7 @@ frequency: the initial conditions (a fill crossing a sill), the time step
 | icon033 ocean alone | 936 | 0.47 s | 3.1 min | 19 h |
 | icon033 coupled, c = 2 | 1024 + 936 | 0.64 s | 4.2 min | 26 h |
 | icon01 ocean alone, dt = 72 | 7650 | 0.84 s | 17 min | 4.2 d |
+| icon01 ocean alone, dt = 144, split | 7650 | 1.04 s | 10.4 min | 2.6 d |
 | icon033 ocean alone, GPU | 8 GPUs | 0.12 s | 0.8 min | 4.8 h |
 
 Coupling costs about 30 % at 1/3 degree with the wave grid coarsened by 2,
