@@ -36,6 +36,12 @@ memory, there is no output file. The time loop is written out in the notebook
 | `eady1` | eady0.f90, eady0.py, eady1.py, channel1.py | Eady instability with the analytical mode, growth rate check, option `restoring` |
 | `salt_fountain1` | salt_fountain1.f90 | salt fountain, heat conducting wall inside the water column (nh_realistic) |
 | `overflow1` | overflow1.f90 | dense water flowing over a ridge and down the slope (nh_realistic) |
+| `wim1` | | single column, growth of wind waves from a white isotropic seed under a constant wind (wim_simple) |
+
+`wim1` is built differently. It uses `model.loop`, and the plots are made in
+the method `diagnose` of the model class. The figure is created in the model
+class, so the build and the time loop must stay in one cell. Jupyter closes a
+figure at the end of the cell that created it.
 
 `lin_stab.py` solves the viscous Taylor-Goldstein problem for U(z), B(z) on the
 model levels and returns the fastest growing mode (growth rate, phase speed,
@@ -102,6 +108,13 @@ pressure, so it has the same parameters, coordinates, masks and tracers, on a
 Cartesian grid only. Land cells inside the water column (the wall of
 `salt_fountain1`) cannot be described by `kbot`. They are set in `maskT` in
 `make_topo_masks`, followed by the other masks.
+
+`wim_simple` is the spectral wave model. Arrays are `(Nd, Nf, Ny, Nx)` for
+direction, frequency, y and x, with one halo point on each side. The friction
+velocity `ustar` and the wind direction `udir` are fields of shape `(Ny, Nx)`.
+The direction `theta` is the direction the waves travel to, with `theta = 0`
+towards +y and `theta` increasing clockwise. `snonlin_backend='fortran'` needs
+the f2py module `pyOM3/wim_simple/Snonlin`. `'numpy'` gives the same result.
 
 ## Not converted
 
