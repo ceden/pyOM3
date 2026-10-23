@@ -8,11 +8,7 @@ as jupyter notebook or python script.
 
 a few more complex idealised experiments are found in:
 
-`setups/acc` stand-alone ocean model, channel model with North Atlantic basin attached
-
-`setups/coupled_acc` spectral wave model coupled to ocean model, channel model with North Atlantic basin attached
-
-`setups/column` spectral wave model coupled to ocean model, single column versions
+`setups/acc_coupled` spectral wave model coupled to ocean model, channel model with North Atlantic basin attached
 
 `setups/langmuir` spectral wave model coupled to ocean model, single column wave model, LES ocean model
 
