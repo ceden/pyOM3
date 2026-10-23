@@ -18,13 +18,11 @@ one-line change and a new source is one new file in this directory.
 | `forcing_coupled.py` | source `coupled`: the blocks the coupler received this step (the atmosphere's stress and heat flux, or for the waves the ocean's relative-wind stress) |
 | `forcing_era5_native.py` | reader: ERA5 files on the ERA5 grid, interpolated per rank at run time; the 10 m wind may sit in a second file set (`wind_tag`) |
 | `forcing_era5.py` | reader: ERA5 files already on the model grid |
-| `block_io.py` | `local_block`, `BlockScatter`, `read_scatter2`: rank 0 reads, the others receive |
+| `block_io.py` | `local_block`, `BlockScatter`, `read_scatter2`: rank 0 reads, the others receive; the helpers for the two field layouts (MPI block, JAX shards) |
 | `prep_era5_native.py` | build the ERA5 file set on the ERA5 grid |
 | `prep_era5.py` | build it on a model grid |
 | `measure_era5_offsets.py` | the two forcing offsets over a grid's wet cells |
-
-`make_initial_conditions.py` belongs with these and is referred to from the
-top-level README; keep it here too if it is not already.
+| `make_initial_conditions.py` | initial conditions from the WAGHC climatology (see `../README.md`) |
 
 ## The interface
 
@@ -192,6 +190,32 @@ one full 2-D record, pack the blocks in rank order and scatter them with a
 single `MPI_Scatterv`. The communicator is the MODEL's, not `COMM_WORLD`: in a
 coupled run the ocean sits on a sub-communicator next to the wave ranks and a
 `COMM_WORLD` collective would deadlock.
+
+## On the JAX backend
+
+On the JAX backend one process holds the whole grid, so a block is the whole
+grid (`local_block`) and every process reads the forcing for all of it. With
+several processes (one per GPU) each process reads the same records. The
+model's sharded arrays then take each process's piece.
+
+The arithmetic runs on the device. Nothing in the interface changes, and
+`F.get(t)` returns device arrays.
+
+* `forcing_era5_native.py` sends each hour's records to the device as one
+  float32 buffer. The bilinear interpolation to the model grid is a jitted
+  gather there, and the time interpolation a jitted blend.
+* `forcing_era5_flux.py` forms the interface fields (qnet, emp, the
+  climatology blend) in ONE jitted kernel.
+* `MonthlyClim` keeps its 12 records on the device.
+
+On the host this arithmetic was 60 ms per step on icon033, plus 20 ms for
+the hourly interpolation, a quarter of a 0.31 s GPU step. On the device it
+is a few kernels. The MPI/numpy path is unchanged.
+
+`block_io.py` also holds the helpers the shared code uses for the JAX field
+layout, where every shard's halo sits inline in the array: `pad_block`,
+`interior`, `local_shard`, `shard_blocks` (the per-shard raw restart) and
+`jax_barrier`. They are described in `../coupled_common/README.md`.
 
 ## Adding a source
 

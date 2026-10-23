@@ -25,19 +25,20 @@ Set `PYOM3_ROOT` if the package does not sit one level above `setups/`.
 
 | file | what it is |
 |---|---|
-| `run.py` | the driver: reads the environment, builds the two models, splits the ranks, hands over to the loop |
-| `coupler_loop.py` | the three time loops (wave, coupled ocean, ocean alone), the canary, the diagnostics |
-| `coupler_mpi.py` | world split, intercommunicator, gather/scatter, the block-to-block exchange and the coarse wave grid |
-| `coupler_io.py` | restarts (gathered and raw), the coupling file, the snapshot helpers |
+| `run.py` | the driver: reads the environment, builds the models, splits the ranks, hands over to the loop |
+| `coupler_loop.py` | the four time loops (wave, coupled ocean, ocean alone, atmosphere), the canary, the diagnostics |
+| `coupler_mpi.py` | world split, intercommunicator, gather/scatter, the block-to-block exchange and the coarse wave grid; `SoloComm`, the communicator of a run without MPI (the JAX backend) |
+| `coupler_io.py` | restarts (gathered and raw, per rank or per shard), the coupling file, the snapshot helpers |
 | `coupler_prof.py` | the profiler behind the tables in the log |
 | `exp_common.py` | `Cfg`, the averaging-mode parser, the coarse-grid helpers, the grid reports |
 | `exp_ocean.py` | `ocean_common`: forcing, coupling terms, TKE hooks, energy diagnostics, online means |
 | `exp_wave.py` | `wave_common`: the wave model's mask, wind and energy diagnostics |
+| `exp_atmos.py` | the Held-Suarez atmosphere as a third component, exchanging with the ocean only (energy_cycle.tex Sec. 6) |
 | `ni_diag.py` | `ni_common`: the near-inertial energy flux out of the mixed layer, online (Rimac et al. 2016) |
 | `ni_report.py` | offline: the near-inertial numbers, maps and seasonal cycle from the means (`-j` parallel) |
 | `heat_transport.py` | offline: meridional heat and freshwater transport and the overturning per basin from the means (`-j` parallel) |
-| `transport_diff.py` | two `heat_transport.py` outputs side by side, table and figure, e.g. with and without waves |
 | `bx_coarse_test.py` | MPI test of the block exchange with a coarsened wave grid |
+| `run_coarse_waves.sh` | the batch script of the first coarse-wave test at 1/3 degree |
 
 ## How a configuration plugs in
 
@@ -92,6 +93,9 @@ Names the shared classes read: `rho_0`, `cp_0`, `t_rest`, `omega_e`, `nz`,
 | `NI_LAT_MIN` | 5.0 | f is held at this latitude towards the equator |
 | `NI_MLD_EVERY` | 50 | steps between evaluations of the mixed layer depth (one density call) |
 | `NI_DUMP_EVERY` | 0 | steps between float32 dumps of u, v, w, p of those levels into `<snapshots>_ni/`, for the offline analysis; 0 = none |
+| `STOKES_SHEAR` | False | the FULL vortex force -u_L x (nabla x u_S) in the hydrostatic ocean: the horizontal Stokes shear terms w dz(u_S) and the vertical component in the hydrostatic relation (`exp_ocean.stokes_shear_force`); False = the zeta_S part alone, the paper's App. C |
+| `VADV_SUB_CYCLING` | 0 | M > 0: the tracer advection outside the AB step, with M vertical sub-steps (`pe_realistic/vadv_split.py`); 0 = off, bit-identical to before |
+| `atmos_coarsen`, `ATM_*` | 1, ... | the coupled atmosphere of `exp_atmos.py`: its grid coarsening, boundary layer, relative wind and dissipation heating |
 
 `register_average(name, dims, units, long_name, get)` on the ocean class adds
 a field to the online means from the experiment module, pyOM2's
@@ -113,9 +117,16 @@ a run rather than a setting:
                            repeat year (the forcing jumps there)
     EXP_NPX/NPY_WAVE       the two decompositions; the wave one divides the
     EXP_NPX/NPY_OCEAN      COARSE grid when EXP_WAVE_COARSEN > 1
-    EXP_RESTART_RAW        1 = per-rank restart blocks (see below)
+    EXP_NPX/NPY_ATMOS      the atmosphere's layout; 0 0 = no atmosphere
+    EXP_OCEAN_AB           2 = AB2 with eps 0.1 (default), 3 = AB3; use 3
+                           only together with EXP_VADV_SUB_CYCLING
+    EXP_RESTART_RAW        1 = per-rank (per-shard on JAX) restart blocks
     EXP_CANARY_EVERY       how often the state is checked (see below)
+    EXP_CANARY_CFL         0 off, 1 report max w dt/dz, 0.8 report and
+                           stop above 0.8 (see below)
     EXP_PROFILE            0, 1 sections, 2 + model internals
+    PYOM3_BACKEND          jax = the JAX backend (see below), numpy = numpy
+                           although jax is installed
 
 ## Three things worth knowing before a large run
 
@@ -135,7 +146,9 @@ disk is poisoned. The implicit free surface is a GLOBAL solve, so one NaN
 spreads over the whole domain within one step: at the default cadence the
 dump is uniformly NaN and says nothing. **Set `EXP_CANARY_EVERY=1` for any run
 that is failing.** The check costs a millisecond or two against a step of
-order a second.
+order a second. `EXP_CANARY_CFL=1` adds max |w| dt/dz with its location to
+the canary line. On a fine grid this is the number that decides the time
+step (see `../README.md`, "Choosing the time step"). Treat 0.5 as the edge.
 
 **The wave grid can be coarser than the ocean grid.** `EXP_WAVE_COARSEN = c`
 makes a wave cell c x c ocean cells, with wave cell faces on ocean cell
@@ -148,6 +161,57 @@ the wave side with weights exchanged once. Measured at 1/3 degree, c = 2:
 of 40. `bx_coarse_test.py` checks the exchange on any rank count:
 
     srun -n 13 python3 bx_coarse_test.py 3 53 60      # c, ny, nx
+
+## The JAX backend (GPU)
+
+`PYOM3_BACKEND=jax` runs the OCEAN ALONE on GPUs (`EXP_WAVES=0`, no
+atmosphere). The wave model and the atmosphere are concurrent MPI groups and
+cannot share the processes. The batch script is the configuration's
+`run_gpu.sh`.
+
+**Shards, not ranks.** `EXP_NPX_OCEAN x EXP_NPY_OCEAN` is the shard layout
+and must equal the number of devices. A shard is an exact division of the
+grid. `run.py` stops if the two numbers differ.
+
+**One process per GPU.** Several nodes run one process per GPU under srun,
+with jax.distributed initialised in `pyOM3/__init__`. `run.py` stops if a
+process sees more than one device. The model's mesh spans the processes.
+The run control needs no MPI there. Its collectives (flags, step counts,
+the restart header, the canary's sums) go through `SoloComm` in
+`coupler_mpi.py`. The model fields never pass through `SoloComm`.
+
+**The layout of a field.** One jax process holds the whole grid, and every
+shard's halo sits inline in the array. The helpers of
+`../forcing_common/block_io.py` are the only place the shared code needs to
+know this. `pad_block` builds a padded field, `interior` takes the interior,
+`local_shard` gives this process's own piece for what is written or checked
+per process.
+
+**The restart.** `EXP_RESTART_RAW=1` writes one `.npz` per SHARD, numbered
+sy*n_pes_x + sx. So a restart written by one process with four GPUs is read
+by four processes with one GPU each, and back. The shard layout must match,
+as the rank layout must under MPI. The gathered form (`EXP_RESTART_RAW=0`)
+collects every field on every process. That works at 1/3 degree and is
+impossible at 1/10 degree (8.5 GB per field).
+
+**What stays on the device.** The per-step arithmetic of `exp_ocean.py`
+(forcing, direct branch, Stokes shear, relative wind, Craig-Banner flux) sits
+in pure functions jitted with `OM.jaxjit`, which is the identity on numpy.
+The sums of the online means stay on the device as padded fields. On the
+host they had cost 6 s per step, 96 % of the step. The forcing is
+interpolated on the device as well (`../forcing_common/README.md`).
+
+**The free surface.** The GPU runs use the split-explicit free surface
+(`EXP_FREE_SURFACE=explicit` in the setup module). It is admitted for the
+ocean alone only, and it needs `EXP_KE_BUDGET=0`, because the KE budget is
+written for the implicit p_s. `run.py` stops otherwise.
+
+**The profiler** synchronises the devices at every section boundary
+(`coupler_prof.jax_sync`), since jax queues kernels asynchronously. Without
+it the section times would be meaningless.
+
+Measured: icon033 ocean alone on 2 GPU nodes (8 GPUs) at dt 216 s, 0.12 s
+per step, 5 model years per day.
 
 ## The coupling, in one paragraph
 
