@@ -1,10 +1,10 @@
-# simple experiments
+# simple setups
 
 in `setups/simple` in number of simple idealised configuration are stored either
 as jupyter notebook or python script.
 
 
-# idealised experiments
+# idealised coupled setups
 
 a few more complex idealised experiments are found in:
 
@@ -21,7 +21,7 @@ a few more complex idealised experiments are found in:
 `setups/hs_coupled`  Held/Suarez idealised atmosphere coupled to surface wave and ocean model
 
 
-# realistic coupled experiments
+# realistic coupled setups
 
 Wave-ocean coupled configurations of pyOM3: a spectral wave model
 (`wim_realistic`) on the same horizontal grid as a primitive-equation ocean
