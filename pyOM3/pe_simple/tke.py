@@ -103,7 +103,11 @@ class tke:
         self.tke_surf_from_waves = getattr(self, 'tke_surf_from_waves', True)
         self.alpha_cb            = getattr(self, 'alpha_cb', 1.0)
 
-        z = OM.np.zeros((self.Nz, self.Ny, self.Nx), OM.prec)
+        # zeros LIKE u: on jax that carries u's sharding, so the fields are
+        # laid out on the mesh from the start (a plain zeros is one whole
+        # unsharded field per device, 8 GB at 1/10 degree, and five of them
+        # here: the OOM of an icon01 restart on a 40 GB node)
+        z = OM.np.zeros_like(self.u)
         # initial seed as the pyOM2 configurations (tke = 1d-12); the floor
         # tke_min is a separate thing and 0 by default
         self.tke        = z + getattr(self, 'tke_init', 1e-12) * self.maskW
