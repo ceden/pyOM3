@@ -51,21 +51,31 @@
 #
 # ERA5 comes from this experiment's own set, era5_icon033_YYYY-MM.nc, built by
 # prep_era5_icon033.sh and kept on the ERA5 grid; forcing_era5_native.py
-# interpolates it to each rank's block while the run goes on.
+# interpolates it to each rank's block while the run goes on. The 10 m wind
+# of the relative-wind stress is the set era5_icon033w_YYYY-MM.nc beside it.
+#
+# SAME EXPERIMENT AS run_gpu.sh: the split-explicit free surface (FS below)
+# and the relative-wind stress with ERA5's drag coefficient (EXP_STRESS_MODE
+# relwind, the Lagrangian surface velocity). A restart of one free-surface
+# method is refused by a run with the other (coupler_io.py): a chain written
+# with the implicit free surface continues only with FS = implicit, and the
+# coupled branches, which need the implicit one, cannot start from an
+# explicit spinup.
 #
 # TEST = 1 (--export=ALL,TEST=1) is the short version to check the
 # installation: 0.2 model days in two 0.1 day segments, so the restart path
 # is used, a few minutes of compute. Default 0 = production.
 #
-# COST is not known yet. Set EXP_SEGMENT_DAYS from what the first job
-# reports ("load ocean: x s/step", 400 steps per model day) before launching
-# the chain: a segment must finish inside the walltime, restart write
-# included.
+# COST, measured with the implicit free surface: 0.47 s per step, 400 steps
+# per model day, 19 h per model year. A 60 day segment takes about 3 h. The
+# split-explicit one has not been measured on the CPU; read "load ocean:
+# x s/step" off the first job before relying on the segment length.
 #
 # Every physical parameter is a default of icon033_setup.py and is printed by
 # the CONFIG lines of the log. Only what this run does differently is set here.
 
 set SCRIPT = run.sh                  # this file's name: it resubmits itself
+set FS     = explicit                # free surface; implicit to resume an implicit restart
 if (! $?TEST)     set TEST = 0
 if (! $?GATHERED) set GATHERED = 0   # 1: write the gathered restart (see above)
 
@@ -94,9 +104,20 @@ if ($GATHERED) then
 else
   setenv EXP_RESTART_RAW        1
 endif
+setenv EXP_RESTART_DAYS         10
 setenv EXP_FORCING_TAG          icon033
 
 setenv EXP_VADV_SUB_CYCLING 2
+# the free surface: implicit (the CG) or the split-explicit sub cycle,
+# EXP_SUB_CYCLING sub steps (24) with forward-backward theta EXP_FB_THETA
+# (0.5); see the FREE_SURFACE block of icon033_setup.py. A run keeps its
+# method from the cold start.
+setenv EXP_FREE_SURFACE         $FS
+
+# switch these 3 off to not use the relative wind bulk formulae
+setenv EXP_STRESS_MODE        relwind
+setenv EXP_STRESS_UO          lagrangian        # u_o = u_L (eulerian: u_L - u_S)
+setenv EXP_FORCING_WIND_TAG   icon033w          # era5_icon033w_YYYY-MM.nc in EXP_FORCING_DIR
 
 # ERA5 runs on a prescribed SST, so its surface energy budget does not close;
 # over the icon15 grid the annual mean of sshf+slhf+ssr+str was +14.28 W/m2

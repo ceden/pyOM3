@@ -1077,6 +1077,32 @@ def run_ocean(M, cfg, comm, intercomm, active):
     return n_stop
 
 
+def _gpu_memory_line(M, comm):
+    """one line after the first steps: the device memory this process's
+    GPU holds for the model (the state plus XLA's temporaries at the peak),
+    max and min over the processes -- what a GPU of a given size must have
+    (the 40 GB nodes question). jax reports it per device; a backend that
+    does not (CPU) says nothing."""
+    try:
+        st = OM.jax.local_devices()[0].memory_stats() or {}
+        peak = st.get('peak_bytes_in_use'); now = st.get('bytes_in_use')
+        lim = st.get('bytes_limit')
+    except Exception:
+        return
+    if peak is None:
+        return
+    gb = 1.0/2.0**30
+    v = np.array([peak*gb, now*gb, (lim or 0)*gb])
+    if comm.Get_size() > 1:
+        mx = comm.allreduce(v, op=_MPI.MAX); mn = comm.allreduce(v, op=_MPI.MIN)
+    else:
+        mx = mn = v
+    if comm.Get_rank() == 0:
+        print('GPU memory per device: peak %.1f-%.1f GB, now %.1f-%.1f GB (min-max over '
+              'the processes), of %.1f GB available to jax' % (mn[0], mx[0], mn[1], mx[1], mx[2]),
+              flush=True)
+
+
 def run_ocean_only(M, cfg, comm, active):
     """The ocean without the wave model: time step, diagnostics, canary,
     restart and profiling exactly as run_ocean, no exchange. The surface
@@ -1147,6 +1173,8 @@ def run_ocean_only(M, cfg, comm, active):
             _tab = prof.report(comm, 'OCEAN', time.perf_counter() - _tw0)
             if _tab: print(_tab, flush=True)
             prof.reset(); _tw0 = time.perf_counter()
+            if OM.jax and n + 1 - n0 == 6:
+                _gpu_memory_line(M, comm)
         if M.my_pe == 0 and n % 20 == 0:
             print('ocean step %d / %d' % (n, steps), flush=True)
     if M.my_pe == 0:

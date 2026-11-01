@@ -107,6 +107,26 @@ def local_shard(M, a):
     return interior(M, a), j0, i0
 
 
+def own_shard(M):
+    """(shard number, j0, i0, nyl, nxl) of THIS process's device on a
+    multi-process jax run: the block it should read when the inputs come
+    pre-cut per shard (ic_blocks.py)"""
+    idx = next(iter(M.sharding_2D.addressable_devices_indices_map((M.Ny, M.Nx)).values()))
+    j0, i0, nyl, nxl, sy, sx = _shard_block(M, idx)
+    return sy*M.n_pes_x + sx, j0, i0, nyl, nxl
+
+
+def pad_own_block(M, blk, exchange=True):
+    """pad_block for a block that is THIS process's shard interior only
+    ((nyl, nxl) or (nz, nyl, nxl), numpy), multi-process jax: the padded
+    field with the halo exchanged, nothing global on any process"""
+    sid = own_shard(M)[0]; h = M.halo
+    blk = np.asarray(blk, np.float64)
+    shape = ((M.Nz,) if blk.ndim == 3 else ()) + (M.Ny, M.Nx)
+    b = from_shard_blocks(M, {sid: np.pad(blk, [(h, h)]*blk.ndim)}, shape)
+    return M.apply_bc(b) if exchange else b
+
+
 def local_block(M):
     """(j0, i0, ny_loc, nx_loc) of THIS PE's interior block, 0-based global
     start indices. MPI: derived from Ny/Nx and ys_pe/xs_pe only (pe_realistic

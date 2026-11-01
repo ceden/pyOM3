@@ -41,22 +41,38 @@ setenv XLA_PYTHON_CLIENT_MEM_FRACTION 0.95
 
 # ---- the shard layout from the node count ----------------------------------
 switch ($SLURM_NNODES)
-  case 1:  set NPX = 4  ; set NPY = 1  ; breaksw
-  case 2:  set NPX = 8  ; set NPY = 1  ; breaksw
-  case 3:  set NPX = 4  ; set NPY = 3  ; breaksw
-  case 4:  set NPX = 16 ; set NPY = 1  ; breaksw
-  case 5:  set NPX = 4  ; set NPY = 5  ; breaksw
-  case 6:  set NPX = 8  ; set NPY = 3  ; breaksw
-  case 9:  set NPX = 12 ; set NPY = 3  ; breaksw
-  case 10: set NPX = 8  ; set NPY = 5  ; breaksw
-  case 12: set NPX = 16 ; set NPY = 3  ; breaksw
-  case 15: set NPX = 12 ; set NPY = 5  ; breaksw
-  case 18: set NPX = 8  ; set NPY = 9  ; breaksw
-  case 20: set NPX = 16 ; set NPY = 5  ; breaksw
-  case 25: set NPX = 20 ; set NPY = 5  ; breaksw
-  case 30: set NPX = 24 ; set NPY = 5  ; breaksw
-  case 36: set NPX = 16 ; set NPY = 9  ; breaksw
-  case 45: set NPX = 12 ; set NPY = 15 ; breaksw
+  case 1:
+    set NPX = 4 ; set NPY = 1 ; breaksw
+  case 2:
+    set NPX = 8 ; set NPY = 1 ; breaksw
+  case 3:
+    set NPX = 4 ; set NPY = 3 ; breaksw
+  case 4:
+    set NPX = 16 ; set NPY = 1 ; breaksw
+  case 5:
+    set NPX = 4 ; set NPY = 5 ; breaksw
+  case 6:
+    set NPX = 8 ; set NPY = 3 ; breaksw
+  case 9:
+    set NPX = 12 ; set NPY = 3 ; breaksw
+  case 10:
+    set NPX = 8 ; set NPY = 5 ; breaksw
+  case 12:
+    set NPX = 16 ; set NPY = 3 ; breaksw
+  case 15:
+    set NPX = 12 ; set NPY = 5 ; breaksw
+  case 18:
+    set NPX = 8 ; set NPY = 9 ; breaksw
+  case 20:
+    set NPX = 16 ; set NPY = 5 ; breaksw
+  case 25:
+    set NPX = 20 ; set NPY = 5 ; breaksw
+  case 30:
+    set NPX = 24 ; set NPY = 5 ; breaksw
+  case 36:
+    set NPX = 16 ; set NPY = 9 ; breaksw
+  case 45:
+    set NPX = 12 ; set NPY = 15 ; breaksw
   default:
     echo "no exact shard layout for $SLURM_NNODES nodes (npx | 3600, npy | 2295, npx*npy = 4 nodes); see the table"
     exit 1
@@ -129,6 +145,21 @@ echo "icon01 GPU: TEST $TEST, $RUNLEN days in segments of $SEGMENT, $SLURM_NNODE
 
 setenv EXP_CANARY_EVERY 100
 setenv EXP_CANARY_CFL  1
+
+# the initial conditions PER SHARD: initial_conditions.nc cut once into one
+# contiguous float32 file per shard of this layout (forcing_common/
+# ic_blocks.py, ~350 MB each on 24 shards), so that each process reads its
+# own block in one go. 24 processes reading the full 8.5 GB field each,
+# level by level through the netCDF chunking, took the first job > 20 min
+# on a loaded Lustre. Cut here on the first cold start (one process, a few
+# minutes), or beforehand by hand with the same command.
+set ICB = ic_blocks_${NPX}x${NPY}
+if (! -e ${RESTART}.nc && ! -e $ICB/salt_0000.npy) then
+  echo "cutting initial_conditions.nc into $NPX x $NPY shard blocks ($ICB/)"
+  python3 ../setups/forcing_common/ic_blocks.py initial_conditions.nc $NPX $NPY --out $ICB
+  if ($status != 0) exit 1
+endif
+setenv EXP_IC_BLOCKS $ICB
 
 setenv OMP_NUM_THREADS $SLURM_CPUS_PER_TASK
 unsetenv SLURM_CPUS_PER_TASK

@@ -84,7 +84,7 @@ from pyOM3.pe_realistic.snapshot  import snap_raw as ocean_base
 from pyOM3.pe_realistic.tke       import tke      as tke_mixin
 from netCDF4 import Dataset
 import sys
-from block_io   import local_block, read_scatter2, pad_block
+from block_io   import local_block, read_scatter2, pad_block, jax_multi, own_shard, pad_own_block
 from exp_common import (Cfg, parse_average, coarse_wave_grid, default_wave_dt,
                         wave_grid_report as _wave_grid_report,
                         spectral_grid_report as _spectral_grid_report)
@@ -100,6 +100,11 @@ exp_name = 'icon01'
 INPUT_DIR = os.environ.get('EXP_INPUT', '.')
 GRID_FILE  = os.environ.get('EXP_GRID',  'grid_topo.nc')
 IC_FILE    = os.environ.get('EXP_IC',    'initial_conditions.nc')
+# multi-process jax only: a directory of IC_FILE cut into one contiguous
+# float32 file per SHARD by forcing_common/ic_blocks.py (run_gpu.sh makes it
+# for its layout); each process then reads its own block and nothing else.
+# Empty: every process reads the full field from IC_FILE level by level.
+IC_BLOCKS  = os.environ.get('EXP_IC_BLOCKS', '')
 ECMWF_FILE = os.environ.get('EXP_ECMWF', 'ecmwf_surface_forcing.nc')   # dQ/dT
 WOA_FILE   = os.environ.get('EXP_WOA',   'woa_surface_forcing.nc')    # SSS target
 
@@ -623,6 +628,23 @@ class ocean(ocean_common, tke_mixin, ocean_base):
         model's own order. Dry cells are 0 in the file make_initial_conditions.py
         writes and -1e33 in the one the fortran setup used; both are replaced
         here, and the masks decide in any case."""
+        if IC_BLOCKS and jax_multi():
+            # the pre-cut block of this process's shard (ic_blocks.py): one
+            # contiguous read of ~350 MB per process instead of 256 level
+            # reads of the full field through the netCDF chunking
+            sid, _, _, nyl, nxl = own_shard(self)
+            d = os.path.join(INPUT_DIR, IC_BLOCKS)
+            T0 = np.load(os.path.join(d, 'temp_%04d.npy' % sid))
+            S0 = np.load(os.path.join(d, 'salt_%04d.npy' % sid))
+            if T0.shape != (nz, nyl, nxl):
+                raise ValueError('%s: block %d is %s, this shard is (%d, %d, %d) -- the blocks '
+                                 'were cut for another layout' % (d, sid, T0.shape, nz, nyl, nxl))
+            self._T0 = np.where(np.isfinite(T0) & (T0 > -100.0), T0, np.float32(0.0))
+            self._S0 = np.where(np.isfinite(S0) & (S0 > 0.0),    S0, np.float32(35.0))
+            self._ic_own = True
+            if self.my_pe == 0:
+                print('initial conditions read per shard from %s/' % d, flush=True)
+            return None, None, None, None, None
         comm = getattr(self, 'comm', None)
         if comm is None or comm.Get_rank() == 0:
             with Dataset(os.path.join(INPUT_DIR, IC_FILE)) as f:
@@ -659,8 +681,9 @@ class ocean(ocean_common, tke_mixin, ocean_base):
         self.u = self.apply_bc(OM.np.zeros((self.Nz, self.Ny, self.Nx), np.float64))
         self.v = self.apply_bc(OM.np.zeros((self.Nz, self.Ny, self.Nx), np.float64))
         self.w = self.vertical_velocity(self.u, self.v, self.w, self.maskW)
-        self.temp = pad_block(self, self._T0)
-        self.salt = pad_block(self, self._S0)
+        pb = pad_own_block if getattr(self, '_ic_own', False) else pad_block
+        self.temp = pb(self, self._T0)
+        self.salt = pb(self, self._S0)
         del self._T0, self._S0
         self.rho = get_rho(self.salt, self.temp, self.p0, self.eq_of_state)
         if self.implicit_free_surface:
