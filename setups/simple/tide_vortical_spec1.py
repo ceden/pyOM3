@@ -5,7 +5,7 @@ ps3D: tide_vortical_spec1.f90
 Non-hydrostatic (nh_simple) with rigid lids. A random phase spectrum of the
 geostrophic mode, E(k) ~ 1/(k (1 + k^2 L^2)^1.5) in the first vertical mode,
 scaled to the energy mean_flow_energy, localised in the centre of the domain
-and balanced to third order in the Rossby number (nh_simple/modes.py). A wave
+and balanced to third order in the Rossby number (nh_simple/diag_balance.py). A wave
 maker at x = 0.9 Lx forces one gravity wave mode propagating in negative x
 direction through the eddies.
 
@@ -16,7 +16,7 @@ sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.nh_simple.snapshot import snap_nc4
-from pyOM3.nh_simple.modes import modes
+from pyOM3.nh_simple.diag_balance import balance
 
 fac        = 1
 nx, ny, nz = 2*126*fac, 126*fac, 10*fac
@@ -38,7 +38,7 @@ par = dict(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz, dt=dt,
            snapint=snapint)
 
 
-class tide_vortical_spec1(modes, snap_nc4):
+class tide_vortical_spec1(balance, snap_nc4):
 
     def set_forcing(self, tau):
         self.time += self.dt
@@ -51,7 +51,7 @@ class tide_vortical_spec1(modes, snap_nc4):
 
 M = tide_vortical_spec1(par)
 M.setup(snap_file_name='tide_vortical_spec1.cdf', show_each_time_step=False)
-M.init_modes()
+M.init_balance()
 
 # local coordinates with halo points, arrays are (x,y,z), z = 0 at the bottom
 h = M.halo
