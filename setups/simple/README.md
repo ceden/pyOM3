@@ -61,6 +61,7 @@ in its first cell.
 | `tide_eddy1.py` | ps3D tide_eddy1.f90 | internal tide beam through a balanced eddy (nh_simple, rigid lids) |
 | `tide_vortical_spec1.py` | ps3D tide_vortical_spec1.f90 | internal tide beam through a spectrum of balanced eddies (nh_simple, rigid lids) |
 | `lee_wave1.py` | ps3D lee_wave1.f90 | wave beam in a background current with a critical layer (nh_simple, periodic, scaled equations) |
+| `jets_balance1.py` | ps3D test_obta_unscaled1.f90 | two unstable jets, the state re-balanced order by order after Warn et al. during the run, `plot_jets_balance1` shows the result (pe_simple, periodic, rigid lid or implicit free surface) |
 | `overflow1_3D.py` | overflow1_3D.f90 | dense water from a shelf through a gap in a barrier down a slope, rotating tank (nh_realistic) |
 
 The three ps3D configurations use `pyOM3/nh_simple/modes.py`: the eigenmodes
@@ -69,6 +70,11 @@ on the discrete grid, the transforms to spectral space, the projection of a
 field on a mode, a single mode in physical space for the wave makers, and the
 balance of a state to third order in the Rossby number after Warn et al.
 (1995). They run on one process.
+
+`jets_balance1.py` uses `pyOM3/pe_simple/diag_balance.py`, the same balance
+after Warn et al. (1995) for pe_simple with the vertical modes of the
+hydrostatic equations (Eden, Chouksey and Olbers 2019, JPO), up to fourth
+order, rigid lid or implicit free surface, one process.
 
 ## Conventions
 
