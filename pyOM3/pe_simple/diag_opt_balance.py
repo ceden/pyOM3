@@ -150,18 +150,29 @@ class opt_balance(model):
 
       def OB_backward_integration(self,_steps):
           """
-          Backwards integration over _steps time steps with negative time step.
-          Ramp OB_rho from 1 to 0. 
+          Backwards integration over _steps time steps. Ramp OB_rho from 1 to 0.
+          The time step stays positive and the time-reversed equations are
+          integrated: all tendencies change sign (OB_time_step with backward=True).
+          A negative self.dt does not work with JAX: the jitted methods take
+          self as static argument and keep the dt of their first trace, so the
+          integration ran forward in time. The negative dt also made the
+          argument of the ramp negative, the ramp stayed 0 and OB_rho stayed 1,
+          so the non-linear terms were never ramped down.
+          With the implicit free surface the reversed equations are again of
+          the model form for -p_s, so the sign of p_s is changed at the start
+          and changed back at the end (for the rigid lid this does nothing).
           """
           A,B,C = 1.,0.,0.           # will become Adam-Bashforth coefficients below
           tau, taum1, taum2 = 2,1,0  # pointers to time levels
-          self.dt = -OM.np.abs(self.dt)
+          self.dt = OM.np.abs(self.dt)
+          self.p_s = -self.p_s
           for n in range(_steps): # time step equations 
               OB_rho = 1. - ramp(n * self.dt /self.OB_period)
-              self.OB_time_step(OB_rho,A,B,C,tau,taum1,taum2,0.,0.,0.,use_2nd_advection = True)  
+              self.OB_time_step(OB_rho,A,B,C,tau,taum1,taum2,0.,0.,0.,use_2nd_advection = True, backward = True)
               tau, taum1, taum2   = np_.mod(tau+1,3), np_.mod(taum1+1,3), np_.mod(taum2+1,3)          
               if A == 1. and B == 0. and C == 0:    A, B, C = 1.5,  -0.5, 0. 
               elif A==1.5 and B == -0.5 and C == 0: A, B, C =  23./12. , -16./12., 5./12.          
+          self.p_s = -self.p_s
           return
 
     
@@ -190,8 +201,13 @@ class opt_balance(model):
         
       def OB_time_ave(self,_steps): 
           """
-          Time averaging over _steps time steps with positive time step. 
-          Use viscosity.
+          Time averaging over _steps time steps with positive time step.
+          No friction or diffusion: the time average of the linear model must
+          be a projection on the geostrophic mode (applied twice it gives the
+          same). With the biharmonic friction it also damps the geostrophic
+          mode, then the exchange of the base point does not keep the base
+          point and the balanced state differs from the Warn et al. state by
+          more than the geostrophic state does (jets_balance1 test, Nov 2026).
           """
           @OM.jaxjit  
           def _add(u,v,w,rho,temp,p_s,u_m,v_m,w_m,rho_m,temp_m,p_sm): 
@@ -204,9 +220,7 @@ class opt_balance(model):
           A,B,C = 1.,0.,0.           # will become Adam-Bashforth coefficients below
           tau, taum1, taum2 = 2,1,0  # pointers to time levels 
           self.dt = +OM.np.abs(self.dt)
-          Ahbi_loc = 0 if not hasattr(self,'Ahbi') else self.Ahbi
-          Khbi_loc = 0 if not hasattr(self,'Khbi') else self.Khbi
-          kappa_T_loc = 0 if not hasattr(self,'kappa_T') else self.kappa_T
+          Ahbi_loc, Khbi_loc, kappa_T_loc = 0., 0., 0.
           
           u_m,v_m,w_m = OM.np.zeros_like(self.u),OM.np.zeros_like(self.v),OM.np.zeros_like(self.w)
           rho_m,temp_m, p_sm = OM.np.zeros_like(self.rho), OM.np.zeros_like(self.temp), OM.np.zeros_like(self.p_s[0,:,:])          
@@ -221,9 +235,11 @@ class opt_balance(model):
           return _divide(u_m,v_m,w_m,rho_m,temp_m,p_sm,_steps) 
     
           
-      def OB_time_step(self,OB_rho,A,B,C,tau,taum1,taum2,Ahbi_loc,Khbi_loc,kappa_T_loc,use_2nd_advection = False):
+      def OB_time_step(self,OB_rho,A,B,C,tau,taum1,taum2,Ahbi_loc,Khbi_loc,kappa_T_loc,use_2nd_advection = False,
+                       backward = False):
           """
           Perform one time step given OB_rho scaling non-linear terms and viscosity Ahbi_loc. 
+          backward = True: the time-reversed equations, all tendencies change sign.
           """
           if hasattr(self,'superbee_advection') and not use_2nd_advection:
              self.dtemp = self.OB_tracer_linear_superbee(self.temp_back,self.dtemp,self.u,self.v,self.w,
@@ -252,6 +268,9 @@ class opt_balance(model):
           if OB_rho>0:    
             self.du, self.dv = self.OB_momentum_advection(self.u,self.v,self.w,self.du,self.dv,
                                                           self.maskU,self.maskV,self.maskW,tau,OB_rho)
+
+          if backward:
+            self.du, self.dv, self.dtemp = self.OB_reverse_tendencies(self.du,self.dv,self.dtemp,tau)
                        
           self.u, self.v = self.update_momentum_AB3(A,B,C,tau,taum1,taum2,
                                                     self.u,self.v,self.du,self.dv,self.maskU,self.maskV)
@@ -273,6 +292,17 @@ class opt_balance(model):
           return
 
     
+      @partial(OM.jaxjit, static_argnums=0)    
+      def OB_reverse_tendencies(self,du,dv,dtemp,tau):
+          """
+          Change the sign of the tendencies at time level tau (time-reversed equations).
+          """
+          s = (tau,slice(None),slice(None),slice(None))
+          du    = OM.modify_array(du,    s, -du[tau],    out_sharding = self.sharding_4D)
+          dv    = OM.modify_array(dv,    s, -dv[tau],    out_sharding = self.sharding_4D)
+          dtemp = OM.modify_array(dtemp, s, -dtemp[tau], out_sharding = self.sharding_4D)
+          return du,dv,dtemp
+
       @partial(OM.jaxjit, static_argnums=0)    
       def OB_remove_mean_temp(self,temp,maskT):
           _t = OM.np.sum( OM.np.sum(temp*maskT,axis=-1),axis=-1) 

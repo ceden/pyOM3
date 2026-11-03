@@ -62,9 +62,12 @@ class jets_balance1(balance, snap_nc4):
         Z, Y, X = np.meshgrid(zt, yt, xu, indexing='ij')
         jet = np.exp(-(Y - 3*Ly/4)**2/(0.02*Lx)**2) - np.exp(-(Y - Ly/4)**2/(0.02*Lx)**2)
         u = u0*(jet + 0.05*np.sin(X/Lx*10*np.pi)*np.sin(Y/Ly*2*np.pi))*np.cos((Z + Lz)/Lz*np.pi)
-        # thermal wind b_y = -f0 u_z, integrated in y, plus the background N0^2 z
+        # thermal wind b_y = -f0 u_z, integrated in y, plus the background N0^2 z.
+        # The horizontal mean of the integral depends only on where the integration
+        # starts and would change the background stratification, so it is removed.
         uz = np.gradient(u, zt, axis=0)
-        b = N0**2*Z - f0*np.cumsum(uz, axis=1)*dy
+        bt = -f0*np.cumsum(uz, axis=1)*dy
+        b = N0**2*Z + bt - bt.mean(axis=(1, 2), keepdims=True)
         zeros = np.zeros((nz, ny, nx))
         super().set_initial_conditions(u, zeros, b, zeros, np.zeros((ny, nx)))
 

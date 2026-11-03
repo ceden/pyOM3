@@ -167,6 +167,9 @@ if __name__ == '__main__':
     u = U*np.cos(Z/Lz*np.pi)
     # thermal wind f0 u_z = -b_y: b = f0 pi/Lz sin(pi z/Lz) times U integrated in y
     b = f0*np.pi/Lz*np.sin(Z/Lz*np.pi)*np.cumsum(U, axis=1)*dy
+    # the horizontal mean of the integral depends only on where the integration
+    # starts and would change the background stratification, so it is removed
+    b = b - b[h:-h, h:-h, :].mean(axis=(0, 1))
     M.u = M.apply_bc(OM.np.asarray(u))
     M.b = M.apply_bc(OM.np.asarray(b))
     M.balance(init_order)

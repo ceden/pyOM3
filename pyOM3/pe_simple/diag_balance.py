@@ -6,10 +6,17 @@
  eigenvectors3.py, my_fft_reordered.py) to pe_simple.
 
  Only for pe_simple with buoyancy as tracer (eq_of_state=0), constant
- Coriolis parameter f0, constant background stratification N0 with
- temp = N0**2 z + b and z = 0 at the surface, 2nd order advection, a
- periodic domain without topography, rigid lid or implicit free surface
- (pressure method), one process.
+ Coriolis parameter f0, 2nd order advection, a periodic domain without
+ topography, rigid lid or implicit free surface (pressure method), one
+ process. The background stratification is constant N0 with
+ temp = N0**2 z + b and z = 0 at the surface when N0 is a scalar. When N0
+ is an array of nz values of N^2 at the w levels (bottom to top), the
+ background stratification is variable and the analytic vertical modes are
+ replaced by the numerical eigenvectors of the discretized linear column
+ dynamics, assembled with the exact model stencils and verified to be
+ independent of the wavenumber at two probes (rigid lid only). The modes
+ are then not orthogonal and the forward transform uses the matrix inverse
+ of phi.
 
  The linear equations of pe_simple are projected on the vertical modes
  phi_n(k), the eigenvectors of the discrete operator M (Eden et al. 2019,
@@ -50,6 +57,7 @@ def hat_epm(k, d):  return 0.5*(1. + np.cos(k*d))
 def hat_kp(k, d):   return -1j*(np.exp(1j*k*d) - 1.)/d
 def hat_ep(k, d):   return (np.exp(1j*k*d) + 1.)*0.5
 def hat_em(k, d):   return (np.exp(-1j*k*d) + 1.)*0.5
+def hat_km(k, d):   return -1j*(1. - np.exp(-1j*k*d))/d
 
 
 class balance(model):
@@ -72,7 +80,14 @@ class balance(model):
             raise RuntimeError('balance: needs a periodic domain')
         if getattr(self, 'superbee_advection', False) or getattr(self, 'weno_advection', False):
             raise RuntimeError('balance: needs 2nd order advection')
+        N2w = None
+        if not np.isscalar(N0):
+            N2w = np.asarray(N0, dtype='f8')
+            if self.implicit_free_surface:
+                raise RuntimeError('balance: variable N^2 needs the rigid lid')
+            N0 = float(np.sqrt(np.mean(N2w)))
         self.bal_N0, self.bal_nsteps, self.bal_pTf1_numeric = N0, nsteps, pTf1_numeric
+        self.bal_N2w = N2w
         self.bal_verbose = verbose
         self.bal_tau = 0                                   # time level of p_s of the model state
         h = self.halo
@@ -83,9 +98,18 @@ class balance(model):
             raise RuntimeError('balance: needs a constant Coriolis parameter')
         self.bal_f0 = f0
 
-        # background buoyancy, z = 0 at the surface
-        zt = (np.arange(self.Nz) - h - nz + 0.5)*dz
-        self.bal_b_back = OM.np.asarray(N0**2*zt[:, None, None] + np.zeros((self.Nz, self.Ny, self.Nx)))
+        # background buoyancy, z = 0 at the surface, from the discrete
+        # integral of N^2 at the w levels (equal to N0**2 zt for constant N^2)
+        N2col = N2w if N2w is not None else N0**2 + np.zeros(nz)
+        Bcol = np.zeros(nz)
+        for k in range(nz-2, -1, -1):
+            Bcol[k] = Bcol[k+1] - N2col[k]*dz
+        Bcol -= Bcol[-1] + N2col[-1]*dz/2.
+        self.bal_B = Bcol
+        Bfull = np.zeros(self.Nz)
+        Bfull[h:-h] = Bcol
+        Bfull[:h] = Bcol[0]; Bfull[-h:] = Bcol[-1]
+        self.bal_b_back = OM.np.asarray(Bfull[:, None, None] + np.zeros((self.Nz, self.Ny, self.Nx)))
 
         # horizontal wavenumbers
         self.bal_kx = 2*np.pi*np.fft.rfftfreq(nx, dx)
@@ -93,7 +117,33 @@ class balance(model):
         KX, KY = self.bal_kx[None, None, :], self.bal_ky[None, :, None]
 
         # vertical modes phi[k, n], k = 0 at the bottom, with c^2_n
-        if self.implicit_free_surface:
+        if N2w is not None:
+            self.bal_f0 = f0
+            c2b, phi_b, psi_b = self._modes_from_probe(2, 3, Bcol)
+            c2c, phi_c, _ = self._modes_from_probe(4, 7, Bcol)
+            if len(c2b) != nz-1 or len(c2c) != nz-1:
+                raise RuntimeError('balance: %d gravity modes, expected %d'
+                                   % (len(c2b), nz-1))
+            dev = np.max(np.abs(c2c - c2b)/c2b)
+            devp = 0.
+            for n_ in range(nz-1):
+                a_, b_ = phi_b[:, n_], phi_c[:, n_]
+                devp = max(devp, abs(abs(a_@b_)/(np.linalg.norm(a_)*np.linalg.norm(b_)) - 1.))
+            if dev > 1e-7 or devp > 1e-7:
+                raise RuntimeError('balance: vertical structures depend on the '
+                                   'wavenumber (c2 %.1e, phi %.1e)' % (dev, devp))
+            phi = np.zeros((nz, nz)); psi = np.zeros((nz, nz))
+            phi[:, 0] = np.sqrt(1./nz)
+            phi[:, 1:] = phi_b
+            psi[:, 1:] = psi_b
+            c2 = np.zeros(nz)
+            c2[0] = self.grav*nz*dz
+            c2[1:] = c2b
+            inv_c2 = np.zeros(nz)
+            inv_c2[1:] = 1./c2[1:]
+            if verbose and self.my_pe == 0:
+                print('balance: probe consistency c2 %.1e, structures %.1e' % (dev, devp))
+        elif self.implicit_free_surface:
             g = self.grav
             k = np.arange(nz)
             M = dz*(g - N0**2*dz/2) + N0**2*dz**2*(nz - np.maximum(k[:, None], k[None, :])) \
@@ -110,8 +160,10 @@ class balance(model):
                 c2 = np.where(lam > 0, N0**2*hat_epm(lam, dz)/hat_ksqr(lam, dz), self.grav*nz*dz)
             inv_c2 = np.where(lam > 0, 1./c2, 0.)          # the barotropic mode has no waves
         # buoyancy from the pressure amplitudes, b_k = sum_n P_n psi[k, n]
-        psi = -N0**2*inv_c2[None, :]*dz*(np.cumsum(phi, axis=0) - phi/2)
+        if N2w is None:
+            psi = -N0**2*inv_c2[None, :]*dz*(np.cumsum(phi, axis=0) - phi/2)
         self.bal_phi, self.bal_psi, self.bal_c2, self.bal_inv_c2 = phi, psi, c2, inv_c2
+        self.bal_phi_inv = np.linalg.inv(phi)
         C2, IC2 = c2[:, None, None], inv_c2[:, None, None]
 
         # eigenvectors and their duals
@@ -184,6 +236,8 @@ class balance(model):
 
     def _fft(self, a, mode):
         A = np.fft.fft(np.fft.rfft(a, axis=2), axis=1)*self.dx*self.dy
+        if mode is self.bal_phi:
+            return np.einsum('nk,kji->nji', self.bal_phi_inv, A)*self.dz
         return np.einsum('kn,kji->nji', mode, A)*self.dz
 
     def _ifft(self, A, mode):
@@ -459,3 +513,81 @@ class balance(model):
         n = sum(float(np.sum(self._interior(x)**2)) + float(np.sum(self._interior(y)**2))
                 for x, y in zip(X[:4], Y[:4]))
         return 2*d/n
+
+    # ------------------------------------------------------------------
+    # variable N^2: vertical modes from the discretized linear dynamics
+    def _hyd_column(self, Bc):
+        """discrete hydrostatic pressure column from a buoyancy column,
+        p = 0 at the top t level, the surface pressure is separate"""
+        nz, dz = self.nz, self.dz
+        P = np.zeros(nz, dtype=complex)
+        for k in range(nz-2, -1, -1):
+            P[k] = P[k+1] - dz*(Bc[k] + Bc[k+1])/2.
+        return P
+
+    def _column_operator(self, kx, ky, B):
+        """the linear operator of the columns (U, V, B) at wavenumber
+        (kx, ky), assembled by probing, as a 3 nz x 3 nz complex matrix"""
+        nz, dz, f0 = self.nz, self.dz, self.bal_f0
+        dx, dy = self.dx, self.dy
+        # the pressure gradient at the u and v points is the forward
+        # difference (symbol i kp), the divergence at the t points the
+        # backward difference (symbol i km)
+        ipx, ipy = 1j*hat_kp(kx, dx), 1j*hat_kp(ky, dy)
+        imx, imy = 1j*hat_km(kx, dx), 1j*hat_km(ky, dy)
+        fex = hat_ep(kx, dx)*hat_em(ky, dy)
+        fem = hat_em(kx, dx)*hat_ep(ky, dy)
+        k2 = hat_ksqr(kx, dx) + hat_ksqr(ky, dy)
+        def tend(U, V, Bc):
+            div = imx*U + imy*V
+            w = -np.cumsum(div)*dz                    # w at the w levels
+            F = np.zeros(nz, dtype=complex)           # flux w Bbar^z
+            F[:nz-1] = w[:nz-1]*(B[:nz-1] + B[1:])/2.
+            dB = np.empty(nz, dtype=complex)
+            dB[0] = -F[0]/dz
+            dB[1:] = -(F[1:] - F[:nz-1])/dz
+            dB -= B*div                       # horizontal advection of B(z)
+            P = self._hyd_column(Bc)
+            dU = f0*fex*V - ipx*P
+            dV = -f0*fem*U - ipy*P
+            # rigid lid: P_s such that the mean divergence tendency vanishes,
+            # the divergence of -i kp P_s has the symbol +ksqr (im ip = -ksqr)
+            Ps = -np.mean(imx*dU + imy*dV)/k2 if k2 > 0 else 0.
+            return dU - ipx*Ps, dV - ipy*Ps, dB
+        A = np.zeros((3*nz, 3*nz), dtype=complex)
+        for i in range(3*nz):
+            x = np.zeros(3*nz, dtype=complex); x[i] = 1.
+            dU, dV, dB = tend(x[:nz], x[nz:2*nz], x[2*nz:])
+            A[:nz, i], A[nz:2*nz, i], A[2*nz:, i] = dU, dV, dB
+        return A
+
+    def _modes_from_probe(self, ix, iy, B):
+        """c_n^2, pressure structures phi_n and buoyancy structures psi_n
+        of the gravity wave modes at the probe wavenumber indices (ix, iy)"""
+        nz, f0 = self.nz, self.bal_f0
+        dx, dy = self.dx, self.dy
+        kx = 2*np.pi*np.fft.rfftfreq(self.nx, dx)[ix]
+        ky = 2*np.pi*np.fft.fftfreq(self.ny, dy)[iy]
+        A = self._column_operator(kx, ky, B)
+        lam, vec = np.linalg.eig(A)
+        om = np.imag(lam)
+        k2 = hat_ksqr(kx, dx) + hat_ksqr(ky, dy)
+        f2 = f0**2*hat_epm(kx, dx)*hat_epm(ky, dy)
+        iw = np.where(om > np.sqrt(f2)*(1. + 1e-8))[0]
+        iw = iw[np.argsort(-om[iw])]                  # fast to slow
+        c2, phi, psi = [], [], []
+        ikx = 1j*hat_kp(kx, dx)
+        fex = hat_ep(kx, dx)*hat_em(ky, dy)
+        for i in iw:
+            U, V, Bc = vec[:nz, i], vec[nz:2*nz, i], vec[2*nz:, i]
+            # full pressure of the mode from its U momentum balance
+            Pfull = (f0*fex*V - 1j*om[i]*U)/ikx
+            s = Pfull[np.argmax(np.abs(Pfull))]       # make the columns real
+            Pfull, Bc = Pfull/s, Bc/s
+            if np.max(np.abs(np.imag(Pfull))) > 1e-8*np.max(np.abs(Pfull)):
+                raise RuntimeError('balance_n: mode pressure not real')
+            c2.append((om[i]**2 - f2)/k2)
+            phi.append(np.real(Pfull))
+            psi.append(np.real(Bc))
+        return np.array(c2), np.array(phi).T, np.array(psi).T
+

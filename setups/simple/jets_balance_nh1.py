@@ -112,6 +112,9 @@ if __name__ == '__main__':
     # thermal wind b_y = -f0 u_z, integrated in y (buoyancy perturbation, the background N0 is separate),
     # from u BEFORE apply_bc, which changes the vertical halo points in place with the numpy backend
     b = -f0*np.cumsum(np.gradient(u, dz, axis=2), axis=1)*dy
+    # the horizontal mean of the integral depends only on where the integration
+    # starts and would change the background stratification, so it is removed
+    b = b - b[h:-h, h:-h, :].mean(axis=(0, 1))
     M.u = M.apply_bc(OM.np.asarray(u))
     M.b = M.apply_bc(OM.np.asarray(b))
     M.prepare_balance_file()
