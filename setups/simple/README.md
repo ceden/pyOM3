@@ -63,6 +63,7 @@ in its first cell.
 | `lee_wave1.py` | ps3D lee_wave1.f90 | wave beam in a background current with a critical layer (nh_simple, periodic, scaled equations) |
 | `jets_balance1.py` | ps3D test_obta_unscaled1.f90 | two unstable jets, the state re-balanced order by order after Warn et al. during the run, `plot_jets_balance1` shows the result (pe_simple, periodic, rigid lid or implicit free surface) |
 | `jets_balance_nh1.py` | ps3D test_obta_unscaled1.f90 | the same jets and decomposition with nh_simple (rigid lids), output as for jets_balance1 |
+| `jets_waves_nh1.py` | ps3D test.f90 | two unstable jets balanced to second order plus a random wave field with the scaled GM spectrum, decomposition as in jets_balance_nh1, wave modes slaved only below a vertical wavenumber (`slave_modes`) (nh_simple, rigid lids, scaled equations) |
 | `overflow1_3D.py` | overflow1_3D.f90 | dense water from a shelf through a gap in a barrier down a slope, rotating tank (nh_realistic) |
 
 The three ps3D configurations use `pyOM3/nh_simple/diag_balance.py`: the eigenmodes
@@ -77,7 +78,9 @@ after Warn et al. (1995) for pe_simple with the vertical modes of the
 hydrostatic equations (Eden, Chouksey and Olbers 2019, JPO), up to fourth
 order, rigid lid or implicit free surface, one process. `nh_simple/diag_balance.py` has
 the same `decompose(order)` and `balance(order)` up to fourth order with the
-damping correction of Eden et al. (2019).
+damping correction of Eden et al. (2019). `init_balance(slave_modes=...)` slaves the wave
+modes only below a vertical wavenumber, where the series converges. With
+`'auto'` the cut is at the vertical Froude number Ro u_rms |kz|/N0 = 1.
 
 ## Conventions
 

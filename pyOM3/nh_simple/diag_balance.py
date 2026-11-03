@@ -35,6 +35,17 @@
  of the state that no mode represents (the horizontal mean of b, the vertical
  checkerboard of b with the rigid lids, the Nyquist lines) has no dynamics
  and is added to the zero order.
+
+ The series diverges in the high vertical modes. A wave mode with vertical
+ wavenumber kz has the frequency N0 kh/kz (for large Burger number) and the
+ balanced flow advects with Ro u kh, so the mode can only be slaved if the
+ vertical Froude number Ro u kz/N0 is small. With slave_modes the wave
+ modes are slaved only for the vertical wavenumbers below a cut, at all
+ orders. Above the cut no wave mode is slaved and the wave part there stays
+ in the residual. The zero order is not affected. slave_modes = 'auto'
+ sets the cut at Ro u_rms |kz|/N0 = 1, with u_rms the rms horizontal
+ velocity of the geostrophic mode of the state, evaluated at each call of
+ decompose.
 """
 import numpy as np
 import pyOM3 as OM
@@ -51,14 +62,20 @@ def hat_em(k, d):   return (np.exp(-1j*k*d) + 1.)*0.5
 class balance(model):
 
     # ------------------------------------------------------------------
-    def init_balance(self, nsteps=10, damping=True, verbose=True):
+    def init_balance(self, nsteps=10, damping=True, verbose=True, slave_modes=None):
         """
-        nsteps     model steps for the time derivatives of f2, f3 (Baer and Tribbia 1977)
-        damping    account for the biharmonic damping Ahbi (needs Khbi = Ahbi, Kvbi = Avbi)
+        nsteps       model steps for the time derivatives of f2, f3 (Baer and Tribbia 1977)
+        damping      account for the biharmonic damping Ahbi (needs Khbi = Ahbi, Kvbi = Avbi)
+        slave_modes  None: wave modes slaved at all vertical wavenumbers
+                     m_c (integer): wave modes slaved only for |kz| < m_c pi/Lz
+                     (rigid lids) or |kz| < 2 m_c pi/Lz (periodic in z)
+                     'auto': wave modes slaved only for Ro u_rms |kz|/N0 < 1
         """
         if self.n_pes > 1:
             raise RuntimeError('balance: one process only')
         self.bal_nsteps, self.bal_damping, self.bal_verbose = nsteps, damping, verbose
+        self.bal_slave_modes = slave_modes
+        self.bal_slave = None
         nx, ny, nz = self.nx, self.ny, self.nz
         dx, dy, dz = self.dx, self.dy, self.dz
         self.kx = 2*np.pi*np.fft.rfftfreq(nx, dx)
@@ -262,7 +279,30 @@ class balance(model):
         return out
 
     def _I(self, F, s):
-        return 1j*self._amp(F, s)
+        I = 1j*self._amp(F, s)
+        if s != 0 and getattr(self, 'bal_slave', None) is not None:
+            I = np.where(self.bal_slave, I, 0.)          # wave modes above the cut are not slaved
+        return I
+
+    def _set_slave(self, state):
+        """the vertical wavenumbers at which wave modes are slaved, see slave_modes"""
+        sm = getattr(self, 'bal_slave_modes', None)
+        kz = np.abs(self.KZ) + 0*self.KX*self.KY
+        if sm is None:
+            self.bal_slave = None
+            return
+        if sm == 'auto':
+            g0 = self._amp(self.forward(*state), 0)
+            u0, v0 = self._fields([g0*qq for qq in self.vec_q(0)])[:2]
+            u_rms = np.sqrt(np.mean(self._interior(u0)**2 + self._interior(v0)**2))
+            kz_c = self.N0/(self.Ro*u_rms) if u_rms > 0 else np.inf
+        else:
+            kz_c = sm*(2 if self.periodic_in_z else 1)*np.pi/self.Lz
+        self.bal_slave = kz < kz_c
+        if self.bal_verbose and self.my_pe == 0:
+            print('balance: wave modes slaved for |kz| < %g, %d of %d vertical wavenumbers'
+                  % (kz_c, int(np.sum(np.abs(self.kz) < kz_c)), self.nz))
+        return
 
     def _init_damping(self):
         """inverse frequencies and the damping, Eq. (27) of Eden et al. (2019)"""
@@ -392,6 +432,7 @@ class balance(model):
         Ro = self.Ro
         pr('balance: zero order')
         state = (self.u, self.v, self.w, self.b)
+        self._set_slave(state)
         X0, X1, fp1, fm1 = self._orders_01(state)
         X, f = [X0, X1], [(fp1, fm1)]
         if order >= 2:
