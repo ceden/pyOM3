@@ -14,6 +14,7 @@ Simple Python-based ocean and surface wave models.
 | `pyOM3/wim_realistic` | Version of `wim_simple` with pseudo-spherical coordinates for large-scale realistic applications |
 | `pyOM3/sw_simple` | Doubly periodic 2-D shallow-water model on the f plane with Lagrangian particles, one process, numpy or JAX |
 | `pyOM3/diagnostics/balance` | Balance diagnostics ordered by method (Warn et al., truncated kernels, frequency bands, optimal balance) for pe_simple, pe_realistic, nh_simple and sw_simple, and the band method on a window of a raw pe_realistic snapshot (`python3 -m pyOM3.diagnostics.balance.run_window`) |
+| `pyOM3/diagnostics/particles` | Lagrangian particles for pe_simple, pe_realistic and sw_simple, and the Lagrangian frequency filter of particle records (`python3 -m pyOM3.diagnostics.particles.lagrangian_filter`) |
 | `pyOM3/test` | Test suite for the pe, nh, nh_realistic, wim and coupled models and the balance diagnostics |
 
 ## Background

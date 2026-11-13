@@ -35,7 +35,7 @@ Set `PYOM3_ROOT` if the package does not sit one level above `setups/`.
 | `exp_wave.py` | `wave_common`: the wave model's mask, wind and energy diagnostics |
 | `exp_atmos.py` | the Held-Suarez atmosphere as a third component, exchanging with the ocean only (energy_cycle.tex Sec. 6) |
 | `ni_diag.py` | `ni_common`: the near-inertial energy flux out of the mixed layer, online (Rimac et al. 2016) |
-| `particle_diag.py` | `particle_common`: Lagrangian particles online (the seeds, one record file per segment, the particle restart), on `pe_realistic/particles.py` |
+| `particle_diag.py` | `particle_common`: Lagrangian particles online (the seeds, one record file per segment, the particle restart), on `particles_pe_realistic` of `pyOM3/diagnostics/particles/particles.py`; the records are filtered by `python3 -m pyOM3.diagnostics.particles.lagrangian_filter` |
 | `ni_report.py` | offline: the near-inertial numbers, maps and seasonal cycle from the means (`-j` parallel) |
 | `heat_transport.py` | offline: meridional heat and freshwater transport and the overturning per basin from the means (`-j` parallel) |
 | `bx_coarse_test.py` | MPI test of the block exchange with a coarsened wave grid |
@@ -94,7 +94,7 @@ Names the shared classes read: `rho_0`, `cp_0`, `t_rest`, `omega_e`, `nz`,
 | `NI_LAT_MIN` | 5.0 | f is held at this latitude towards the equator |
 | `NI_MLD_EVERY` | 50 | steps between evaluations of the mixed layer depth (one density call) |
 | `NI_DUMP_EVERY` | 0 | steps between float32 dumps of u, v, w, p of those levels into `<snapshots>_ni/`, for the offline analysis; 0 = none |
-| `PARTICLES` | False | the Lagrangian particles of `particle_diag.py` (`pe_realistic/particles.py`: trilinear, AB4, every ocean step; every PE holds every particle, the owner of its T cell interpolates, a global sum). A record every `PARTICLE_OUT_STEPS` steps (n % K == 0, time n dt as the snapshots) into `<exp>_particles<segment>.nc`: lon, lat (f8), depth, u, v, w, temp, salt (f4); the state into `<restart>_particles.npz`, written before the ocean header. A branch seeds anew. Experiment modules read the switches with `exp_common.particle_env()` (EXP_PARTICLES, ...) |
+| `PARTICLES` | False | the Lagrangian particles of `particle_diag.py` (`particles_pe_realistic` in `pyOM3/diagnostics/particles/particles.py`: trilinear, AB4, every ocean step; every PE holds every particle, the owner of its T cell interpolates, a global sum). A record every `PARTICLE_OUT_STEPS` steps (n % K == 0, time n dt as the snapshots) into `<exp>_particles<segment>.nc`: lon, lat (f8), depth, u, v, w, temp, salt (f4); the state into `<restart>_particles.npz`, written before the ocean header. A branch seeds anew. Experiment modules read the switches with `exp_common.particle_env()` (EXP_PARTICLES, ...) |
 | `PARTICLE_BOX`, `PARTICLE_STRIDE`, `PARTICLE_DEPTHS` | None, 1, () | the moving seeds: the T points of lon0, lon1, lat0, lat1 (modulo 360), every STRIDE-th from global index 0, at the depths [m] |
 | `MOORING_BOX`, `MOORING_STRIDE`, `MOORING_DEPTHS` | None, 1, () | the same as fixed points (moving = 0): Eulerian series at the record cadence |
 | `PARTICLE_FILE` | '' | npz with lon, lat, depth[, moving] instead of the boxes |

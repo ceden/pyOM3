@@ -276,9 +276,11 @@ on), nh_simple under MPI with WENO.
 
 ### 23. Lagrangian particles (`pe/particles.py`, `coupled/particles_run.py`)
 
-`pe_realistic/particles.py` (trilinear interpolation from the C grid, AB4,
+`particles_pe_realistic` of `pyOM3/diagnostics/particles/particles.py`
+(Nov 2026, before in `pe_realistic/particles.py`; trilinear interpolation from the C grid, AB4,
 every PE holds every particle and the owner of its T cell interpolates, a
-global sum) and its coupled_common driver `particle_diag.py`.
+global sum) and its coupled_common driver `particle_diag.py`. The particles
+of sw_simple (`particles_sw_simple`) are tested in 24b.
 
     23a analytic    uniform u on the sphere exact (1e-12); u and v (Mercator
                     longitude) and w linear in z: the scheme's start, second
@@ -289,7 +291,7 @@ global sum) and its coupled_common driver `particle_diag.py`.
     23c tracers     masked trilinear temp: linear field exact, next to the
                     shelf the wet points only                         1e-12
     23d restart     particles_state / particles_restore mid run       exact
-    23e simple      pe_simple's particles on the uniform box          1e-9
+    23e simple      particles_pe_simple on the uniform box            1e-9
     23f layout      prescribed analytic fields, MPI 1x2, 2x1, 2x2 (+ halo 2)
                     exact; jax 1x1 .. 2x2 (+ halo 2), slow part        1e-12
     23g model       the forced model running, the same layouts        1e-10

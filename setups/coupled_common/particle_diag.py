@@ -1,7 +1,7 @@
 """
 LAGRANGIAN PARTICLES of the forced or coupled ocean, online, for the
 Lagrangian frequency analysis (draft1, Shakespeare and Hogg 2017): the
-particles of pe_realistic/particles.py (trilinear interpolation, AB4, every
+particles of pyOM3/diagnostics/particles (particles_pe_realistic) (trilinear interpolation, AB4, every
 ocean step, every PE holds every particle) set up from the configuration,
 written to one netCDF file per segment, and carried through the restarts.
 
@@ -53,7 +53,7 @@ PARTICLE_OUT_STEPS (exp_common.Cfg.DEFAULTS has them, PARTICLES off).
 import os
 import numpy as np
 import pyOM3 as OM
-from pyOM3.pe_realistic.particles import particles
+from pyOM3.diagnostics.particles.particles import particles_pe_realistic as particles
 try:          # HDF5 is not thread safe: the lock of the ERA5 read-ahead thread
     from forcing_era5_native import NC_LOCK
 except ImportError:

@@ -1,4 +1,5 @@
-"""Test 23: Lagrangian particles of pe_realistic (pe_realistic/particles.py).
+"""Test 23: Lagrangian particles of pe_realistic (particles_pe_realistic of
+pyOM3/diagnostics/particles/particles.py).
 
   23a analytic    prescribed uniform flows on the sphere against the exact
                   trajectories: u alone (dx/dt = u/(a cos y), exact for the
@@ -19,7 +20,7 @@
                                                                    1e-12
   23d restart     2N steps against N steps, particles_state, a new set
                   restored from it, N steps; in the forced box     exact
-  23e simple      pe_simple's particles (pe_simple/particles.py) against
+  23e simple      pe_simple's particles (particles_pe_simple) against
                   these on the same uniform Cartesian box, the forced model
                   of test 1 (the two models agree to 1e-12)        1e-9 rel
   23f layout      prescribed analytic fields (the same in every layout,
@@ -46,7 +47,7 @@ sys.path.insert(0, HERE)
 import numpy as np
 from config import small_model, step, line
 import pyOM3 as OM
-from pyOM3.pe_realistic.particles import particles
+from pyOM3.diagnostics.particles.particles import particles_pe_realistic as particles
 
 AB2 = (1.6, -0.6, 0.0)
 
@@ -217,7 +218,7 @@ def restart(n=6):
 def simple(n=16):
     """pe_simple's particles against these, the forced box on the uniform
     Cartesian grid of test 1"""
-    from pyOM3.pe_simple.particles import particles as psimple
+    from pyOM3.diagnostics.particles.particles import particles_pe_simple as psimple
     with contextlib.redirect_stdout(io.StringIO()):
         ms = small_model('simple', bases=(psimple,))
         mr = small_model('cartesian', bases=(particles,))

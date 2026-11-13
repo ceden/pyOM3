@@ -109,7 +109,7 @@ def case_ob(R):
 
 
 def case_particles(R):
-    from pyOM3.sw_simple.particles import particles
+    from pyOM3.diagnostics.particles.particles import particles_sw_simple as particles
     out = []
     xc = (np.arange(12) + 0.3)*2*np.pi/12
     Yc, Xc = np.meshgrid(xc + 0.11, xc)
