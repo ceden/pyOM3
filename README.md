@@ -12,7 +12,9 @@ Simple Python-based ocean and surface wave models.
 | `pyOM3/nh_realistic` | Non-hydrostatic ocean model based on `pyOM3/pe_realistic` with topography and irregular boundaries and a 3-D CG solver |
 | `pyOM3/wim_simple` | Simple spectral surface wave model using JAX sharding or mpi4py for domain decomposition |
 | `pyOM3/wim_realistic` | Version of `wim_simple` with pseudo-spherical coordinates for large-scale realistic applications |
-| `pyOM3/test` | Test suite for the pe, nh, and wim models |
+| `pyOM3/sw_simple` | Doubly periodic 2-D shallow-water model on the f plane with Lagrangian particles, one process, numpy or JAX |
+| `pyOM3/diagnostics/balance` | Balance diagnostics ordered by method (Warn et al., truncated kernels, frequency bands, optimal balance) for pe_simple, pe_realistic, nh_simple and sw_simple, and the band method on a window of a raw pe_realistic snapshot (`python3 -m pyOM3.diagnostics.balance.run_window`) |
+| `pyOM3/test` | Test suite for the pe, nh, nh_realistic, wim and coupled models and the balance diagnostics |
 
 ## Background
 
@@ -21,7 +23,7 @@ Based on pyOM2 and ps3D, using P3DFFT, JAX, etc.
 # Installation 
 
 pyOM3 consists of the Python packages pe_simple, pe_realistic, nh_simple, nh_realistic,
-wim_simple and wim_realistic. Required and optional Python packages are described 
+wim_simple, wim_realistic and sw_simple, and the diagnostics in pyOM3/diagnostics. Required and optional Python packages are described 
 in the detailed installation instructions below.
 
 Additionally, nh_simple needs the parallel FFT `p3dfft` in `pyOM3/p3dfft`, which is 
@@ -102,6 +104,7 @@ The environment variable `PYOM3_BACKEND` selects `numpy` or `jax`.
 With mpi4py and JAX both installed, JAX is therefore used only with `PYOM3_BACKEND=jax`.
 pyOM3 switches JAX to double precision itself.
 nh_simple always runs with numpy and MPI.
+sw_simple runs on one process with either backend.
 
 ## Compiling the Fortran parts
 
