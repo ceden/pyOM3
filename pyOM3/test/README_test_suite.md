@@ -325,8 +325,13 @@ front of the model class) and `periodic_x`.
 
 Written before the balance code moved into `pyOM3/diagnostics/balance`
 (Nov 2026). Every method runs on small cases and the output is compared with
-`balance/golden.json`. The pure move reproduced it exactly, a refactoring
-must reproduce it to round-off. The cases (`balance/config.py`):
+`balance/golden.json`. The pure move reproduced it exactly. Step 3 (shared
+cores, Nov 13 2026) reproduced every case exactly except pr_ob: the optimal
+balance of pe_realistic now uses the method of pe_simple (its old backward
+integration did not ramp down the non-linear terms, its time averaging used
+the friction), and pr_ob got a second variant (hann, no friction); write
+its reference once with `regression.py --update pr_ob`. The cases
+(`balance/config.py`):
 
     ps_*      pe_simple, the jets of jets_balance1 at 32 x 32 x 6 with a
               wave packet, 30 steps, periodic, buoyancy as tracer
@@ -350,7 +355,7 @@ must reproduce it to round-off. The cases (`balance/config.py`):
                         base point, fft and kernel projection (2 iterations)
     pr_band             band_pe_realistic: band_balanced(2),
                         band_quality, band_fast_tendency
-    pr_ob               optimal_pe_realistic, average
+    pr_ob               optimal_pe_realistic: average; hann without friction
     pr_window           window.py: read_raw (window of 4 blocks),
                         read_coords, window_model (rim 2), init_balance with
                         the EOS, mixed_layer_depth, wind_body_force,
@@ -368,7 +373,9 @@ vectors (`config.fingerprint`). The deviation of an entry is the change of
 these numbers divided by the largest norm of the same group of variables in
 the case (velocity u, v, w; tendencies; forcing; buoyancy b, temp, salt;
 pressure p, p_s): the higher orders and w are measured against the size of
-the flow. Tolerance 1e-10 (1e-7 for the residual of band_quality, below).
+the flow. The skew of init_band, the check that L is skew-adjoint, is a
+round-off number (8e-17 on the periodic jets) and is compared absolutely. Tolerance 1e-10 (1e-7 for the residual of band_quality, 1e-8 for
+the fourth order of nh_simple, below).
 
 `regression.py --sensitivity` changes the initial velocity of every case by
 1e-13 and prints how far each case moves. On Nov 12 2026: the fourth order
@@ -376,7 +383,10 @@ of nh_simple 3.5e-9 of the flow, the pe_simple Warn orders up to 1.5e-11,
 everything else below 2e-12, except the residual of band_quality (the fast
 tendency of the balanced state, the Lanczos projection of a tendency
 dominated by its fast part), 2.3e-6 of the flow, compared with the tolerance
-1e-7. The same code on a Mac and on Linux differs about as much as this
+1e-7. The fourth order of nh_simple is compared with 1e-8: p3dfft plans
+its FFTs with FFTW_MEASURE, so the algorithm and the round-off can change
+from run to run, and that order moved by 1.4e-9 in one full fast suite
+(Nov 13 2026). The same code on a Mac and on Linux differs about as much as this
 1e-13 change (Nov 12 2026: nh order 4 2.4e-9, band_quality 7e-7, the skew of
 the window 2e-10), so golden.json must be written on the machine that runs
 the test: `regression.py --update` (run_fast.py passes no options). It

@@ -60,7 +60,8 @@
 """
 import numpy                 as np
 import pyOM3                 as OM
-from pyOM3.diagnostics.balance.warn import warn_pe_simple, hat_ksqr, hat_epm
+from pyOM3.diagnostics.balance.warn import warn_pe_simple
+from pyOM3.diagnostics.balance._common import hat_ksqr, hat_epm
 
 
 class kernel_pe_simple(warn_pe_simple):

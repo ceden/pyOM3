@@ -23,14 +23,15 @@ forcing Fu, Fv; buoyancy b, temp, salt; pressure p, p_s; any other name its
 own group): the higher orders and w are measured against the size of the
 flow, not against their own size. One line per case: the largest deviation
 of its entries relative to their tolerance (1e-10; 1e-7 for the residual of
-band_quality, see TOL_QUALITY). --sensitivity with 1e-13 moved the cases by
+band_quality, see TOL_QUALITY; 1e-8 for the fourth order of nh_simple, see
+TOL_NH4). --sensitivity with 1e-13 moved the cases by
 at most 4e-9 of the flow (the fourth order of nh_simple) and the
 band_quality residual by 2e-6 (Nov 12 2026). The same code on a Mac and on
 Linux differs about as much (nh order 4 2.4e-9, band_quality 7e-7, the skew
 of the window 2e-10), so golden.json is written with --update on the machine
 that runs the test.
 """
-import json, os, sys, time, shutil, tempfile, warnings
+import json, os, sys, time, shutil, tempfile
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import (ps_model, pr_model, nh_model, pr_snapshot, fingerprint, quiet, line, HERE,
@@ -40,8 +41,15 @@ TOL = 1e-10
 # the residual of band_quality, the fast tendency of a balanced state, is the
 # Lanczos projection of a tendency dominated by its fast part: a 1e-13 change
 # of the input moves it by 2e-6 of the flow (--sensitivity, Nov 12 2026),
-# Mac against Linux by 7e-7. Its entries are compared with TOL_QUALITY
+# Mac against Linux by 7e-7, jax against numpy by 1.4e-6 (the slow
+# projection of that tendency differs by 8e-3 between 60 and 300 Lanczos
+# steps, Nov 13 2026). Its entries are compared with TOL_QUALITY
 TOL_QUALITY = 1e-7
+# the fourth order of nh_simple (decompose4/order4) amplifies round-off by
+# about 4e4 (--sensitivity), and p3dfft plans its FFTs with FFTW_MEASURE: the
+# algorithm, and so the round-off, can change from run to run (1.4e-9 seen in
+# the full fast suite, Nov 13 2026). Compared with TOL_NH4
+TOL_NH4 = 1e-8
 I = lambda m, a: np.asarray(a)[m.halo:-m.halo, m.halo:-m.halo, m.halo:-m.halo]
 I2 = lambda m, a: np.asarray(a)[m.halo:-m.halo, m.halo:-m.halo]
 NAMES6 = ('u', 'v', 'w', 'b', 'p', 'p_s')
@@ -167,7 +175,6 @@ def case_ps_band():
     m = ps_model((band_pe_simple,))
     with quiet():
         m.init_balance(N0)
-        m.init_kernel()
         m.init_band(m_lanczos=ML)
         out['skew'] = m.band_skew
         _fields(m, out, 'band2', m.band_balanced(2), NAMES6)
@@ -187,14 +194,12 @@ def case_ps_band_topo_n2():
     m = ps_model((band_pe_simple,), seamount=True)
     with quiet():
         m.init_balance(N0)
-        m.init_kernel()
         m.init_band(m_lanczos=ML)
         out['seamount/skew'] = m.band_skew
         _fields(m, out, 'seamount2', m.band_balanced(2), NAMES6)
     m = ps_model((band_pe_simple,), n2=True)
     with quiet():
         m.init_balance(m.case_N0)
-        m.init_kernel()
         for norm in ('modal', 'diag', 'tlevel'):
             m.init_band(n2_norm=norm, m_lanczos=ML)
             _fields(m, out, 'n2_%s' % norm, m.band_balanced(2), NAMES6)
@@ -250,12 +255,19 @@ def case_pr_band():
 
 
 def case_pr_ob():
+    # the method of pe_simple since step 3 (Nov 2026): golden.json rewritten
+    # for this case, the old pe_realistic backward integration did not ramp
+    # down the non-linear terms and its time averaging used the friction
     from pyOM3.diagnostics.balance.optimal import optimal_pe_realistic
     out = {}
     m = pr_model((optimal_pe_realistic,))
     with quiet():
         m.balance_it(**OB)
     _state(m, out, 'average')
+    m = pr_model((optimal_pe_realistic,))
+    with quiet():
+        m.balance_it(**OB, OB_window='hann', OB_friction=False)
+    _state(m, out, 'hann_nofric')
     return out
 
 
@@ -349,11 +361,7 @@ def compute(names):
     for c in names:
         t = time.time()
         try:
-            with warnings.catch_warnings():
-                # init_balance of pe_simple divides by k2 = 0 at the origin in
-                # np.where outside its errstate (harmless, the branch is not taken)
-                warnings.simplefilter('ignore', RuntimeWarning)
-                out = globals()['case_' + c]()
+            out = globals()['case_' + c]()
         except ModuleNotFoundError as e:                # nh_simple needs the p3dfft build
             print('24 %s: skipped (%s)' % (c, e)); continue
         res[c] = {k: fingerprint(v) for k, v in out.items()}
@@ -370,16 +378,24 @@ def _group(key):
     return GROUPS.get(var, var)
 
 
-def _tol(key):
-    return TOL_QUALITY if key.startswith('quality/') else TOL
+def _tol(key, case=None):
+    if key.startswith('quality/'):
+        return TOL_QUALITY
+    if case == 'nh_warn' and '/order4/' in key:
+        return TOL_NH4
+    return TOL
 
 
-def deviation(new, ref):
+def deviation(new, ref, case=None):
     """the largest deviation of the entries of a case relative to their
     tolerance: (deviation, entry, tolerance of the entry)"""
     scale = {}
     for k, f in ref.items():
         scale[_group(k)] = max(scale.get(_group(k), 0.), f[0])
+    # band_skew, the check of init_band that L is skew-adjoint, is a
+    # dimensionless number at round-off level (8e-17 on the periodic jets):
+    # its own size is no scale, it is compared absolutely
+    scale['skew'] = 1.
     worst, where, wt = 0., '', TOL
     for k, f in ref.items():
         if k not in new:
@@ -388,8 +404,8 @@ def deviation(new, ref):
         if not np.all(np.isfinite(g)):
             return np.inf, k + ' not finite', TOL
         d = max(abs(a - b) for a, b in zip(f, g))/max(scale[_group(k)], 1e-300)
-        if d/_tol(k) > worst/wt:
-            worst, where, wt = d, k, _tol(k)
+        if d/_tol(k, case) > worst/wt:
+            worst, where, wt = d, k, _tol(k, case)
     extra = set(new) - set(ref)
     if extra:
         return np.inf, 'new entries ' + ', '.join(sorted(extra)[:3]), TOL
@@ -406,7 +422,7 @@ def sensitivity(names):
     finally:
         config.PERTURB = 0.
     for c in ref:
-        d, where, t = deviation(new[c], ref[c])
+        d, where, t = deviation(new[c], ref[c], c)
         print('24 sensitivity %-22s %9.2e  at %s (tolerance %.0e)' % (c, d, where, t))
     return True
 
@@ -425,7 +441,7 @@ def run(update=False, names=None):
     for c in res:
         if c not in ref:
             print('24 %s: no reference in golden.json (run --update)' % c); ok = False; continue
-        d, where, t = deviation(res[c], ref[c])
+        d, where, t = deviation(res[c], ref[c], c)
         ok &= line('24 balance %-22s (%3d entries, %4.0f s)' % (c, len(ref[c]), times[c]), d, t)
         if d > t:
             print('      largest at %s' % where)

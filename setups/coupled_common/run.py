@@ -341,7 +341,8 @@ if color == 0:                                   # ---- wave ----
             print(setup.wave_grid_report(), flush=True)
 
 elif color == 1:                                 # ---- ocean ----
-    M = ocean(get_ocean_parameter(),
+    ocean_par = get_ocean_parameter()
+    M = ocean(ocean_par,
               n_pes_x=n_pes_x_ocean, n_pes_y=n_pes_y_ocean, comm_in=None if solo else comm,
               halo_points=halo)
     M.use_stress_work = use_stress_work
@@ -387,6 +388,15 @@ elif color == 1:                                 # ---- ocean ----
     M.prepare_for_run(snap_file_name=ocean_snap_file.replace('.cdf',
                                                              segment + '.cdf'),
                       show_each_time_step=False)
+    # the parameters of the run beside its raw snapshots (run_params.json in
+    # the segment's directory, after prepare_for_run has made it): the window
+    # driver of the balance diagnostics takes the model parameters and the
+    # forcing from there (python3 -m pyOM3.diagnostics.balance.run_window)
+    if M.my_pe == 0 and os.path.isdir(getattr(M, 'snap_file_name', '')):
+        from pyOM3.diagnostics.balance.window import write_run_params
+        write_run_params(M.snap_file_name, M, ocean_par,
+                         exp_name=exp_name, segment=segment, setup=setup.__name__,
+                         forcing=setup.forcing_settings() if hasattr(setup, 'forcing_settings') else None)
     # online time means (EXP_AVERAGE), one file per segment
     M.average_setup('ocean_mean_%s%s.cdf' % (exp_name, segment), average_mode)
     # Lagrangian particles (particle_diag.py, off unless the setup sets PARTICLES):

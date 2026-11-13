@@ -2,7 +2,11 @@
 Balanced flow decomposition by frequency bands: band_pe_simple for
 pe_simple and band_pe_realistic for pe_realistic (add the class to the model
 class bases). Moved here from pe_simple/diag_band_balance.py and
-pe_realistic/diag_band_balance.py (Nov 2026), the code unchanged.
+pe_realistic/diag_band_balance.py (Nov 2026). The parts that both families
+share (the Lanczos method, the band weights, the slow projection, the band
+inverse) are in the class _band. band_pe_simple no longer inherits
+kernel_pe_simple and warn_pe_simple: its init_balance only sets the
+background (_stratified of _common.py), init_kernel is not needed.
 
 band_pe_simple
 --------------
@@ -45,9 +49,9 @@ band_pe_simple
  The orders follow kernel.py: X0 = P X, X1 = K N(X0), X2 = K [N(X0 +
  X1) - N(X0) - N(X1) - dX1/dt + D X1] with N the advection tendencies (projected
  on the rigid lid), D the biharmonic damping of the model and dX1/dt from
- model steps (pTf1_numeric). Needs init_balance (for the background, the
- model steps and the tendencies) and init_kernel of kernel.py, then
- init_band. One process, numpy.
+ model steps (pTf1_numeric). Needs init_balance (the background
+ stratification and the model steps, _init_stratification of _common.py),
+ then init_band. One process, numpy.
 
 
 band_pe_realistic
@@ -102,12 +106,147 @@ import pyOM3 as OM
 from functools import partial
 from pyOM3.pe_realistic.model import model as _pe_realistic
 from pyOM3.density import get_rho, get_drhodT, get_drhodS
-from pyOM3.diagnostics.balance.kernel import kernel_pe_simple
+from pyOM3.pe_simple.model import model as _pe_simple
+from pyOM3.diagnostics.balance._common import _grid, _stratified
 
 
-class band_pe_simple(kernel_pe_simple):
+class _band:
+    """
+    the parts of the band method shared by the families: the Lanczos
+    method for f(B) X, the band weights, the projection on the slow band,
+    the band inverse, the fields of a state and a random state
+    """
+
+    def _band_B(self, X):
+        return self._band_L(self._band_L(X))
+
+    def _band_fields(self, X):
+        """u, v, w, b, p, p_s with halo from interior (u, v, b)"""
+        u = self._pad(X[0])*self.maskU; v = self._pad(X[1])*self.maskV; b = self._pad(X[2])*self.maskT
+        w = self.vertical_velocity(u, v, OM.np.zeros_like(u), self.maskW)
+        # the surface pressure of the state: that of its linear tendency, which
+        # for a slow state is the pressure of the geostrophic balance
+        _, _, _, p_s = self.lin_tend(u, v, b)
+        p = p_s[None] + self.hydrostatic(b)
+        return u, v, w, b, p, p_s
+
+    def band_inverse(self, F):
+        """K F = L q(B) F for the tendency triple F (interior arrays), interior arrays"""
+        Q, = self._lanczos(F, 'q')
+        return self._band_L_np(Q)
+
+    def _band_random(self, rng):
+        """a random state in the constrained space (interior arrays)"""
+        I = self._interior
+        shp = (self.nz, self.ny, self.nx)
+        u, v, b = [rng.standard_normal(shp) for _ in range(3)]
+        du, dv, _ = self.rigid_project(self._pad(u)*self.maskU, self._pad(v)*self.maskV)
+        return [I(du), I(dv), b*I(self.maskT)]
+
+    def _lanczos(self, X, which):
+        """
+        f(B) X for the functions in which ('P': the slow band projection,
+        'q': q(B) with q = (1 - slow)/omega^2, 'S': slow^2), by the Lanczos
+        method on B = L^2 in the energy inner product (band_reorth: full
+        reorthogonalization). X and the results are interior arrays.
+        """
+        m = self.band_m
+        f2 = self.bal_f0**2                                # B/f0^2 has eigenvalues -(omega/f0)^2
+        X = [OM.np.asarray(x) for x in X]
+        n0 = np.sqrt(self._band_dot(X, X))
+        if n0 == 0:
+            return [[np.zeros(x.shape) for x in X] for _ in which]
+        V = [[x/n0 for x in X]]
+        a, bet = [], []
+        for j in range(m):
+            W = [w/f2 for w in self._band_B(V[j])]
+            if j > 0:
+                W = [w - bet[-1]*vv for w, vv in zip(W, V[j-1])]
+            a.append(self._band_dot(W, V[j]))
+            W = [w - a[-1]*vv for w, vv in zip(W, V[j])]
+            if self.band_reorth:
+                for Vi in V:
+                    c = self._band_dot(W, Vi)
+                    W = [w - c*vv for w, vv in zip(W, Vi)]
+            ww = self._band_dot(W, W)
+            bj = np.sqrt(max(ww, 0.)) if np.isfinite(ww) else 0.
+            if bj < self.band_tol or j == m - 1:                # invariant subspace, or breakdown
+                break
+            bet.append(bj)
+            V.append([w/bj for w in W])
+        k = len(a)
+        T = np.diag(a) + np.diag(bet[:k-1], 1) + np.diag(bet[:k-1], -1)
+        ev, U = np.linalg.eigh(T)
+        om = np.sqrt(np.maximum(-ev, 0.))*abs(self.bal_f0)
+        slow = self._band_slow(om)
+        e1 = U[0, :]*n0                                    # U^T e1 n0
+        out = []
+        for wh in which:
+            if wh == 'P':
+                g = slow
+            elif wh == 'S':
+                # the slow part of the tendency of X0 + X1 due to F: P F + P L K F
+                # = (slow + slow (-omega^2) (1 - slow)/omega^2) F = slow^2 F
+                g = slow**2
+            else:
+                # zero on the slow band (slow = 1 exactly): a Ritz value
+                # omega = 0 there gave 0/0 = NaN (1e-300**2 underflows),
+                # the second order of eddy100t1_all
+                fast = slow < 1.
+                g = np.zeros_like(om)
+                g[fast] = (1. - slow[fast])/om[fast]**2
+            c = U @ (g*e1)
+            out.append([np.asarray(sum(c[i]*V[i][l] for i in range(k))) for l in range(3)])
+        self.band_its = k
+        self.band_ritz = om
+        return out
+
+    def _band_slow(self, om):
+        """
+        the weight of the slow band at the frequency om: 1 below om_cut -
+        om_width, 0 above om_cut + om_width, in between the C-infinity step
+        exp(-1/x)/(exp(-1/x) + exp(-1/(1-x))). It is exactly 1 and 0 outside
+        the transition, so that (1 - slow)/omega^2 of the band inverse stays
+        bounded on the geostrophic modes (an error function tail there,
+        divided by omega^2, blows up the first order).
+        """
+        if self.band_om_width <= 0:
+            return np.where(om >= self.band_om_cut, 0., 1.)
+        x = np.clip((om - self.band_om_cut + self.band_om_width)/(2*self.band_om_width), 0., 1.)
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            f0 = np.where(x > 0, np.exp(-1./np.maximum(x, 1e-300)), 0.)
+            f1 = np.where(x < 1, np.exp(-1./np.maximum(1. - x, 1e-300)), 0.)
+        return f1/(f0 + f1)
+
+    def band_project(self, u, v, b):
+        """
+        zero order balanced state (slow band) of the fields with halo,
+        returns u, v, w, b, p, p_s. The blocked throughflow of a window is
+        kept as slow (see band_balanced)
+        """
+        I = self._interior
+        du, dv, _ = self.rigid_project(u*self.maskU, v*self.maskV)
+        X0, = self._lanczos([I(du), I(dv), I(b)], 'P')
+        return self._band_fields([X0[0] + I(u) - I(du), X0[1] + I(v) - I(dv), X0[2]])
+
+
+class band_pe_simple(_band, _stratified, _pe_simple):
 
     # ------------------------------------------------------------------
+    def init_balance(self, N0, nsteps=10, verbose=True, f0=None):
+        """
+        the background of the band method: N0 the background stratification
+        (a number, or N^2 at the w levels, rigid lid), temp = background + b,
+        nsteps the model steps of dt_mode 'model', f0 the reference Coriolis
+        parameter (see init_balance of warn_pe_simple). Then init_band.
+        """
+        self._init_stratification(N0, nsteps, verbose, f0)
+        return
+
+    def _band_L_np(self, X):
+        """L applied to interior arrays, numpy result (pe_simple: numpy only)"""
+        return self._band_L(X)
+
     def init_band(self, om_cut=0.5, om_width=0.3, m_lanczos=300, tol=1e-9, reorth=False, n2_norm='auto',
                   dt_mode='linear', verbose=True, check=True):
         """
@@ -226,17 +365,6 @@ class band_pe_simple(kernel_pe_simple):
                 print('band: cutoff %.2f f, width %.2f f, <Y,LX> + <LY,X> = %.1e of |LX||Y|' % (om_cut, om_width, s))
         return
 
-    def _band_random(self, rng):
-        """a random state in the constrained space (interior arrays)"""
-        h = self.halo
-        shp = (self.nz, self.ny, self.nx)
-        u, v, b = [rng.standard_normal(shp) for _ in range(3)]
-        du, dv, _ = self.rigid_project(self._pad(u)*self.maskU, self._pad(v)*self.maskV)
-        I = lambda a: np.asarray(a)[h:-h, h:-h, h:-h]
-        return [I(du), I(dv), b*I(self.maskT)]
-
-    # ------------------------------------------------------------------
-    # the linear operator
     def _band_modal_norm(self):
         """
         the energy inner product for variable N^2. The background advection
@@ -374,9 +502,6 @@ class band_pe_simple(kernel_pe_simple):
             db = self._band_LT_b(u, v)
         return [np.asarray(a)[h:-h, h:-h, h:-h] for a in (du, dv, db)]
 
-    def _band_B(self, X):
-        return self._band_L(self._band_L(X))
-
     def damp_tend(self, u, v, b):
         """the biharmonic damping tendencies of the model (fields with halo)"""
         Ah = getattr(self, 'Ahbi', 0.); Kh = getattr(self, 'Khbi', 0.)
@@ -386,111 +511,6 @@ class band_pe_simple(kernel_pe_simple):
         db = self.biharmonic_horizontal_tendency(b, Kh, self.maskT) if Kh else z(b)
         return du, dv, db
 
-    # ------------------------------------------------------------------
-    # the Lanczos filter
-    def _lanczos(self, X, which):
-        """
-        f(B) X for the functions in which ('P': the slow band projection,
-        'q': q(B) with q = 1/omega^2 on the fast band), by the Lanczos
-        method on B = L^2 in the energy inner product, full reorthogonalization.
-        X and the results are interior arrays.
-        """
-        m = self.band_m
-        f2 = self.bal_f0**2                                # B/f0^2 has eigenvalues -(omega/f0)^2
-        n0 = np.sqrt(self._band_dot(X, X))
-        if n0 == 0:
-            return [[x*0 for x in X] for _ in which]
-        V = [[x/n0 for x in X]]
-        a, bet = [], []
-        for j in range(m):
-            W = [w/f2 for w in self._band_B(V[j])]
-            if j > 0:
-                W = [w - bet[-1]*vv for w, vv in zip(W, V[j-1])]
-            a.append(self._band_dot(W, V[j]))
-            W = [w - a[-1]*vv for w, vv in zip(W, V[j])]
-            if self.band_reorth:                           # full reorthogonalization
-                for Vi in V:
-                    c = self._band_dot(W, Vi)
-                    W = [w - c*vv for w, vv in zip(W, Vi)]
-            ww = self._band_dot(W, W)
-            bj = np.sqrt(max(ww, 0.)) if np.isfinite(ww) else 0.
-            if bj < self.band_tol or j == m - 1:                # invariant subspace, or breakdown
-                break
-            bet.append(bj)
-            V.append([w/bj for w in W])
-        k = len(a)
-        T = np.diag(a) + np.diag(bet[:k-1], 1) + np.diag(bet[:k-1], -1)
-        ev, U = np.linalg.eigh(T)
-        om = np.sqrt(np.maximum(-ev, 0.))*abs(self.bal_f0)
-        slow = self._band_slow(om)
-        e1 = U[0, :]*n0                                    # U^T e1 n0
-        out = []
-        for wh in which:
-            if wh == 'P':
-                g = slow
-            elif wh == 'S':
-                # the slow part of the tendency of X0 + X1 due to F: P F + P L K F
-                # = (slow + slow (-omega^2) (1 - slow)/omega^2) F = slow^2 F
-                g = slow**2
-            else:
-                # zero on the slow band (slow = 1 exactly): a Ritz value
-                # omega = 0 there gave 0/0 = NaN (1e-300**2 underflows),
-                # the second order of eddy100t1_all
-                fast = slow < 1.
-                g = np.zeros_like(om)
-                g[fast] = (1. - slow[fast])/om[fast]**2
-            c = U @ (g*e1)
-            out.append([sum(c[i]*V[i][l] for i in range(k)) for l in range(3)])
-        self.band_its = k
-        self.band_ritz = om
-        return out
-
-    def _band_slow(self, om):
-        """
-        the weight of the slow band at the frequency om: 1 below om_cut -
-        om_width, 0 above om_cut + om_width, in between the C-infinity step
-        exp(-1/x)/(exp(-1/x) + exp(-1/(1-x))). It is exactly 1 and 0 outside
-        the transition, so that (1 - slow)/omega^2 of the band inverse stays
-        bounded on the geostrophic modes (an error function tail there,
-        divided by omega^2, blows up the first order).
-        """
-        if self.band_om_width <= 0:
-            return np.where(om >= self.band_om_cut, 0., 1.)
-        x = np.clip((om - self.band_om_cut + self.band_om_width)/(2*self.band_om_width), 0., 1.)
-        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            f0 = np.where(x > 0, np.exp(-1./np.maximum(x, 1e-300)), 0.)
-            f1 = np.where(x < 1, np.exp(-1./np.maximum(1. - x, 1e-300)), 0.)
-        return f1/(f0 + f1)
-
-    def band_project(self, u, v, b):
-        """
-        zero order balanced state (slow band) of the fields with halo,
-        returns u, v, w, b, p, p_s. The blocked throughflow of a window is
-        kept as slow (see band_balanced)
-        """
-        h = self.halo
-        I = lambda a: np.asarray(a)[h:-h, h:-h, h:-h]
-        du, dv, _ = self.rigid_project(u*self.maskU, v*self.maskV)
-        X0, = self._lanczos([I(du), I(dv), I(b)], 'P')
-        return self._band_fields([X0[0] + I(u) - I(du), X0[1] + I(v) - I(dv), X0[2]])
-
-    def band_inverse(self, F):
-        """K F = L q(B) F for the tendency triple F (interior arrays), interior arrays"""
-        Q, = self._lanczos(F, 'q')
-        return self._band_L(Q)
-
-    def _band_fields(self, X):
-        """u, v, w, b, p, p_s with halo from interior (u, v, b)"""
-        u = self._pad(X[0])*self.maskU; v = self._pad(X[1])*self.maskV; b = self._pad(X[2])*self.maskT
-        w = self.vertical_velocity(u, v, OM.np.zeros_like(u), self.maskW)
-        # the surface pressure of the state: that of its linear tendency, which
-        # for a slow state is the pressure of the geostrophic balance
-        _, _, _, p_s = self.lin_tend(u, v, b)
-        p = p_s[None] + self.hydrostatic(b)
-        return u, v, w, b, p, p_s
-
-    # ------------------------------------------------------------------
-    # the orders
     def _band_nonlin(self, u, v, b):
         """advection tendencies (du, dv, db), projected on the rigid lid, interior arrays"""
         h = self.halo
@@ -611,7 +631,7 @@ class band_pe_simple(kernel_pe_simple):
         return out
 
 
-class band_pe_realistic(_pe_realistic):
+class band_pe_realistic(_band, _grid, _pe_realistic):
 
     # ------------------------------------------------------------------
     # the background and the helpers
@@ -721,18 +741,6 @@ class band_pe_realistic(_pe_realistic):
             temp = self.temp + db*self.rho_0/(-self.grav*rT)*self.maskT
         return B[0], B[1], temp, self.salt, B[5]
 
-    def _interior(self, a):
-        h = self.halo
-        return np.asarray(a)[h:-h, h:-h, h:-h]
-
-    def _pad(self, a):
-        h = self.halo
-        out = np.zeros((self.Nz, self.Ny, self.Nx))
-        out[h:-h, h:-h, h:-h] = a
-        return self.apply_bc(OM.np.asarray(out))
-
-    # the same on the backend's arrays (on jax: on the device, no transfer);
-    # the Lanczos vectors live there, the interface of the methods stays numpy
     def _int_dev(self, a):
         h = self.halo
         return OM.np.asarray(a)[h:-h, h:-h, h:-h]
@@ -740,11 +748,6 @@ class band_pe_realistic(_pe_realistic):
     def _pad_dev(self, a):
         h = self.halo
         return self.apply_bc(OM.np.pad(OM.np.asarray(a), h))
-
-    def hydrostatic(self, b):
-        """pressure from buoyancy, referenced to the surface, the discrete hydrostatic relation of the model"""
-        rho = -b*self.rho_0/self.grav
-        return self.hydrostatic_pressure(rho, OM.np.zeros_like(b), self.maskT)
 
     def model_state(self):
         """u, v, b, p of the model state, b the buoyancy perturbation"""
@@ -757,7 +760,6 @@ class band_pe_realistic(_pe_realistic):
         solver carries it so, the implicit one with its time levels, bal_tau)"""
         return self.p_s if self.p_s.ndim == 2 else self.p_s[self.bal_tau]
 
-    # ------------------------------------------------------------------
     def init_band(self, om_cut=0.5, om_width=0.3, m_lanczos=300, tol=1e-9, reorth=False, verbose=True, check=True):
         """
         the band and the inner product, after init_balance
@@ -859,19 +861,9 @@ class band_pe_realistic(_pe_realistic):
                 print('band: cutoff %.2f f, width %.2f f, <Y,LX> + <LY,X> = %.1e of |LX||Y|' % (om_cut, om_width, s))
         return
 
-    def _band_random(self, rng):
-        """a random state in the constrained space (interior arrays)"""
-        I = self._interior
-        shp = (self.nz, self.ny, self.nx)
-        u, v, b = [rng.standard_normal(shp) for _ in range(3)]
-        du, dv, _ = self.rigid_project(self._pad(u)*self.maskU, self._pad(v)*self.maskV)
-        return [I(du), I(dv), b*I(self.maskT)]
-
     def _band_dot(self, X, Y):
         return float(sum(OM.np.sum(w*OM.np.asarray(x)*OM.np.asarray(y)) for w, x, y in zip(self.band_w_dev, X, Y)))
 
-    # ------------------------------------------------------------------
-    # the linear operator
     def _div_t(self, fe, fn, ft):
         """divergence of fluxes at a T point (fn with cosu, as the flux routines)"""
         return ((fe - self.rollx(fe, 1))/(self.cost_y*self.dxt_x)
@@ -968,9 +960,6 @@ class band_pe_realistic(_pe_realistic):
         du, dv, db, _ = self.lin_tend(u, v, b)
         return [I(du), I(dv), I(db)]
 
-    def _band_B(self, X):
-        return self._band_L(self._band_L(X))
-
     def damp_tend(self, u, v, b):
         """the horizontal biharmonic damping tendencies of the model (fields with halo)"""
         z = lambda a: OM.np.zeros_like(a)
@@ -982,93 +971,6 @@ class band_pe_realistic(_pe_realistic):
             db = (self.biharmonic_horizontal(b, self.Khbi, self.maskT) - b)/self.dt
         return du, dv, db
 
-    # ------------------------------------------------------------------
-    # the Lanczos filter
-    def _lanczos(self, X, which):
-        """
-        f(B) X for the functions in which ('P': the slow band projection,
-        'q': q(B) with q = (1 - slow)/omega^2, 'S': slow^2), by the Lanczos
-        method on B = L^2 in the energy inner product. X and the results are
-        interior arrays.
-        """
-        m = self.band_m
-        f2 = self.bal_f0**2                                # B/f0^2 has eigenvalues -(omega/f0)^2
-        X = [OM.np.asarray(x) for x in X]
-        n0 = np.sqrt(self._band_dot(X, X))
-        if n0 == 0:
-            return [[np.zeros(x.shape) for x in X] for _ in which]
-        V = [[x/n0 for x in X]]
-        a, bet = [], []
-        for j in range(m):
-            W = [w/f2 for w in self._band_B(V[j])]
-            if j > 0:
-                W = [w - bet[-1]*vv for w, vv in zip(W, V[j-1])]
-            a.append(self._band_dot(W, V[j]))
-            W = [w - a[-1]*vv for w, vv in zip(W, V[j])]
-            if self.band_reorth:
-                for Vi in V:
-                    c = self._band_dot(W, Vi)
-                    W = [w - c*vv for w, vv in zip(W, Vi)]
-            ww = self._band_dot(W, W)
-            bj = np.sqrt(max(ww, 0.)) if np.isfinite(ww) else 0.
-            if bj < self.band_tol or j == m - 1:
-                break
-            bet.append(bj)
-            V.append([w/bj for w in W])
-        k = len(a)
-        T = np.diag(a) + np.diag(bet[:k-1], 1) + np.diag(bet[:k-1], -1)
-        ev, U = np.linalg.eigh(T)
-        om = np.sqrt(np.maximum(-ev, 0.))*abs(self.bal_f0)
-        slow = self._band_slow(om)
-        e1 = U[0, :]*n0
-        out = []
-        for wh in which:
-            if wh == 'P':
-                g = slow
-            elif wh == 'S':
-                g = slow**2
-            else:
-                fast = slow < 1.
-                g = np.zeros_like(om)
-                g[fast] = (1. - slow[fast])/om[fast]**2
-            c = U @ (g*e1)
-            out.append([np.asarray(sum(c[i]*V[i][l] for i in range(k))) for l in range(3)])
-        self.band_its = k
-        self.band_ritz = om
-        return out
-
-    def _band_slow(self, om):
-        """the weight of the slow band: 1 below om_cut - om_width, 0 above om_cut + om_width, a C-infinity step between"""
-        if self.band_om_width <= 0:
-            return np.where(om >= self.band_om_cut, 0., 1.)
-        x = np.clip((om - self.band_om_cut + self.band_om_width)/(2*self.band_om_width), 0., 1.)
-        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
-            f0 = np.where(x > 0, np.exp(-1./np.maximum(x, 1e-300)), 0.)
-            f1 = np.where(x < 1, np.exp(-1./np.maximum(1. - x, 1e-300)), 0.)
-        return f1/(f0 + f1)
-
-    def band_project(self, u, v, b):
-        """zero order balanced state of the fields with halo, returns u, v, w, b, p, p_s"""
-        I = self._interior
-        du, dv, _ = self.rigid_project(u*self.maskU, v*self.maskV)
-        X0, = self._lanczos([I(du), I(dv), I(b)], 'P')
-        return self._band_fields([X0[0] + I(u) - I(du), X0[1] + I(v) - I(dv), X0[2]])
-
-    def band_inverse(self, F):
-        """K F = L q(B) F for the tendency triple F (interior arrays), interior arrays"""
-        Q, = self._lanczos(F, 'q')
-        return self._band_L_np(Q)
-
-    def _band_fields(self, X):
-        """u, v, w, b, p, p_s with halo from interior (u, v, b)"""
-        u = self._pad(X[0])*self.maskU; v = self._pad(X[1])*self.maskV; b = self._pad(X[2])*self.maskT
-        w = self.vertical_velocity(u, v, OM.np.zeros_like(u), self.maskW)
-        _, _, _, p_s = self.lin_tend(u, v, b)
-        p = p_s[None] + self.hydrostatic(b)
-        return u, v, w, b, p, p_s
-
-    # ------------------------------------------------------------------
-    # the orders
     def _band_nonlin(self, u, v, b):
         """advection tendencies and the metric terms (du, dv, db), projected on the rigid lid, interior arrays"""
         I = self._interior

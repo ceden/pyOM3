@@ -16,6 +16,10 @@ unchanged): reads the blocks of the ranks, cuts the window, builds the model
  Ahbi, Khbi (the damping of the second order), and the free surface flags;
  the window runs its own, simpler physics in an emission test (second order
  advection, no mixing) unless more is passed.
+
+ write_run_params / read_run_params: run_params.json, the parameters of the
+ run beside its raw snapshots (written by setups/coupled_common/run.py, read
+ by the driver run_window.py).
 """
 import os
 import numpy as np
@@ -388,3 +392,83 @@ def wind_body_force(M, taux, tauy, hml):
     Fu = 0.5*(FX + M.rollx(FX, -1))*M.maskU
     Fv = 0.5*(FY + M.rolly(FY, -1))*M.maskV
     return [I(Fu), I(Fv), 0.*fx]
+
+
+# ----------------------------------------------------------------------
+# the parameters of the run beside its raw snapshots
+RUN_PARAMS = 'run_params.json'
+# the model parameters a window shares with the run (window_model's par), read
+# from the model itself where the configuration leaves them to the defaults
+WINDOW_KEYS = ('eq_of_state', 'rho_0', 'dt', 'Ahbi', 'Khbi', 'biha_friction_cosPower',
+               'implicit_free_surface', 'explicit_free_surface', 'sub_cycling', 'fb_theta',
+               'superbee_advection', 'free_surface_tracer_flux')
+
+
+def _plain(v):
+    """v as a JSON value, or None for what has no place in the file (arrays
+    of the grid, objects): scalars, strings, and lists and dicts of them"""
+    if isinstance(v, (bool, np.bool_)):
+        return bool(v)
+    if isinstance(v, (int, np.integer)):
+        return int(v)
+    if isinstance(v, (float, np.floating)):
+        return float(v)
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (list, tuple)) and len(v) <= 16:
+        p = [_plain(a) for a in v]
+        return None if any(a is None for a in p) else p
+    if isinstance(v, dict):
+        p = {str(k): _plain(a) for k, a in v.items()}
+        return {k: a for k, a in p.items() if a is not None}
+    if getattr(v, 'ndim', None) == 0 or getattr(v, 'shape', None) == ():
+        try:
+            return _plain(np.asarray(v).item())
+        except Exception:
+            return None
+    return None
+
+
+def write_run_params(directory, model=None, par=None, **info):
+    """
+    <directory>/run_params.json: the model parameters of the run (the scalar
+    entries of the parameter dict par, with the model's own values where it
+    has them, and WINDOW_KEYS from the model) under 'model', and the further
+    entries of info (exp_name, segment, the forcing settings, ...) as they
+    are. The window driver (run_window.py) takes its parameters from it.
+    Written to a temporary file first and renamed, so that a reader never
+    sees half a file.
+    """
+    import json, datetime
+    m = {}
+    for k, v in (par or {}).items():
+        p = _plain(getattr(model, k, v)) if model is not None else _plain(v)
+        if p is None and model is not None:
+            p = _plain(v)
+        if p is not None:
+            m[k] = p
+    if model is not None:
+        for k in WINDOW_KEYS:
+            if k not in m and hasattr(model, k):
+                p = _plain(getattr(model, k))
+                if p is not None:
+                    m[k] = p
+    out = dict(written=datetime.datetime.now().isoformat(timespec='seconds'))
+    out.update({k: _plain(v) for k, v in info.items()})
+    out['model'] = m
+    fn = os.path.join(directory, RUN_PARAMS)
+    with open(fn + '.tmp', 'w') as f:
+        json.dump(out, f, indent=1, sort_keys=True)
+    os.replace(fn + '.tmp', fn)
+    return fn
+
+
+def read_run_params(path):
+    """the content of <path>/run_params.json, or None if the run did not
+    write one (runs before Nov 2026)"""
+    import json
+    fn = os.path.join(path, RUN_PARAMS)
+    if not os.path.isfile(fn):
+        return None
+    with open(fn) as f:
+        return json.load(f)
