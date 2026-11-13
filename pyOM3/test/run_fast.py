@@ -11,7 +11,7 @@ FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden',
             'wim': ['reduction', 'identities', 'restart', 'operators', 'golden',
                     'symmetry', 'sources', 'budget', 'halo'],                           # wim_simple, wim_realistic (wim_idemix: not built)
             'coupled': ['golden', 'forcing', 'identities', 'restart', 'halo', 'wave', 'endtoend', 'particles_run'],   # setups/coupled_common + forcing_common (4 needs mpirun; jax_backend.py in run_slow.py)
-            'balance': ['regression']}   # the balance diagnostics (24), before their move into pyOM3/diagnostics
+            'balance': ['regression', 'sw_check']}   # the balance diagnostics (24), sw_simple against the original code (24b)
 want = sys.argv[1:] or list(FAMILIES)
 t0 = time.time(); ok = True
 for fam in want:

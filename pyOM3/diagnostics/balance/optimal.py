@@ -1,7 +1,9 @@
 """
 Optimal balance: optimal_pe_simple for pe_simple and optimal_pe_realistic
 for pe_realistic (add the class to the model class bases). Only works with
-buoyancy as tracer and pressure method for external mode.
+buoyancy as tracer and pressure method for external mode. optimal_sw_simple
+for sw_simple, the port of the original 2-D code, has its own method
+(documented at the class, at the end of the file).
 
 The class _optimal holds the method (balance_it and the integrations), the
 two family classes the parts that depend on the grid: the horizontal mean
@@ -586,3 +588,117 @@ def ramp(theta):
     t1 = OM.np.where(theta   > 1e-32, 1./(1e-32+theta), 1e32)
     t2 = OM.np.where(1-theta > 1e-32, 1./(1e-32+(1-theta)), 1e32)   # (1e-32+1)-theta was 0 at theta = 1
     return OM.np.exp(-t1)/(OM.np.exp(-t1) + OM.np.exp(-t2) )
+
+
+# ----------------------------------------------------------------------
+from pyOM3.diagnostics.balance.warn import warn_sw_simple
+
+
+def sw_ramp(theta, kind='cos'):
+    """the ramp functions of the sw code: 0 at theta = 0, 1 at theta = 1"""
+    if theta > 1 or theta < 0: raise ValueError('sw_ramp: theta in 0..1')
+    if kind == 'cos':
+        return (1 - np_.cos(np_.pi*theta))/2
+    if kind == 'exp':
+        t1, t2 = 1./max(1e-32, theta), 1./max(1e-32, 1. - theta)
+        return np_.exp(-t1)/(np_.exp(-t1) + np_.exp(-t2))
+    if kind == 'cubic':
+        return theta**3/(theta**3 + (1 - theta)**3)
+    if kind == '4th':
+        return theta**4/(theta**4 + (1 - theta)**4)
+    raise ValueError('sw_ramp: kind cos, exp, cubic or 4th, not %r' % (kind,))
+
+
+class optimal_sw_simple(warn_sw_simple):
+    """
+    Optimal balance for sw_simple, port of opv_balance.py of the grav2D code
+    (renamed: there is no potential vorticity in the method), Nov 2026.
+
+    From the state, the model is integrated backward over OB_period with the
+    non-linear terms ramped down (factor 1 - ramp(t/OB_period)), the state is
+    projected on the geostrophic mode at the linear end, integrated forward
+    with the non-linear terms ramped up, and its geostrophic mode is
+    exchanged for that of the state (the base point). Repeated until the
+    change of the state is below OB_tol (norm of warn_sw_simple) or
+    OB_max_itts iterations. The integrations use the model's scheme from its
+    start, with the factor of the ramp at the beginning of each step.
+
+    The projection on the geostrophic mode (OB_projection): 'fft' the exact
+    spectral projection of warn_sw_simple (the zero order), 'average' the
+    time mean of the linear model over OB_average, started with an Euler
+    and an AB2 step and continued with AB3 (AB2 with AB_eps for the AB2
+    model), the mean of the states after each step, as the original code.
+
+    The ramp (OB_ramp): 'cos' (1 - cos(pi t/T))/2, 'exp', 'cubic', '4th'.
+
+    The mixing (Ahbi, Khbi): with OB_friction (default True) in the forward
+    integration, never in the backward integration and the time mean (as
+    optimal_pe_simple; the original code applied it also backward, with the
+    negative time step).
+
+    Provides (class optimal_sw_simple, add to the model class bases):
+      balance_it(OB_period, OB_projection='fft', OB_ramp='cos', OB_average=None,
+                 OB_max_itts=10, OB_tol=1e-9, OB_friction=True)
+                                   balances the model state
+    """
+
+    def _OB_project(self, X):
+        if self.OB_projection == 'fft':
+            return self.zero_order(X)
+        return self._OB_time_mean(X)
+
+    def _OB_time_mean(self, X):
+        """the time mean of the linear model over OB_average from X"""
+        dt = abs(self.dt)
+        n_end = int(self.OB_average/dt)
+        u, v, h = (OM.np.asarray(np_.array(a)) for a in X)
+        D = [None, None, None]
+        su, sv, sh = 0.*u, 0.*v, 0.*h
+        AB2 = (1.5 + self.AB_eps, -(0.5 + self.AB_eps))
+        for n in range(n_end):
+            d = self.tendency_linear(u, v, h)
+            D = [d, D[0], D[1]]
+            if n == 0:                       c = (1.,)
+            elif self.time_scheme == 'AB2':  c = AB2
+            elif n == 1:                     c = (1.5, -0.5)
+            else:                            c = (23./12., -16./12., 5./12.)
+            inc = [sum(ci*D[k][i] for k, ci in enumerate(c)) for i in range(3)]
+            u, v, h = u + dt*inc[0], v + dt*inc[1], h + dt*inc[2]
+            su, sv, sh = su + u, sv + v, sh + h
+        return tuple(np_.asarray(a)/n_end for a in (su, sv, sh))
+
+    def balance_it(self, OB_period, OB_projection='fft', OB_ramp='cos', OB_average=None,
+                   OB_max_itts=10, OB_tol=1e-9, OB_friction=True, verbose=True):
+        if OB_projection not in ('fft', 'average'):
+            raise ValueError('balance_it: OB_projection fft or average')
+        if OB_projection == 'average' and OB_average is None:
+            raise ValueError('balance_it: OB_projection average needs OB_average')
+        if not hasattr(self, 'bal_q'): self.init_balance(verbose=verbose)
+        self.OB_period, self.OB_projection, self.OB_ramp = OB_period, OB_projection, OB_ramp
+        self.OB_average, self.OB_friction = OB_average, OB_friction
+        pr = (lambda s: print(s)) if verbose else (lambda s: None)
+        dt = abs(self.dt)
+        n_end = int(OB_period/dt) + 1
+        state = tuple(np_.array(a) for a in (self.u, self.v, self.h))
+        base = self._OB_project(state)
+        prev = tuple(0.*a for a in state)
+        set_state = lambda X: setattr(self, 'u', OM.np.asarray(X[0])) or setattr(self, 'v', OM.np.asarray(X[1])) \
+                              or setattr(self, 'h', OM.np.asarray(X[2]))
+        get_state = lambda: tuple(np_.array(a) for a in (self.u, self.v, self.h))
+        set_state(state)
+        for it in range(OB_max_itts):
+            pr('optimal balance: iteration %d, %d steps backward and forward' % (it, n_end))
+            self.time_steps(n_end, rho=lambda n: 1 - sw_ramp(n*dt/OB_period, OB_ramp), dt=-dt, mixing=False)
+            set_state(self._OB_project(get_state()))
+            self.time_steps(n_end, rho=lambda n: sw_ramp(n*dt/OB_period, OB_ramp), dt=dt, mixing=OB_friction)
+            X = get_state()
+            X_ = self._OB_project(X)
+            X = tuple(a - b + c for a, b, c in zip(X, X_, base))
+            set_state(X)
+            stop = self.norm(X, prev)
+            prev = X
+            if it > 0:
+                pr('optimal balance: change against iteration %d %.3e / %.1e' % (it - 1, stop, OB_tol))
+                if stop < OB_tol: break
+        self.OB_iterations = it + 1
+        return

@@ -1,7 +1,8 @@
 """
 Balance of the model state after Warn et al. (1995) to fourth order in the
-Rossby number: warn_pe_simple for pe_simple and warn_nh_simple for nh_simple
-(add the class to the model class bases). Moved here from
+Rossby number: warn_pe_simple for pe_simple, warn_nh_simple for nh_simple and
+warn_sw_simple for sw_simple (add the class to the model class bases;
+warn_sw_simple is documented at the class, at the end of the file). Moved here from
 pe_simple/diag_balance.py and nh_simple/diag_balance.py (Nov 2026). The
 background stratification, the vertical modes, the model state and the model
 run of warn_pe_simple are in _stratified of _common.py (shared with
@@ -986,3 +987,231 @@ class warn_nh_simple(_nh_simple):
         n = sum(float(np.sum(self._interior(x)**2)) + float(np.sum(self._interior(y)**2))
                 for x, y in zip(X[:4], Y[:4]))
         return 2*d/n
+
+
+# ----------------------------------------------------------------------
+# warn_sw_simple
+from pyOM3.sw_simple.model import model as _sw_simple
+
+
+def sw_omega2(kx, ky, dx, dy, f0, csqr):
+    """the frequency^2 of the gravity waves of the discrete shallow-water equations"""
+    return csqr*(hat_ksqr(kx, dx) + hat_ksqr(ky, dy)) + f0**2*hat_epm(kx, dx)*hat_epm(ky, dy)
+
+
+def sw_coeff_p(kx, ky, s, dx, dy, f0, csqr):
+    f2 = f0**2*hat_epm(kx, dx)*hat_epm(ky, dy)
+    k2 = hat_ksqr(kx, dx) + hat_ksqr(ky, dy)
+    return np.abs(s**2*(csqr*k2 + f2) - f2)/((1 + s**2)*(k2 + f2/csqr))
+
+
+def sw_vec_q(kx, ky, s, dx, dy, f0, csqr):
+    """the eigenvector (u, v, g h) of mode s of the discrete shallow-water equations"""
+    f2 = f0**2*hat_epm(kx, dx)*hat_epm(ky, dy)
+    k2 = hat_ksqr(kx, dx) + hat_ksqr(ky, dy)
+    om2 = csqr*k2 + f2
+    om = np.sqrt(om2)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        q1 = np.where(kx**2 + ky**2 > 0, (-1j*f0*hat_ep(kx, dx)*hat_em(ky, dy)*hat_kp(ky, dy)
+                                          + s*om*hat_kp(kx, dx))/(f2 - s**2*om2), -1j*s)
+        q2 = np.where(kx**2 + ky**2 > 0, (+1j*f0*hat_em(kx, dx)*hat_ep(ky, dy)*hat_kp(kx, dx)
+                                          + s*om*hat_kp(ky, dy))/(f2 - s**2*om2), s**2)
+        q3 = np.where(kx**2 + ky**2 > 0, 1, 1 - s**2)
+    if s == 0:          # f2 = 0 on the Nyquist lines (even nx or ny)
+        q1 = np.where(f2 == 0, 0, q1)
+        q2 = np.where(f2 == 0, 0, q2)
+    return q1, q2, q3*np.ones_like(q1)
+
+
+def sw_vec_p(kx, ky, s, dx, dy, f0, csqr):
+    """the dual vector of sw_vec_q, p(s) . q(s') = delta(s, s')"""
+    q1, q2, q3 = sw_vec_q(kx, ky, s, dx, dy, f0, csqr)
+    p = sw_coeff_p(kx, ky, s, dx, dy, f0, csqr)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        p1 = np.where(kx**2 + ky**2 > 0, p*q1.conjugate(), 1j*s/2)
+        p2 = np.where(kx**2 + ky**2 > 0, p*q2.conjugate(), s**2/2)
+        p3 = np.where(kx**2 + ky**2 > 0, p/csqr, 1 - s**2)
+    return p1, p2, p3*np.ones_like(p1)
+
+
+class warn_sw_simple(_sw_simple):
+    """
+    Balance after Warn et al. (1995) to fourth order in the Rossby number for
+    sw_simple, port of balance.py of the grav2D code (Nov 2026), dimensional:
+    the orders carry their powers of Ro (the state is X0 + X1 + ... + X4).
+
+    Every wavenumber (kx, ky) of the doubly periodic grid has three eigenmodes
+    of (u, v, g h), the geostrophic mode s = 0 and the gravity wave modes
+    s = +1, -1 with frequency omega, those of the discrete equations on the C
+    grid (sw_vec_q, the dual sw_vec_p). The zero order is the projection of
+    the state on s = 0, the order n the slaved wave modes from the
+    interaction integrals of the model's own non-linear terms
+    (tendency_nonlin) and the time derivative of the order n - 1, from
+    nsteps model steps of the balanced state to order n - 1 (the model's
+    scheme from its start: RK3 steps without the mixing for AB3, AB4 and
+    RK3, an Euler step with the mixing for AB2). The biharmonic friction
+    Ahbi enters as Ahbi k^4 in the orders 2 to 4 (as an order Ro term).
+
+    The interaction integrals of the orders 2 to 4 are differences of the
+    non-linear tendency, e.g. N(X0 + X1) - N(X0) - N(X1) for the bilinear
+    part B(X0, X1). The tendency is not quadratic (the potential vorticity
+    has the thickness in the denominator), so the differences depend on the
+    amplitude at which the orders enter. With eps (init_balance, default 1)
+    the order n enters as X_n/eps^n and the difference of order k is
+    multiplied by eps^(k-1): eps = 1 takes the orders at their amplitude,
+    eps = Ro = U/(f0 L) is the original nondimensional code (its fields of
+    the orders are those of order one). The bilinear parts are the same.
+
+    Provides (class warn_sw_simple, add to the model class bases):
+      init_balance(nsteps=1, eps=1)  wavenumbers, eigenvectors
+      forward(u,v,h)            physical -> spectral (u, v, g h)
+      backward(U,V,G)           spectral -> physical (u, v, h)
+      zero_order(X)             the geostrophic mode of X = (u, v, h)
+      decompose(order)          the orders 0..order of the model state, each (u, v, h)
+      balance(order)            the model state balanced to order 0..4
+      norm(X, Y)                2 |X - Y| / (|X| + |Y|)
+    """
+
+    def init_balance(self, nsteps=1, eps=1., verbose=True):
+        self.bal_nsteps, self.bal_eps, self.bal_verbose = nsteps, eps, verbose
+        csqr = self.g*self.H0
+        kx = 2*np.pi*np.fft.fftfreq(self.nx, self.dx)
+        ky = 2*np.pi*np.fft.fftfreq(self.ny, self.dy)
+        Ky, Kx = np.meshgrid(ky, kx, indexing='ij')
+        self.bal_K = (Kx, Ky)
+        V = lambda f, s: f(Kx, Ky, s, self.dx, self.dy, self.f0, csqr)
+        self.om = np.sqrt(sw_omega2(Kx, Ky, self.dx, self.dy, self.f0, csqr))
+        self.iom = 1/self.om
+        self.AhK4 = self.Ahbi*(hat_ksqr(Kx, self.dx) + hat_ksqr(Ky, self.dy))**2
+        self.bal_q = {s: V(sw_vec_q, s) for s in (0., 1., -1.)}
+        self.bal_p = {s: V(sw_vec_p, s) for s in (0., 1., -1.)}
+        if verbose:
+            print('balance: sw_simple %d x %d, f0 %.3e 1/s, c = sqrt(g H0) %.3e m/s, L_R %.3e m, Ahbi %.2e'
+                  % (self.nx, self.ny, self.f0, np.sqrt(csqr), np.sqrt(csqr)/abs(self.f0), self.Ahbi))
+        return
+
+    def forward(self, u, v, h):
+        return np.fft.fft2(np.asarray(u)), np.fft.fft2(np.asarray(v)), np.fft.fft2(self.g*np.asarray(h))
+
+    def backward(self, U, V, G):
+        return np.real(np.fft.ifft2(U)), np.real(np.fft.ifft2(V)), np.real(np.fft.ifft2(G))/self.g
+
+    def _amp(self, F, s):
+        p = self.bal_p[s]
+        return p[0]*F[0] + p[1]*F[1] + p[2]*F[2]
+
+    def zero_order(self, X):
+        """the geostrophic mode of X = (u, v, h)"""
+        g0 = self._amp(self.forward(*X), 0.)
+        return self.backward(*(g0*q for q in self.bal_q[0.]))
+
+    def _I(self, X, s):
+        """i p(s) . the spectrum of the non-linear tendency of X"""
+        return 1j*self._amp(self.forward(*self.tendency_nonlin(*X)), s)
+
+    def _modes(self, fp, fm):
+        return self.backward(*(fp*qp + fm*qm for qp, qm in zip(self.bal_q[1.], self.bal_q[-1.])))
+
+    def _run(self, X):
+        """the state X after nsteps model steps (the model state is kept)"""
+        keep = (self.u, self.v, self.h, self.du, self.dv, self.dh, self.du_mix, self.dv_mix, self.dh_mix)
+        self.u, self.v, self.h = (OM.np.asarray(np.array(a)) for a in X)
+        self.time_steps(self.bal_nsteps)
+        out = tuple(np.asarray(a) for a in (self.u, self.v, self.h))
+        (self.u, self.v, self.h, self.du, self.dv, self.dh, self.du_mix, self.dv_mix, self.dh_mix) = keep
+        return out
+
+    def _first_order(self, X0):
+        return self._I(X0, 1.)*self.iom, -self._I(X0, -1.)*self.iom
+
+    def _scaled(self, X, n):
+        e = self.bal_eps**n
+        return tuple(a/e for a in X) if e != 1. else X
+
+    def _second_order(self, X0, X1, f1p, f1m):
+        add = lambda *Xs: tuple(sum(c) for c in zip(*Xs))
+        e, Y1 = self.bal_eps, self._scaled(X1, 1)
+        I0p, I0m = self._I(X0, 1.), self._I(X0, -1.)
+        If1p, If1m = self._I(Y1, 1.), self._I(Y1, -1.)
+        I0f1p, I0f1m = self._I(add(X0, Y1), 1.), self._I(add(X0, Y1), -1.)
+        X0_ = self.zero_order(self._run(add(X0, X1)))
+        f1p_, f1m_ = self._first_order(X0_)
+        T = self.bal_nsteps*self.dt
+        pTp, pTm = (f1p_ - f1p)/T, (f1m_ - f1m)/T
+        f2p = +(e*(I0f1p - I0p - If1p) - 1j*(pTp + self.AhK4*f1p))*self.iom
+        f2m = -(e*(I0f1m - I0m - If1m) - 1j*(pTm + self.AhK4*f1m))*self.iom
+        return f2p, f2m
+
+    def _third_order(self, X0, X1, X2, f1p, f1m, f2p, f2m):
+        add = lambda *Xs: tuple(sum(c) for c in zip(*Xs))
+        e2, Y1, Y2 = self.bal_eps**2, self._scaled(X1, 1), self._scaled(X2, 2)
+        I0p, I0m = self._I(X0, 1.), self._I(X0, -1.)
+        If2p, If2m = self._I(Y2, 1.), self._I(Y2, -1.)
+        I0f2p, I0f2m = self._I(add(X0, Y2), 1.), self._I(add(X0, Y2), -1.)
+        If1p, If1m = self._I(Y1, 1.), self._I(Y1, -1.)
+        X0_ = self.zero_order(self._run(add(X0, X1, X2)))
+        f1p_, f1m_ = self._first_order(X0_)
+        f2p_, f2m_ = self._second_order(X0_, self._modes(f1p_, f1m_), f1p_, f1m_)
+        T = self.bal_nsteps*self.dt
+        pTp, pTm = (f2p_ - f2p)/T, (f2m_ - f2m)/T
+        f3p = +(e2*(I0f2p + If1p - If2p - I0p) - 1j*(pTp + self.AhK4*f2p))/self.om
+        f3m = -(e2*(I0f2m + If1m - If2m - I0m) - 1j*(pTm + self.AhK4*f2m))/self.om
+        return f3p, f3m
+
+    def _fourth_order(self, X0, X1, X2, X3, f1p, f1m, f2p, f2m, f3p, f3m):
+        add = lambda *Xs: tuple(sum(c) for c in zip(*Xs))
+        e3 = self.bal_eps**3
+        Y1, Y2, Y3 = self._scaled(X1, 1), self._scaled(X2, 2), self._scaled(X3, 3)
+        I0p, I0m = self._I(X0, 1.), self._I(X0, -1.)
+        If1p, If1m = self._I(Y1, 1.), self._I(Y1, -1.)
+        If3p, If3m = self._I(Y3, 1.), self._I(Y3, -1.)
+        I0f3p, I0f3m = self._I(add(X0, Y3), 1.), self._I(add(X0, Y3), -1.)
+        If2p, If2m = self._I(Y2, 1.), self._I(Y2, -1.)
+        If1f2p, If1f2m = self._I(add(Y1, Y2), 1.), self._I(add(Y1, Y2), -1.)
+        Lp, Lm = If1f2p - If1p - If2p, If1f2m - If1m - If2m
+        X0_ = self.zero_order(self._run(add(X0, X1, X2, X3)))
+        f1p_, f1m_ = self._first_order(X0_)
+        X1_ = self._modes(f1p_, f1m_)
+        f2p_, f2m_ = self._second_order(X0_, X1_, f1p_, f1m_)
+        X2_ = self._modes(f2p_, f2m_)
+        f3p_, f3m_ = self._third_order(X0_, X1_, X2_, f1p_, f1m_, f2p_, f2m_)
+        T = self.bal_nsteps*self.dt
+        pTp, pTm = (f3p_ - f3p)/T, (f3m_ - f3m)/T
+        f4p = +(e3*(I0f3p - If3p - I0p + Lp) - 1j*(pTp + self.AhK4*f3p))/self.om
+        f4m = -(e3*(I0f3m - If3m - I0m + Lm) - 1j*(pTm + self.AhK4*f3m))/self.om
+        return f4p, f4m
+
+    def decompose(self, order=4, X=None):
+        """
+        the orders 0..order of the balanced state of X = (u, v, h) (default
+        the model state), a list of (u, v, h); the model state is not changed
+        """
+        if order < 0 or order > 4: raise ValueError('balance: order 0..4')
+        if not hasattr(self, 'bal_q'): self.init_balance()
+        if X is None: X = (self.u, self.v, self.h)
+        X = tuple(np.array(a) for a in X)
+        X0 = self.zero_order(X)
+        out = [X0]
+        if order >= 1:
+            f1 = self._first_order(X0); out.append(self._modes(*f1))
+        if order >= 2:
+            f2 = self._second_order(out[0], out[1], *f1); out.append(self._modes(*f2))
+        if order >= 3:
+            f3 = self._third_order(out[0], out[1], out[2], *f1, *f2); out.append(self._modes(*f3))
+        if order >= 4:
+            f4 = self._fourth_order(out[0], out[1], out[2], out[3], *f1, *f2, *f3); out.append(self._modes(*f4))
+        return out
+
+    def balance(self, order=4):
+        """the model state balanced to the given order, the orders in self.bal_orders"""
+        self.bal_orders = self.decompose(order)
+        self.u, self.v, self.h = (OM.np.asarray(sum(x[i] for x in self.bal_orders)) for i in range(3))
+        return
+
+    def norm(self, X, Y):
+        """2 |X - Y|/(|X| + |Y|) of two states (u, v, h), h weighted with g/H0 (energy norm of the linear model)"""
+        w = (1., 1., self.g/self.H0)
+        d = np.sqrt(sum(wi*np.sum((np.asarray(x) - np.asarray(y))**2) for wi, x, y in zip(w, X, Y)))
+        e1 = np.sqrt(sum(wi*np.sum(np.asarray(x)**2) for wi, x in zip(w, X)))
+        e2 = np.sqrt(sum(wi*np.sum(np.asarray(y)**2) for wi, y in zip(w, Y)))
+        return 2*d/(e1 + e2)

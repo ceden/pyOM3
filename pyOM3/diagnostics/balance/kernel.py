@@ -1,6 +1,8 @@
 """
 
- Truncated kernel approximation of the flow decomposition of warn.py.
+ Truncated kernel approximation of the flow decomposition of warn.py:
+ kernel_pe_simple (below) and kernel_sw_simple for sw_simple (documented at
+ the class, at the end of the file).
 
  The zero order balanced state is the projection on the geostrophic mode.
  Per vertical mode n it is the inversion of the linear potential vorticity
@@ -382,3 +384,83 @@ class kernel_pe_simple(warn_pe_simple):
         R = self.backward(*F)
         bo = bo + (b - R[3])
         return uo, vo, wo, bo, p_s
+
+
+# ----------------------------------------------------------------------
+from pyOM3.diagnostics.balance.warn import warn_sw_simple
+
+
+class kernel_sw_simple(warn_sw_simple):
+    """
+    Truncated kernels of the zero and first order of warn_sw_simple, the
+    recipes of the Lagrangian-filtering draft (run_pv_table.py,
+    run_pv_first.py), dimensional (Nov 2026).
+
+    The zero order is the inversion of the linear potential vorticity
+      Pi = dv/dx - du/dy - (f0/H0) avg(h)
+    at the vorticity points with L = lap5 - (f0^2/(g H0)) avg avg for the
+    streamfunction psi, u = -dpsi/dy, v = dpsi/dx, g h = f0 avg(psi). The
+    inverse of L is a convolution with a kernel decaying on the deformation
+    radius sqrt(g H0)/f0; it is exact (R = None) or truncated with the cosine
+    taper 1 at r < R/2, 0 at r > R (the distance r on the periodic domain).
+
+    The first order is the linear map of the non-linear tendency (du, dv,
+    g dh) of the zero order state by the nine kernels with the symbols
+      S_Xj = i/omega ( q+_X p+_j - q-_X p-_j )
+    of warn_sw_simple, truncated with the same taper.
+
+    Provides (class kernel_sw_simple, add to the model class bases):
+      init_kernel(R=None)         the kernels, R in m (None: exact)
+      kernel_zero(X)              the zero order of X = (u, v, h)
+      kernel_first(X0)            the first order of the zero order X0
+      kernel_balanced(order=1)    the orders 0 (and 1) of the model state, a list of (u, v, h)
+    Calls init_balance (eps and nsteps do not enter) if it was not called.
+    """
+
+    def init_kernel(self, R=None, verbose=True):
+        if not hasattr(self, 'bal_q'): self.init_balance(verbose=verbose)
+        self.ker_R = R
+        Kx, Ky = self.bal_K
+        dx, dy, f0, g, H0 = self.dx, self.dy, self.f0, self.g, self.H0
+        self.ker_L = -(hat_ksqr(Kx, dx) + hat_ksqr(Ky, dy)) - (f0**2/(g*H0))*hat_epm(Kx, dx)*hat_epm(Ky, dy)
+        if R is None:
+            self.ker_W = None
+            self.ker_K0 = 1./self.ker_L
+        else:
+            x = np.minimum(np.arange(self.nx)*dx, self.Lx - np.arange(self.nx)*dx)
+            y = np.minimum(np.arange(self.ny)*dy, self.Ly - np.arange(self.ny)*dy)
+            Y, X = np.meshgrid(y, x, indexing='ij')
+            r = np.sqrt(X**2 + Y**2)
+            self.ker_W = 0.5*(1 + np.cos(np.pi*np.clip((r - R/2)/(R/2), 0, 1)))
+            self.ker_K0 = np.fft.fft2(np.real(np.fft.ifft2(1./self.ker_L))*self.ker_W)
+        qp, qm, pp, pm = self.bal_q[1.], self.bal_q[-1.], self.bal_p[1.], self.bal_p[-1.]
+        self.ker_S = [[1j*self.iom*(qp[i]*pp[j] - qm[i]*pm[j]) for j in range(3)] for i in range(3)]
+        if R is not None:
+            self.ker_S = [[np.fft.fft2(np.real(np.fft.ifft2(S))*self.ker_W) for S in row] for row in self.ker_S]
+        if verbose:
+            print('kernel: sw_simple, %s, L_R = %.3e m' % ('exact' if R is None else 'truncated at R = %.3e m' % R,
+                                                          np.sqrt(g*H0)/abs(f0)))
+        return
+
+    def kernel_zero(self, X):
+        """the zero order of X = (u, v, h) by the inversion of the linear potential vorticity"""
+        u, v, h = (np.asarray(a) for a in X)
+        E, W = (lambda a: np.roll(a, -1, axis=1)), (lambda a: np.roll(a, 1, axis=1))
+        N, S = (lambda a: np.roll(a, -1, axis=0)), (lambda a: np.roll(a, 1, axis=0))
+        zeta = (E(v) - v)/self.dx - (N(u) - u)/self.dy
+        Pi = zeta - (self.f0/self.H0)*0.25*(h + E(h) + N(h) + E(N(h)))
+        psi = np.real(np.fft.ifft2(np.fft.fft2(Pi)*self.ker_K0))
+        return (-(psi - S(psi))/self.dy, (psi - W(psi))/self.dx,
+                self.f0*0.25*(psi + W(psi) + S(psi) + W(S(psi)))/self.g)
+
+    def kernel_first(self, X0):
+        """the first order of the zero order state X0 = (u, v, h)"""
+        D = self.forward(*(np.asarray(a) for a in self.tendency_nonlin(*X0)))
+        C = [sum(self.ker_S[i][j]*D[j] for j in range(3)) for i in range(3)]
+        return self.backward(*C)
+
+    def kernel_balanced(self, order=1):
+        """the orders 0 and 1 (order = 1) of the model state, a list of (u, v, h)"""
+        if not hasattr(self, 'ker_K0'): self.init_kernel()
+        X0 = self.kernel_zero((self.u, self.v, self.h))
+        return [X0] if order == 0 else [X0, self.kernel_first(X0)]

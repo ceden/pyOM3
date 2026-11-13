@@ -400,8 +400,31 @@ eigenvectors, my_fft, opv_balance, sw_particles and the kernel recipes of
 run_pv_table and run_pv_first): model steps with four schemes, Warn orders
 0 to 4 with and without damping, optimal balance (fft with two ramps, time
 averaging), the kernel zero and first order at R = 3, particles with five
-schemes. sw_simple must reproduce these to round-off; its test comes with
-sw_simple. `--check` recomputes them and compares (exact).
+schemes. sw_simple must reproduce these to round-off; its test is 24b.
+`--check` recomputes them and compares (exact).
+
+### 24b. sw_simple against the original code (`balance/sw_check.py`)
+
+The model sw_simple (`pyOM3/sw_simple`) and its balance classes
+(warn_sw_simple, kernel_sw_simple, optimal_sw_simple) recompute every array
+of `balance/sw_reference.npz`. The reference is nondimensional, sw_simple
+runs it dimensional (f0 1e-4 1/s, L 50 km, g 0.02 m/s^2: U 0.5 m/s, H0
+1250 m, the scale of h 125 m, dt 100 s), the results are scaled back. The
+deviation is the largest difference relative to the largest value of the
+reference array, for the particle positions relative to the domain.
+
+    model       50 steps AB2, AB3, AB4, RK3; 200 AB3 steps          1e-12
+    warn        orders 0 to 4, without and with damping (eps = Ro)  1e-12
+                (orders 3, 4: 1e-10, the time derivatives of the
+                orders 2, 3 from one step take the round-off up by
+                1/(f0 dt) = 100 per order)
+    kernel      zero order exact and R = 3 L, first order R = 3 L   1e-12
+    ob          fft with the cos and the exp ramp, time averaging   1e-12
+    particles   Euler, RK3, AB2, AB3, AB4: positions, u, v, h       1e-12
+
+On Nov 13 2026 all below 4e-14 except the Warn orders 3 (6e-14) and 4
+(4e-12), the same with PYOM3_BACKEND=jax. `sw_check.py warn ob` runs single
+groups. A few seconds (30 s with jax, the compilation).
 
 
 ## Slow part, nightly or before a release
