@@ -6,7 +6,7 @@ ps3D: test_obta_unscaled1.f90 (there with optimal balance)
 Non-hydrostatic (nh_simple) with rigid lids, the counterpart of
 jets_balance1.py (pe_simple), same jets, same parameters, dimensional
 (Ro = 1, dsqr = 1). The initial state is balanced to order init_order with
-pyOM3/nh_simple/diag_balance.py. During the run, at every snapshot the model state
+warn_nh_simple of pyOM3/diagnostics/balance/warn.py. During the run, at every snapshot the model state
 is decomposed into the balanced orders 0 to diag_order, written to
 jets_balance_nh1_balance.cdf (u_n, v_n, w_n, b_n of each order n) together
 with the norm of the residual u - u_bal for the state balanced to order
@@ -22,7 +22,7 @@ sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.nh_simple.snapshot import snap_nc4
-from pyOM3.nh_simple.diag_balance import balance
+from pyOM3.diagnostics.balance.warn import warn_nh_simple
 from netCDF4 import Dataset as NF
 
 fac        = 1
@@ -45,7 +45,7 @@ par = dict(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz, dt=dt, Lx=Lx, Ly=Ly, Lz=Lz,
            snapint=snapint)
 
 
-class jets_balance_nh1(balance, snap_nc4):
+class jets_balance_nh1(warn_nh_simple, snap_nc4):
 
     def diagnose(self, n, tau):
         super().diagnose(n, tau)

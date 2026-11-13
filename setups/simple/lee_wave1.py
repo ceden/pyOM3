@@ -18,7 +18,7 @@ sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.nh_simple.snapshot import snap_nc4
-from pyOM3.nh_simple.diag_balance import balance
+from pyOM3.diagnostics.balance.warn import warn_nh_simple
 from netCDF4 import Dataset
 
 fac        = 2.
@@ -39,7 +39,7 @@ par = dict(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz, dt=dt,
            snapint=snapint)
 
 
-class lee_wave1(balance, snap_nc4):
+class lee_wave1(warn_nh_simple, snap_nc4):
 
     def set_forcing(self, tau):
         # advection of the perturbation by the background current U(y,z) and

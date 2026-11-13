@@ -14,7 +14,7 @@ sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.pe_simple.snapshot import snap_nc4
-from pyOM3.pe_simple.diag_opt_balance import opt_balance
+from pyOM3.diagnostics.balance.optimal import optimal_pe_simple
 
 Ri, delta  = 400., 0.01             # Richardson number, aspect ratio
 Ek, CFL    = 0.05, 0.02             # Ekman number, CFL number
@@ -43,7 +43,7 @@ par = dict(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz, dt=dt,
            snapint=snapint)
 
 
-class eady_jet1(opt_balance, snap_nc4):
+class eady_jet1(optimal_pe_simple, snap_nc4):
 
     def set_coriolis(self):
         self.coriolis_t = OM.np.asarray(f0 + np.zeros((self.Ny, self.Nx)))

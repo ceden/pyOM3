@@ -4,12 +4,14 @@
 A family whose fast part is not built yet says so and passes."""
 import sys, os, time, importlib
 HERE = os.path.dirname(os.path.abspath(__file__))
-FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'vadv', 'ab3', 'halo', 'weno'],   # 4 needs mpirun
+FAMILIES = {'pe':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'vadv', 'ab3', 'halo', 'weno',
+                    'particles'],   # 4 needs mpirun (23: its MPI layouts too)
             'nh':  ['reduction', 'identities', 'restart', 'operators', 'golden', 'halo', 'weno'],  # nh_simple (4 needs mpirun)
             'nhr': ['realistic', 'twin_nh_simple', 'restart', 'halo', 'weno'],                     # nh_realistic (4 needs mpirun; jax_sharding.py in run_slow.py)
             'wim': ['reduction', 'identities', 'restart', 'operators', 'golden',
                     'symmetry', 'sources', 'budget', 'halo'],                           # wim_simple, wim_realistic (wim_idemix: not built)
-            'coupled': ['golden', 'forcing', 'identities', 'restart', 'halo', 'wave', 'endtoend']}   # setups/coupled_common + forcing_common (4 needs mpirun; jax_backend.py in run_slow.py)
+            'coupled': ['golden', 'forcing', 'identities', 'restart', 'halo', 'wave', 'endtoend', 'particles_run'],   # setups/coupled_common + forcing_common (4 needs mpirun; jax_backend.py in run_slow.py)
+            'balance': ['regression']}   # the balance diagnostics (24), before their move into pyOM3/diagnostics
 want = sys.argv[1:] or list(FAMILIES)
 t0 = time.time(); ok = True
 for fam in want:

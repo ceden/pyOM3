@@ -10,7 +10,9 @@ J the jax layouts of pe, nhr and wim (jax_sharding.py: numpy reference, 1x1,
 1x2, 2x1, 2x2 shards and the 1x1, 2x2 layouts with halo_points = 2, on four
 fake CPU devices; about 30 min in all), when jax is installed, and J of the
 coupled family (coupled/jax_backend.py: setups/coupled_common and
-forcing_common on the jax backend, 1x1 and 2x2 shards, about 3 min)."""
+forcing_common on the jax backend, 1x1 and 2x2 shards, about 3 min), and
+23f-h, 23n-o, the particles on the jax backend (pe/particles.py --jax,
+coupled/particles_run.py --jax, about 3 min together)."""
 import os, sys, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 FS = os.path.join(HERE, 'pe', 'free_surface'); TW = os.path.join(HERE, 'pe', 'twins')
@@ -37,7 +39,11 @@ if subprocess.run([sys.executable, '-c', 'import jax'], capture_output=True).ret
     jobs += [('J jax backend, coupled (jax_backend.py: the shared coupling/forcing code, 1x1 and 2x2 shards)',
               os.path.join(HERE, 'coupled'), ['jax_backend.py']),
              ('22d run.py on the jax backend, ocean alone, two segments on 1x1 and 2x2 shards (endtoend.py --jax)',
-              os.path.join(HERE, 'coupled'), ['endtoend.py', '--jax'])]
+              os.path.join(HERE, 'coupled'), ['endtoend.py', '--jax']),
+             ('23f-h particles of pe_realistic on the jax layouts (pe/particles.py --jax)',
+              os.path.join(HERE, 'pe'), ['particles.py', '--jax']),
+             ('23n-o particles through run.py on jax: 2x2 shards, raw restart; two processes (particles_run.py --jax)',
+              os.path.join(HERE, 'coupled'), ['particles_run.py', '--jax'])]
 else:
     print('J jax layouts skipped: jax not installed')
 ok = True

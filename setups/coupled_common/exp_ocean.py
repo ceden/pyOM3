@@ -37,6 +37,8 @@ from pyOM3.density import get_rho
 from block_io import local_block, pad_block, interior, local_shard, jax_multi, jax_barrier
 from forcing_base import make as make_forcing
 from ni_diag import ni_common
+from particle_diag import particle_common, NC_LOCK   # NC_LOCK: HDF5 is not thread safe, the
+                                                      # ERA5 read-ahead thread holds it while it reads
 
 
 from contextlib import contextmanager as _cm
@@ -46,7 +48,7 @@ def _nosection(name):
     yield
 
 
-class ocean_common(ni_common):
+class ocean_common(ni_common, particle_common):
 
     # --- THE TWO LAYOUTS (block_io): every interior sum and every interior
     # cut of the shared code goes through these two, so the same code runs
@@ -110,7 +112,8 @@ class ocean_common(ni_common):
     _extra_snap = ('tke', 'K_diss_E', 'K_diss_L')
 
     def prepare_for_run(self, *a, **k):
-        out = super().prepare_for_run(*a, **k)
+        with NC_LOCK:                  # a netCDF snapshot file is created here
+            out = super().prepare_for_run(*a, **k)
         # several jax processes: the parent made the snapshot directories on
         # process 0 and the others mkdir inside them at the first diagnose
         # (the configuration's mpi_barrier is a no-op without MPI)
@@ -121,10 +124,16 @@ class ocean_common(ni_common):
         return out
 
     def diagnose(self, n, tau):
-        super().diagnose(n, tau)
+        snap = n == 0 or np.mod(n, int(self.snapint/self.dt)) == 0.
+        if snap and not os.path.isdir(self.snap_file_name):
+            with NC_LOCK:              # the parent writes its netCDF snapshot record
+                super().diagnose(n, tau)
+        else:
+            super().diagnose(n, tau)
         if n > 0 and self.cfg.KE_BUDGET:
             self.ke_budget(n, tau)
         self.ni_step(n, tau)
+        self.particle_step(n)          # Lagrangian particles (particle_diag.py, cfg.PARTICLES)
         self.average(n, tau)
         if not (n == 0 or np.mod(n, int(self.snapint/self.dt)) == 0.):
             return
@@ -144,20 +153,22 @@ class ocean_common(ni_common):
         self.mpi_barrier()
         m = 0
         if self.my_pe == 0:
-            fid = Dataset(self.snap_file_name, mode='r')
-            m = len(fid.dimensions['time']) - 1        # record the parent wrote
-            fid.close()
+            with NC_LOCK:
+                fid = Dataset(self.snap_file_name, mode='r')
+                m = len(fid.dimensions['time']) - 1    # record the parent wrote
+                fid.close()
         m = self.pe0_bcast(m)
         j0, i0, ny_loc, nx_loc = local_block(self)
         for pe in range(self.n_pes):
             self.mpi_barrier()
             if self.my_pe == pe:
-                fid = Dataset(self.snap_file_name, mode='r+')
-                sl = (m, slice(None), slice(j0, j0+ny_loc), slice(i0, i0+nx_loc))
-                for v in self._extra_snap:
-                    if hasattr(self, v):
-                        fid.variables[v][sl] = self.unpad(getattr(self, v))
-                fid.close()
+                fields = {v: self.unpad(getattr(self, v)) for v in self._extra_snap if hasattr(self, v)}
+                with NC_LOCK:
+                    fid = Dataset(self.snap_file_name, mode='r+')
+                    sl = (m, slice(None), slice(j0, j0+ny_loc), slice(i0, i0+nx_loc))
+                    for v, a in fields.items():
+                        fid.variables[v][sl] = a
+                    fid.close()
         return
 
     # --- online time means ---------------------------------------------------
@@ -434,37 +445,38 @@ class ocean_common(ni_common):
         nx_, ny_ = self.get_full_domain_extent()
         nz_ = self.Nz - 2*self.halo
         if self.my_pe == 0:
-            f = Dataset(file_name, mode='w')
-            for d, nn in (('xt', nx_), ('xu', nx_), ('yt', ny_), ('yu', ny_),
-                          ('zt', nz_), ('zu', nz_), ('nb', 2)):
-                f.createDimension(d, nn)
-            f.createDimension('time', None)
-            for nme, val in zip(('xt', 'yt', 'zt', 'xu', 'yu', 'zu'),
-                                self._snap_coords(nx_, ny_, nz_)):
-                f.createVariable(nme, 'f8', (nme,))[:] = np.asarray(val)
-            v = f.createVariable('time', 'f8', ('time',))
-            v.units = 's since model start'; v.long_name = 'middle of the averaging window'
-            f.createVariable('time_bnds', 'f8', ('time', 'nb')).units = 's since model start'
-            f.createVariable('nsteps', 'i4', ('time',)).long_name = 'ocean steps in the mean'
-            for nme in ('date_start', 'date_end'):
-                f.createVariable(nme, 'i4', ('time',)).long_name = 'forcing date YYYYMMDDHH'
-            for nme, dims, units, ln, _ in self._avg_spec:
-                v = f.createVariable(nme, 'f8', dims)
-                v.units, v.long_name = units, 'time mean of ' + ln
-            label = 'calendar month' if mode[0] == 'month' else '%g h' % (mode[1]/3600.0)
-            f.averaging = label
-            f.forcing_start, f.forcing_cycle_days = self.cfg.FORCING_START, self.cfg.FORCING_CYCLE_DAYS
-            f.waves = int(self.coupled)
-            f.alpha_CB = float(self.alpha_CB) if not self.coupled else -1.0
-            f.r_bot = float(getattr(self, 'r_bot', 0.0)) if getattr(self, 'enable_bottom_friction', False) else 0.0
-            f.kappaH_min = float(getattr(self, 'kappaH_min', 0.0))
-            f.alpha_tke = float(getattr(self, 'alpha_tke', np.nan))
-            f.mxl_choice = int(self.mxl_choice)
-            f.mxl_beta = float(self.mxl_beta)
-            f.hs_factor = float(self.cfg.HS_FACTOR) if self.coupled else 0.0
-            f.mxl_surf = float(self.surface_mixing_length())
-            f.mxl_surf_factor = float(getattr(self, 'mxl_surf_factor', 1.0))
-            f.close()
+            with NC_LOCK:
+                f = Dataset(file_name, mode='w')
+                for d, nn in (('xt', nx_), ('xu', nx_), ('yt', ny_), ('yu', ny_),
+                              ('zt', nz_), ('zu', nz_), ('nb', 2)):
+                    f.createDimension(d, nn)
+                f.createDimension('time', None)
+                for nme, val in zip(('xt', 'yt', 'zt', 'xu', 'yu', 'zu'),
+                                    self._snap_coords(nx_, ny_, nz_)):
+                    f.createVariable(nme, 'f8', (nme,))[:] = np.asarray(val)
+                v = f.createVariable('time', 'f8', ('time',))
+                v.units = 's since model start'; v.long_name = 'middle of the averaging window'
+                f.createVariable('time_bnds', 'f8', ('time', 'nb')).units = 's since model start'
+                f.createVariable('nsteps', 'i4', ('time',)).long_name = 'ocean steps in the mean'
+                for nme in ('date_start', 'date_end'):
+                    f.createVariable(nme, 'i4', ('time',)).long_name = 'forcing date YYYYMMDDHH'
+                for nme, dims, units, ln, _ in self._avg_spec:
+                    v = f.createVariable(nme, 'f8', dims)
+                    v.units, v.long_name = units, 'time mean of ' + ln
+                label = 'calendar month' if mode[0] == 'month' else '%g h' % (mode[1]/3600.0)
+                f.averaging = label
+                f.forcing_start, f.forcing_cycle_days = self.cfg.FORCING_START, self.cfg.FORCING_CYCLE_DAYS
+                f.waves = int(self.coupled)
+                f.alpha_CB = float(self.alpha_CB) if not self.coupled else -1.0
+                f.r_bot = float(getattr(self, 'r_bot', 0.0)) if getattr(self, 'enable_bottom_friction', False) else 0.0
+                f.kappaH_min = float(getattr(self, 'kappaH_min', 0.0))
+                f.alpha_tke = float(getattr(self, 'alpha_tke', np.nan))
+                f.mxl_choice = int(self.mxl_choice)
+                f.mxl_beta = float(self.mxl_beta)
+                f.hs_factor = float(self.cfg.HS_FACTOR) if self.coupled else 0.0
+                f.mxl_surf = float(self.surface_mixing_length())
+                f.mxl_surf_factor = float(getattr(self, 'mxl_surf_factor', 1.0))
+                f.close()
             print('ocean means: %s -> %s, %d fields'
                   % (label, file_name, len(self._avg_spec)), flush=True)
         self.mpi_barrier()
@@ -635,25 +647,28 @@ class ocean_common(ni_common):
         m = 0
         if self.my_pe == 0:
             d0, d1 = self._forcing.date(t0), self._forcing.date(t_end)
-            f = Dataset(self._avg_file, mode='r+')
-            m = len(f.dimensions['time'])
-            f['time'][m] = 0.5*(t0 + t_end)
-            f['time_bnds'][m] = [t0, t_end]
-            f['nsteps'][m] = nsteps
-            f['date_start'][m] = int(d0.strftime('%Y%m%d%H'))
-            f['date_end'][m] = int(d1.strftime('%Y%m%d%H'))
-            f.close()
+            with NC_LOCK:
+                f = Dataset(self._avg_file, mode='r+')
+                m = len(f.dimensions['time'])
+                f['time'][m] = 0.5*(t0 + t_end)
+                f['time_bnds'][m] = [t0, t_end]
+                f['nsteps'][m] = nsteps
+                f['date_start'][m] = int(d0.strftime('%Y%m%d%H'))
+                f['date_end'][m] = int(d1.strftime('%Y%m%d%H'))
+                f.close()
         m = self.pe0_bcast(m)
         j0, i0, ny_loc, nx_loc = local_block(self)
         for pe in range(self.n_pes):
             self.mpi_barrier()
             if self.my_pe == pe:
-                f = Dataset(self._avg_file, mode='r+')
-                for nme, dims, *_ in self._avg_spec:
-                    sl = (m,) + ((slice(None),) if len(dims) == 4 else ()) + \
-                         (slice(j0, j0+ny_loc), slice(i0, i0+nx_loc))
-                    f.variables[nme][sl] = self._avg_interior(nme)/nsteps
-                f.close()
+                fields = {nme: self._avg_interior(nme)/nsteps for nme, *_ in self._avg_spec}
+                with NC_LOCK:
+                    f = Dataset(self._avg_file, mode='r+')
+                    for nme, dims, *_ in self._avg_spec:
+                        sl = (m,) + ((slice(None),) if len(dims) == 4 else ()) + \
+                             (slice(j0, j0+ny_loc), slice(i0, i0+nx_loc))
+                        f.variables[nme][sl] = fields[nme]
+                    f.close()
         if self.my_pe == 0:
             print('ocean means: %s .. %s (%d steps) -> %s'
                   % (d0.strftime('%Y-%m-%d %H:%M'), d1.strftime('%Y-%m-%d %H:%M'),

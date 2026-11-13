@@ -46,6 +46,14 @@ class Cfg:
                     # between raw dumps of u, v, w, p of those levels (0 = none)
                     NI_DIAG=False, NI_BAND=0.2, NI_LEVELS=0, NI_LAT_MIN=5.0,
                     NI_MLD_EVERY=50, NI_DUMP_EVERY=0,
+                    # LAGRANGIAN PARTICLES (particle_diag.py): off by default. A box
+                    # (lon0, lon1, lat0, lat1) of seeds at the T points, every
+                    # STRIDE-th, at DEPTHS [m]; the MOORING set the same as fixed
+                    # points; or PARTICLE_FILE (npz lon, lat, depth[, moving]); a
+                    # record every PARTICLE_OUT_STEPS ocean steps
+                    PARTICLES=False, PARTICLE_BOX=None, PARTICLE_STRIDE=1, PARTICLE_DEPTHS=(),
+                    MOORING_BOX=None, MOORING_STRIDE=1, MOORING_DEPTHS=(), PARTICLE_FILE='',
+                    PARTICLE_OUT_STEPS=7,
                     # the surface stress of the FORCED ocean (exp_ocean.py):
                     # 'era5' takes tau_ERA5 as it is; 'relwind' keeps ERA5's
                     # drag coefficient and forms the stress from the wind
@@ -68,6 +76,37 @@ class Cfg:
             return m.__name__
         raise AttributeError('the experiment module %s does not define %s'
                              % (m.__name__, name))
+
+
+def particle_env(environ=None):
+    """the particle switches of particle_diag.py from the environment, for an
+    experiment module to put among its names (globals().update(particle_env())):
+      EXP_PARTICLES          1 = on (default 0)
+      EXP_PARTICLE_BOX       lon0,lon1,lat0,lat1 [degrees] of the seeds (T points)
+      EXP_PARTICLE_STRIDE    every n-th T point in x and y (1 = one per cell)
+      EXP_PARTICLE_DEPTHS    comma list of seed depths [m below the surface]
+      EXP_MOORING_BOX / EXP_MOORING_STRIDE / EXP_MOORING_DEPTHS   the same as
+                             FIXED points (moving = 0): Eulerian series
+      EXP_PARTICLE_FILE      npz with lon, lat, depth[, moving] instead of the boxes
+      EXP_PARTICLE_OUT_STEPS record every n ocean steps (default 7)"""
+    import os
+    env = os.environ if environ is None else environ
+    def lst(name):
+        return tuple(float(a) for a in env.get(name, '').replace(' ', '').split(',') if a)
+    def box(name):
+        b = lst(name)
+        if b and len(b) != 4:
+            raise ValueError('%s must be lon0,lon1,lat0,lat1, not %r' % (name, env.get(name)))
+        return b or None
+    return dict(PARTICLES=env.get('EXP_PARTICLES', '0') not in ('0', '', 'no'),
+                PARTICLE_BOX=box('EXP_PARTICLE_BOX'),
+                PARTICLE_STRIDE=int(env.get('EXP_PARTICLE_STRIDE', '1')),
+                PARTICLE_DEPTHS=lst('EXP_PARTICLE_DEPTHS'),
+                MOORING_BOX=box('EXP_MOORING_BOX'),
+                MOORING_STRIDE=int(env.get('EXP_MOORING_STRIDE', '1')),
+                MOORING_DEPTHS=lst('EXP_MOORING_DEPTHS'),
+                PARTICLE_FILE=env.get('EXP_PARTICLE_FILE', '').strip(),
+                PARTICLE_OUT_STEPS=int(env.get('EXP_PARTICLE_OUT_STEPS', '7')))
 
 
 def parse_average(s):

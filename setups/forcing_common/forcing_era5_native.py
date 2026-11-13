@@ -39,6 +39,17 @@ import datetime
 import numpy as np
 from netCDF4 import Dataset
 import pyOM3 as OM
+import threading
+
+# ONE LOCK FOR ALL netCDF ACCESS while the read-ahead thread runs. HDF5 is not
+# thread safe as a library (the conda builds have no --enable-threadsafe),
+# and netCDF4-python releases the GIL inside its calls: the main thread may
+# not touch ANY netCDF file, not only these, while the worker reads. Writers
+# in the main thread that run during the integration (the particle records
+# of particle_diag.py) hold this lock around every netCDF call. Without it,
+# icon01_particles died after 160 steps with "NetCDF: HDF error" in
+# _read_buf (Nov 12 2026); a two-thread test segfaults the same way.
+NC_LOCK = threading.RLock()
 
 MEAN_FIELDS  = ('taux', 'tauy', 'sshf', 'slhf', 'ssr', 'str', 'e', 'tp')
 INST_FIELDS  = ('sst',)
@@ -93,9 +104,11 @@ class Era5NativeForcing:
         self._ds = {}           # tag -> (the month's open file, (year, month)), rank 0
         # READ-AHEAD. Every file read runs on ONE worker thread (netCDF/HDF5
         # is not thread safe, so the main thread never touches the files
-        # after setup): a record that is needed now is read through it and
-        # waited for, and as soon as record k of a group is in, record k+1
-        # is submitted, so it is read while the model steps through the hour
+        # after setup, and any other netCDF access of the main thread holds
+        # NC_LOCK, which the worker holds while it reads): a record that is
+        # needed now is read through it and waited for, and as soon as
+        # record k of a group is in, record k+1 is submitted, so it is read
+        # while the model steps through the hour
         # -- 9 fields of 3.3 MB from Lustre took ~150 ms per hour on the GPU
         # run, 10-15 ms per step amortised, all of it on the critical path.
         import concurrent.futures
@@ -227,11 +240,12 @@ class Era5NativeForcing:
 
     def _read_buf(self, group, y, m, r, tag):
         """the group's records of hour r of (y, m) as one float32 buffer;
-        runs on the worker thread"""
-        f = self._file(y, m, tag)
+        runs on the worker thread, holding NC_LOCK"""
         buf = np.empty((len(group), self.ne_y, self.ne_x), np.float32)
-        for i, n in enumerate(group):
-            buf[i] = f.variables[n][r]
+        with NC_LOCK:
+            f = self._file(y, m, tag)
+            for i, n in enumerate(group):
+                buf[i] = f.variables[n][r]
         return buf
 
     def _fetch(self, group, k, tag=None):
@@ -312,6 +326,7 @@ class Era5NativeForcing:
 
     def close(self):
         self._pool.shutdown(wait=True)
-        for ds, ym in self._ds.values():
-            ds.close()
+        with NC_LOCK:
+            for ds, ym in self._ds.values():
+                ds.close()
         self._ds = {}

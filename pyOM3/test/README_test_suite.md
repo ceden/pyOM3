@@ -274,6 +274,126 @@ temperature now stays between 9.97 and 12.00 degC, superbee between 10 and
 Not covered: JAX sharding with WENO (`jax_sharding.py` does not switch it
 on), nh_simple under MPI with WENO.
 
+### 23. Lagrangian particles (`pe/particles.py`, `coupled/particles_run.py`)
+
+`pe_realistic/particles.py` (trilinear interpolation from the C grid, AB4,
+every PE holds every particle and the owner of its T cell interpolates, a
+global sum) and its coupled_common driver `particle_diag.py`.
+
+    23a analytic    uniform u on the sphere exact (1e-12); u and v (Mercator
+                    longitude) and w linear in z: the scheme's start, second
+                    order in dt (1e-6, 1e-4, halving dt cuts it >= 3.5 times)
+    23b land        an unmasked flow into the seamount and the wall: no
+                    particle in a dry cell, steps refused, fixed points fixed;
+                    the masked flow brings none to land               exact
+    23c tracers     masked trilinear temp: linear field exact, next to the
+                    shelf the wet points only                         1e-12
+    23d restart     particles_state / particles_restore mid run       exact
+    23e simple      pe_simple's particles on the uniform box          1e-9
+    23f layout      prescribed analytic fields, MPI 1x2, 2x1, 2x2 (+ halo 2)
+                    exact; jax 1x1 .. 2x2 (+ halo 2), slow part        1e-12
+    23g model       the forced model running, the same layouts        1e-10
+    23h periodic    a zonal channel: uniform u across the seam exact, the
+                    layouts of 23f across the seam                exact / 1e-12
+    23i records     run.py end to end (run_setup.py): 12 records, times n dt,
+                    the first at the seeds, fixed points fixed, the seeds the
+                    T points of the box                               exact
+    23p snapshot    the record at a snapshot step = scipy's trilinear of the
+                    raw snapshot's u, v, w                       4 float32 ulp
+    23j/23k         two segments through the gathered / raw restart = one exact
+    23l branch      EXP_INIT_OCEAN seeds anew                         exact
+    23m mpi         1x2 and 2x2 ranks = serial: lon, lat 1e-10 of the
+                    displacement, the float32 records within one ulp
+    23n jax         2x2 shards, raw per-shard restart (slow part)    as 23m
+    23o jax procs   two jax processes, 2x1, explicit free surface (slow) as 23m
+
+Found with 23g: `w` leaves the model's time step with a stale halo in y
+(3e-5 m/s after three steps on 1x2; `vertical_velocity` integrates the
+divergence over the whole local array). The model never reads it there
+(test 4 is exact), the particle stencil does, so `step_particles` exchanges a
+copy of `w`. Found with 23p: on the stretched column the model's zt is the
+pyOM2 recurrence, not the cell midpoint; offline interpolation of the
+snapshots must use the snapshot's own zt.
+
+`python3 run_fast.py` runs 23a-m and 23p (with mpirun); `run_slow.py` the jax
+parts (`pe/particles.py --jax`, `coupled/particles_run.py --jax`, 3 min).
+`pe/config.py small_model` has two new options for it: `bases` (mixins in
+front of the model class) and `periodic_x`.
+
+
+### 24. Balance diagnostics regression (`balance/regression.py`)
+
+Written before the balance code moved into `pyOM3/diagnostics/balance`
+(Nov 2026). Every method runs on small cases and the output is compared with
+`balance/golden.json`. The pure move reproduced it exactly, a refactoring
+must reproduce it to round-off. The cases (`balance/config.py`):
+
+    ps_*      pe_simple, the jets of jets_balance1 at 32 x 32 x 6 with a
+              wave packet, 30 steps, periodic, buoyancy as tracer
+    pr_*      pe_realistic, the same jets on a uniform Cartesian periodic
+              grid; pr_window*: a window of a raw snapshot of the pe box
+              (spherical, topography, equation of state, 2 x 2 rank blocks)
+    nh_warn   nh_simple, the jets of jets_balance_nh1 (dt 60 s, N0 dt 0.6)
+
+    ps_warn             warn_pe_simple: decompose(4), project(+1), project(0),
+                        norm, balance(2)
+    ps_warn_options     pTf1_numeric, slave_modes 'auto', cut 2 without damping
+    ps_warn_fs          the implicit free surface, decompose(3)
+    ps_warn_n2_beta     variable N^2 (rigid lid) and variable f, decompose(2)
+    ps_kernel           kernel_pe_simple: kernel_balanced(2) per mode and
+                        (1) for all modes, R = 3 L, untruncated, variable f
+    ps_band             band_pe_simple: band_balanced(2), with a forcing
+                        and its derivative, dt_mode 'model', a sharp cut
+    ps_band_topo_n2     a seamount; variable N^2 with the norms modal, diag,
+                        tlevel
+    ps_ob               optimal_pe_simple: average, hann without friction and
+                        base point, fft and kernel projection (2 iterations)
+    pr_band             band_pe_realistic: band_balanced(2),
+                        band_quality, band_fast_tendency
+    pr_ob               optimal_pe_realistic, average
+    pr_window           window.py: read_raw (window of 4 blocks),
+                        read_coords, window_model (rim 2), init_balance with
+                        the EOS, mixed_layer_depth, wind_body_force,
+                        band_balanced(2) with that forcing, band_apply_TS,
+                        band_quality, rim_taper, emission (0.25 periods,
+                        sponge 2, edge 1)
+    pr_window_explicit  the same with the split-explicit free surface
+    nh_warn             warn_nh_simple: decompose(4), norm,
+                        balance(3); periodic in z with slave_modes 'auto'
+
+The band cases use 60 Lanczos steps instead of 300: the test needs the code
+path, not the converged filter (300 steps cost 3 minutes). An entry is
+stored as its fingerprint, the 2-norm and three products with fixed random
+vectors (`config.fingerprint`). The deviation of an entry is the change of
+these numbers divided by the largest norm of the same group of variables in
+the case (velocity u, v, w; tendencies; forcing; buoyancy b, temp, salt;
+pressure p, p_s): the higher orders and w are measured against the size of
+the flow. Tolerance 1e-10 (1e-7 for the residual of band_quality, below).
+
+`regression.py --sensitivity` changes the initial velocity of every case by
+1e-13 and prints how far each case moves. On Nov 12 2026: the fourth order
+of nh_simple 3.5e-9 of the flow, the pe_simple Warn orders up to 1.5e-11,
+everything else below 2e-12, except the residual of band_quality (the fast
+tendency of the balanced state, the Lanczos projection of a tendency
+dominated by its fast part), 2.3e-6 of the flow, compared with the tolerance
+1e-7. The same code on a Mac and on Linux differs about as much as this
+1e-13 change (Nov 12 2026: nh order 4 2.4e-9, band_quality 7e-7, the skew of
+the window 2e-10), so golden.json must be written on the machine that runs
+the test: `regression.py --update` (run_fast.py passes no options). It
+rewrites golden.json, after a platform change or an intended change of the
+code. `regression.py case ...` runs single cases. 70 to 85 s for all cases.
+nh_warn needs the p3dfft build and is skipped without it.
+
+`balance/sw_reference.py SRC` writes `balance/sw_reference.npz` from the
+original 2-D shallow-water code in the directory SRC (sw_model, balance,
+eigenvectors, my_fft, opv_balance, sw_particles and the kernel recipes of
+run_pv_table and run_pv_first): model steps with four schemes, Warn orders
+0 to 4 with and without damping, optimal balance (fft with two ramps, time
+averaging), the kernel zero and first order at R = 3, particles with five
+schemes. sw_simple must reproduce these to round-off; its test comes with
+sw_simple. `--check` recomputes them and compares (exact).
+
+
 ## Slow part, nightly or before a release
 
 ### 7. pyOM2 twins
@@ -538,6 +658,8 @@ small configuration, restart list and golden checksum:
                                          calibration scripts
     coupled                              setups/coupled_common + forcing_common on
                                          the pe box (built, test 9 above)
+    balance                              the balance diagnostics of pe_simple,
+                                         pe_realistic and nh_simple (test 24)
 
 Every family directory carries a `config.py` with the same contract
 (`small_model`, `step`, `state`, `RESTART_FIELDS`, `TESTS`) so that
@@ -1070,6 +1192,8 @@ preconditioner (1000-3500 without it in this box).
                              halo, wave, endtoend (+ run_setup), decomposition
                              (+ run_decomposition), jax_backend (slow); _work/
                              holds the run files
+        balance/             config, regression (+ golden.json), sw_reference
+                             (+ sw_reference.npz)
 
 The harnesses of tests 1, 5 and 8 exist already in
 `pyOM3/pe_realistic/development/` and in the mixing-length work; tests 2, 3,

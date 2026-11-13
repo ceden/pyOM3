@@ -66,17 +66,17 @@ in its first cell.
 | `jets_waves_nh1.py` | ps3D test.f90 | two unstable jets balanced to second order plus a random wave field with the scaled GM spectrum, decomposition as in jets_balance_nh1, wave modes slaved only below a vertical wavenumber (`slave_modes`) (nh_simple, rigid lids, scaled equations) |
 | `overflow1_3D.py` | overflow1_3D.f90 | dense water from a shelf through a gap in a barrier down a slope, rotating tank (nh_realistic) |
 
-The three ps3D configurations use `pyOM3/nh_simple/diag_balance.py`: the eigenmodes
+The three ps3D configurations use `warn_nh_simple` of `pyOM3/diagnostics/balance/warn.py`: the eigenmodes
 of the linear equations (geostrophic mode s = 0, gravity wave modes s = +1, -1)
 on the discrete grid, the transforms to spectral space, the projection of a
 field on a mode, a single mode in physical space for the wave makers, and the
 balance of a state to third order in the Rossby number after Warn et al.
 (1995). They run on one process.
 
-`jets_balance1.py` uses `pyOM3/pe_simple/diag_balance.py`, the same balance
+`jets_balance1.py` uses `warn_pe_simple` of the same file, the same balance
 after Warn et al. (1995) for pe_simple with the vertical modes of the
 hydrostatic equations (Eden, Chouksey and Olbers 2019, JPO), up to fourth
-order, rigid lid or implicit free surface, one process. `nh_simple/diag_balance.py` has
+order, rigid lid or implicit free surface, one process. `warn_nh_simple` has
 the same `decompose(order)` and `balance(order)` up to fourth order with the
 damping correction of Eden et al. (2019). `init_balance(slave_modes=...)` slaves the wave
 modes only below a vertical wavenumber, where the series converges. With

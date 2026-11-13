@@ -1,0 +1,11 @@
+"""
+Balance diagnostics of the pyOM3 models, ordered by method:
+  warn.py      Warn et al. (1995), asymptotic to fourth order: warn_pe_simple, warn_nh_simple
+  kernel.py    truncated kernels of the Warn et al. orders: kernel_pe_simple
+  band.py      frequency bands of the model's linear operator: band_pe_simple, band_pe_realistic
+  optimal.py   optimal balance: optimal_pe_simple, optimal_pe_realistic
+  window.py    a window of a pe_realistic raw snapshot as a band_pe_realistic model
+Each class is added to the model class bases, e.g.
+  from pyOM3.diagnostics.balance.warn import warn_pe_simple
+  class my_model(warn_pe_simple): ...
+"""

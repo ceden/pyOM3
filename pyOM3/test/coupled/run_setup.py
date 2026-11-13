@@ -22,7 +22,7 @@ from pyOM3.pe_realistic.snapshot import snap_raw as ocean_base
 from pyOM3.wim_realistic.snapshot import snap_raw as wave_base
 from pyOM3.pe_realistic.tke import tke as tke_mixin
 import config as _c                               # registers the 'synthetic' source
-from exp_common import Cfg, parse_average, spectral_grid_report as _sgr
+from exp_common import Cfg, parse_average, particle_env, spectral_grid_report as _sgr
 from exp_ocean import ocean_common
 from exp_wave import wave_common
 
@@ -61,6 +61,8 @@ use_stress_work = False
 wave_snap_file = 'raw_wave_%s.cdf' % exp_name
 ocean_snap_file = 'raw_ocean_%s.cdf' % exp_name
 ALPHA_CB = 100.0
+# the Lagrangian particles (particle_diag.py), off unless EXP_PARTICLES=1 (test 23)
+globals().update(particle_env())
 
 
 def spectral_grid_report():

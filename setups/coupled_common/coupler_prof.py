@@ -202,6 +202,7 @@ OCEAN_METHODS = (
     'set_tke_diffusivities', 'set_forcing', 'set_forcing_direct',
     'vertical_velocity', 'update_thermodynamics_AB3', 'update_momentum_AB3',
     'harmonic_momentum', 'biharmonic_momentum', 'apply_bc', 'diagnose',
+    'particle_step',                   # the Lagrangian particles (particle_diag.py), inside diagnose
     'gather_array_mpi',
     # isoneutral mixing (pe_realistic/isoneutral.py): the driver and its
     # two jitted kernels (tensor/triad construction, explicit flux

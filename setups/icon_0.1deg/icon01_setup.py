@@ -85,7 +85,7 @@ from pyOM3.pe_realistic.tke       import tke      as tke_mixin
 from netCDF4 import Dataset
 import sys
 from block_io   import local_block, read_scatter2, pad_block, jax_multi, own_shard, pad_own_block
-from exp_common import (Cfg, parse_average, coarse_wave_grid, default_wave_dt,
+from exp_common import (Cfg, parse_average, coarse_wave_grid, default_wave_dt, particle_env,
                         wave_grid_report as _wave_grid_report,
                         spectral_grid_report as _spectral_grid_report)
 from exp_ocean  import ocean_common
@@ -453,6 +453,15 @@ RAW_SNAPSHOTS = True
 AVERAGE_MLD         = os.environ.get('EXP_AVERAGE_MLD', '0') not in ('0', '', 'no')
 AVERAGE_EDDY        = os.environ.get('EXP_AVERAGE_EDDY', '0') not in ('0', '', 'no')
 AVERAGE_TRACER_FLUX = os.environ.get('EXP_AVERAGE_TRACER_FLUX', '0') not in ('0', '', 'no')
+
+# ---------------------------------------------------------------------------
+# LAGRANGIAN PARTICLES (coupled_common/particle_diag.py), off by default: the
+# switches EXP_PARTICLES, EXP_PARTICLE_BOX / _STRIDE / _DEPTHS, EXP_MOORING_BOX
+# / _STRIDE / _DEPTHS (fixed points), EXP_PARTICLE_FILE, EXP_PARTICLE_OUT_STEPS
+# (exp_common.particle_env). For the Lagrangian frequency analysis (draft1)
+# against the band method; run_particles_gpu.sh has the North Atlantic set.
+# ---------------------------------------------------------------------------
+globals().update(particle_env())
 
 # ---------------------------------------------------------------------------
 # spectral grid

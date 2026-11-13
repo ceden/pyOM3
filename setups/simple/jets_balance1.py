@@ -7,7 +7,7 @@ Hydrostatic (pe_simple), rigid lid or implicit free surface, buoyancy as
 tracer, periodic in x and y, 2nd order advection. Two opposite Gaussian jets
 with cos(pi z/H) vertical structure in thermal wind balance, perturbed with a
 sin(10 pi x/Lx) sin(2 pi y/Ly) mode in u. The initial state is balanced to
-order init_order with pyOM3/pe_simple/diag_balance.py. During the run, at
+order init_order with warn_pe_simple of pyOM3/diagnostics/balance/warn.py. During the run, at
 every snapshot the model state is decomposed into the balanced orders 0 to
 diag_order, written to jets_balance1_balance.cdf (u_n, v_n, w_n, b_n of each
 order n and p_s_n) together with the norm of the residual u - u_bal for the
@@ -23,7 +23,7 @@ sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.pe_simple.snapshot import snap_nc4
-from pyOM3.pe_simple.diag_balance import balance
+from pyOM3.diagnostics.balance.warn import warn_pe_simple
 from netCDF4 import Dataset as NF
 
 fac        = 1
@@ -53,7 +53,7 @@ xu, yu = (np.arange(nx) + 1.0)*dx, (np.arange(ny) + 1.0)*dy
 zt = (np.arange(nz) + 0.5)*dz - Lz               # z = 0 at the surface
 
 
-class jets_balance1(balance, snap_nc4):
+class jets_balance1(warn_pe_simple, snap_nc4):
 
     def set_coriolis(self):
         self.coriolis_t = OM.np.asarray(f0 + np.zeros((self.Ny, self.Nx)))

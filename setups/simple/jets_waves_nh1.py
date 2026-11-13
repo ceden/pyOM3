@@ -9,14 +9,14 @@ Two opposite Gaussian jets with cos(pi z/Lz) vertical structure in thermal
 wind balance, perturbed with a sin(4 pi x/Lx) sin(2 pi y/Ly) mode in u
 of amplitude perturbation (0.0001 in test.f90).
 The initial state is balanced to order init_order with
-pyOM3/nh_simple/diag_balance.py. Then the waves are added: every wavenumber
+warn_nh_simple of pyOM3/diagnostics/balance/warn.py. Then the waves are added: every wavenumber
 and both wave modes s = +1, -1 get the energy of the scaled GM spectrum
 (function wave_energy) with a random phase, minus the geostrophic part of
 this wave field, as add_initial_waves of test.f90. b is the analytic
 thermal wind of u (test.f90 differentiates u in z and copies b to the
 bottom and top level). Instead of the filter of test.f90
 (enable_diag_balance_filter) the wave modes are slaved only below the
-vertical wavenumber set by slave_modes, see diag_balance.py.
+vertical wavenumber set by slave_modes, see warn.py.
 
 During the run, at every snapshot the model state is decomposed into the
 balanced orders 0 to diag_order, written to jets_waves_nh1_balance.cdf in
@@ -33,7 +33,7 @@ sys.path.insert(0, os.environ.get('PYOM3_ROOT', os.path.abspath('../..')))
 import numpy as np
 import pyOM3 as OM
 from pyOM3.nh_simple.snapshot import snap_nc4
-from pyOM3.nh_simple.diag_balance import balance
+from pyOM3.diagnostics.balance.warn import warn_nh_simple
 from netCDF4 import Dataset as NF
 
 fac        = 1                      # 1: low resolution, 5: as test.f90
@@ -51,7 +51,7 @@ init_order = 2                      # the initial state is balanced to this orde
 diag_order = 4                      # decomposition during the run up to this order
 add_waves  = True                   # add the random wave field after the balancing
 perturbation = 0.05                 # amplitude of the sin(4 pi x/Lx) mode, 0.0001 in test.f90
-slave_modes = 'auto'                # wave modes slaved only below a vertical wavenumber, see diag_balance.py
+slave_modes = 'auto'                # wave modes slaved only below a vertical wavenumber, see warn.py
 seed       = int(sys.argv[1]) if len(sys.argv) > 1 else 1   # random phases of the waves
 runlen     = 1.0
 snapint    = 1.0
@@ -80,7 +80,7 @@ def wave_energy(kx, ky, kz):
     return np.where(ok, np.nan_to_num(E), 0.)
 
 
-class jets_waves_nh1(balance, snap_nc4):
+class jets_waves_nh1(warn_nh_simple, snap_nc4):
 
     def diagnose(self, n, tau):
         super().diagnose(n, tau)

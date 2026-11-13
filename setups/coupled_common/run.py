@@ -389,6 +389,10 @@ elif color == 1:                                 # ---- ocean ----
                       show_each_time_step=False)
     # online time means (EXP_AVERAGE), one file per segment
     M.average_setup('ocean_mean_%s%s.cdf' % (exp_name, segment), average_mode)
+    # Lagrangian particles (particle_diag.py, off unless the setup sets PARTICLES):
+    # seeds and the record file of this segment; a restart replaces the seeds
+    if hasattr(M, 'particle_setup'):
+        M.particle_setup('%s_particles%s.nc' % (exp_name, segment))
     if M.my_pe == 0:
         print('CONFIG ocean: waves=%s | surface TKE flux %s | alpha_tke=%g | '
               'mxl_choice=%d | surface mixing length %.3g m (%s) | r_bot=%g | '

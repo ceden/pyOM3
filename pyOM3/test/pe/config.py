@@ -62,7 +62,8 @@ def _grids(kind):
 
 
 def small_model(kind='realistic', explicit=False, mxl_choice=1, tracer_flux=False,
-                n_pes_x=1, n_pes_y=1, comm=None, Ahbi=1e11, quiet=True, vadv=0, halo=1):
+                n_pes_x=1, n_pes_y=1, comm=None, Ahbi=1e11, quiet=True, vadv=0, halo=1,
+                bases=(), periodic_x=False):
     if kind == 'simple':
         from pyOM3.pe_simple.model import model as _base
         from pyOM3.pe_simple.tke import tke as _tke
@@ -73,8 +74,8 @@ def small_model(kind='realistic', explicit=False, mxl_choice=1, tracer_flux=Fals
         from pyOM3.pe_realistic.model import model as _base
         from pyOM3.pe_realistic.tke import tke as _tke
 
-    class model(_tke, _base):                       # the tke mixin, as the configurations do
-        pass
+    class model(*bases, _tke, _base):               # the tke mixin, as the configurations do; bases: more
+        pass                                         # mixins in front (the particles of test 23)
     par = dict(nx=NX, ny=NY, nz=NZ, dt=DT, periodic_in_x=False, periodic_in_y=False,
                eq_of_state=1, explicit_free_surface=explicit, implicit_free_surface=not explicit,
                superbee_advection=True, vmix_scheme='implicit', enable_conv_adjust=False,
@@ -82,6 +83,7 @@ def small_model(kind='realistic', explicit=False, mxl_choice=1, tracer_flux=Fals
                kappa_T=1e-5, A_v=1e-4, Ahbi=Ahbi, biha_friction_cosPower=1.0,
                epsilon=1e-12, max_iterations=5000)
     par.update(_grids(kind))
+    par['periodic_in_x'] = bool(periodic_x)         # the zonal channel of test 23h (the box otherwise)
     kw = dict(n_pes_x=n_pes_x, n_pes_y=n_pes_y, halo_points=halo)
     if comm is not None:
         kw['comm_in'] = comm

@@ -211,6 +211,8 @@ def _ocean_start(M, cfg, comm):
     if cfg['do_restart']:
         att = ocean_restart_read(M, cfg['restart_ocean_file'], ny, nx,
                                  cfg['use_stress_work'], comm)
+        if hasattr(M, 'particle_restart_read'):  # the particles of this run (particle_diag.py)
+            M.particle_restart_read(cfg['restart_ocean_file'], int(att['n_cpl']))
         if hasattr(M, 'set_wave_roughness'):     # z0_surf from the restart hs
             M.set_wave_roughness()
         if M.my_pe == 0 and getattr(M, '_avg', None) is not None:

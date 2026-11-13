@@ -19,6 +19,20 @@ import numpy as np
 import pyOM3 as OM
 from coupler_mpi import gather_unpadded_mpi, scatter_array_mpi
 from block_io import interior, pad_block, jax_multi, shard_blocks, from_shard_blocks
+from particle_diag import NC_LOCK
+import functools
+
+
+def _nc_locked(fn):
+    """run fn holding NC_LOCK (particle_diag.py, forcing_era5_native.py):
+    HDF5 is not thread safe and the ERA5 read-ahead thread reads while the
+    model runs, so every netCDF access of the main thread holds the lock.
+    Re-entrant: a locked function may call another one"""
+    @functools.wraps(fn)
+    def wrapped(*a, **k):
+        with NC_LOCK:
+            return fn(*a, **k)
+    return wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +135,7 @@ class CouplingWriter:
       phi_oc             : wave -> ocean energy flux                  (t,y,x)
       plus one scalar per record for each domain-integrated diagnostic.
     """
+    @_nc_locked
     def __init__(self, fname, nx, ny, nz, xt, yt, stress_is_3d, dt_cpl=0.0,
                  zt=None):
         from netCDF4 import Dataset
@@ -184,6 +199,7 @@ class CouplingWriter:
         self.stress_is_3d = stress_is_3d
         self.n = 0
 
+    @_nc_locked
     def write(self, t, ustar_x, ustar_y, u_S, stress, phioc=None, ediag=None,
               mdiag=None, stress_in=None, kediag=None):
         k = self.n
@@ -219,6 +235,7 @@ class CouplingWriter:
         self.f.sync()
         self.n += 1
 
+    @_nc_locked
     def close(self):
         self.f.close()
 
@@ -226,6 +243,7 @@ class CouplingWriter:
 # ===========================================================================
 # restarts
 # ===========================================================================
+@_nc_locked
 def _nc_create(fname, dims):
     from netCDF4 import Dataset
     f = Dataset(fname, 'w', format='NETCDF4')
@@ -255,6 +273,7 @@ def _replace(fname, tmp, what, n_cpl):
 # and the theta and x/y halos with it, so the read restores exactly the state
 # the write saw and no apply_bc is needed.
 # ---------------------------------------------------------------------------
+@_nc_locked
 def _wave_restart_write_raw(M, fname, n_cpl, pre, tau, taum1, taum2,
                             tA, tB, tC):
     d = _raw_dir(fname)
@@ -296,6 +315,7 @@ def _wave_restart_write_raw(M, fname, n_cpl, pre, tau, taum1, taum2,
     return
 
 
+@_nc_locked
 def _wave_restart_read_raw(M, fname, comm):
     if M.my_pe == 0:
         from netCDF4 import Dataset
@@ -336,6 +356,7 @@ def _wave_restart_read_raw(M, fname, comm):
     return att
 
 
+@_nc_locked
 def wave_restart_write(M, fname, ny, nx, n_cpl, pre, tau, taum1, taum2,
                        tA, tB, tC):
     if RESTART_RAW:
@@ -404,6 +425,7 @@ def wave_restart_write(M, fname, ny, nx, n_cpl, pre, tau, taum1, taum2,
     return
 
 
+@_nc_locked
 def _is_raw(fname, comm, my_pe):
     """Which form a restart file on disk is, decided by the file itself and
     not by EXP_RESTART_RAW: the env switch controls WRITING only. So a run
@@ -417,6 +439,7 @@ def _is_raw(fname, comm, my_pe):
     return bool(comm.bcast(raw, root=0))
 
 
+@_nc_locked
 def wave_restart_read(M, fname, ny, nx, comm):
     if _is_raw(fname, comm, M.my_pe):
         return _wave_restart_read_raw(M, fname, comm)
@@ -547,6 +570,7 @@ def _ocean_fields_raw(M, use_stress_work, conv=np.asarray):
     return out
 
 
+@_nc_locked
 def _ocean_restart_write_raw(M, fname, use_stress_work, n_cpl,
                              tau, taum1, taum2, tA, tB, tC):
     """Every rank writes its own block; rank 0 writes the header LAST, so a
@@ -588,6 +612,7 @@ def _ocean_restart_write_raw(M, fname, use_stress_work, n_cpl,
     return
 
 
+@_nc_locked
 def _ocean_restart_read_raw(M, fname, use_stress_work, comm, restore_average=True):
     if M.my_pe == 0:
         from netCDF4 import Dataset
@@ -651,6 +676,7 @@ def _ocean_restart_read_raw(M, fname, use_stress_work, comm, restore_average=Tru
     return att
 
 
+@_nc_locked
 def _ocean_restart_write_raw_jax(M, fname, use_stress_work, n_cpl,
                                  tau, taum1, taum2, tA, tB, tC):
     """the raw restart of the jax backend: one npz per SHARD (see the note
@@ -748,8 +774,13 @@ def _ocean_restart_read_raw_jax(M, fname, use_stress_work, comm, att, restore_av
     return att
 
 
+@_nc_locked
 def ocean_restart_write(M, fname, ny, nx, use_stress_work, n_cpl,
                         tau, taum1, taum2, tA, tB, tC):
+    # the particles first (particle_diag.py; nothing when they are off): the
+    # ocean header below is written last and is what makes a restart valid
+    if hasattr(M, 'particle_restart_write'):
+        M.particle_restart_write(fname, n_cpl)
     if RESTART_RAW and OM.jax:
         return _ocean_restart_write_raw_jax(M, fname, use_stress_work, n_cpl,
                                             tau, taum1, taum2, tA, tB, tC)
@@ -837,6 +868,7 @@ def ocean_restart_write(M, fname, ny, nx, use_stress_work, n_cpl,
     return
 
 
+@_nc_locked
 def ocean_restart_read(M, fname, ny, nx, use_stress_work, comm,
                        restore_average=True):
     if _is_raw(fname, comm, M.my_pe):
@@ -953,6 +985,7 @@ _PE_3D = ('u', 'v', 'temp', 'salt')
 _PE_4D = ('du', 'dv', 'dtemp', 'dsalt')
 
 
+@_nc_locked
 def atmos_restart_write(M, fname, ny, nx, n_cpl, tau, taum1, taum2, ab, fields2d, what, fields3d=()):
     """fields2d: names of 2-D (Ny,Nx) attributes of M to store (coupling
     fields); ab = (A,B,C) Adams-Bashforth weights in force."""
@@ -984,6 +1017,7 @@ def atmos_restart_write(M, fname, ny, nx, n_cpl, tau, taum1, taum2, ab, fields2d
         _replace(fname, tmp, what, n_cpl)
 
 
+@_nc_locked
 def atmos_restart_read(M, fname, ny, nx, comm, fields2d, what, fields3d=()):
     names = list(_PE_3D) + list(_PE_4D) + ['p_s'] + list(fields2d) + list(fields3d)
     if M.my_pe == 0:
@@ -1067,6 +1101,7 @@ class AtmosCouplingWriter:
                ('Q_ocn', 'heat applied to the ocean after the freezing floor, W/m2'),
                ('ice_area', 'area under the freezing floor, fraction'))
 
+    @_nc_locked
     def __init__(self, fname, nx, ny, xt, yt, dt_cpl):
         """nx, ny, xt, yt of the ATMOSPHERE grid."""
         from netCDF4 import Dataset
@@ -1082,6 +1117,7 @@ class AtmosCouplingWriter:
             self.f.createVariable(n, 'f8', ('time',)).long_name = ln
         self.n = 0
 
+    @_nc_locked
     def write(self, t, fields, scalars):
         self.f.variables['time'][self.n] = t
         for k, v in fields.items():
@@ -1091,6 +1127,7 @@ class AtmosCouplingWriter:
         self.n += 1
         self.f.sync()
 
+    @_nc_locked
     def close(self):
         self.f.close()
 
